@@ -147,7 +147,7 @@ done
 
 # 5. 用 mcpServers JSON 的客户端：Claude Desktop（含 Cowork）、Cursor、Gemini CLI
 say "== 其他 MCP 客户端"
-if pgrep -f "Claude.app/Contents/MacOS/Claude" >/dev/null 2>&1; then
+if ps -axo command 2>/dev/null | grep -q "[C]laude.app/Contents/MacOS/Claude"; then
   say "  Claude Desktop 正在运行：它会用内存里的配置覆盖外部改动，这次先不写。"
   say "  退出 Claude Desktop 后重跑本脚本，或在 App 的「设置 → 开发者 → 编辑配置」里加入 mcpServers.everos：python3 ${MCP}"
 else
