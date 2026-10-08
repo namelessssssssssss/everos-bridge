@@ -1,0 +1,13 @@
+{
+  "name": "everos-bridge",
+  "interface": { "displayName": "EverOS Bridge" },
+  "plugins": [
+    {
+      "name": "everos",
+      "source": { "source": "local", "path": "./plugin" },
+      "description": "EverOS long-term memory for Codex: profile, recall, capture.",
+      "policy": { "installation": "AVAILABLE" },
+      "category": "Developer Tools"
+    }
+  ]
+}

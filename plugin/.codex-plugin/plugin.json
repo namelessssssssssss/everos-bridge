@@ -1,0 +1,25 @@
+{
+  "name": "everos",
+  "version": "0.2.0",
+  "description": "EverOS long-term memory shared across agents and devices: profile at session start, recall on the first prompt, every turn saved.",
+  "author": {
+    "name": "namelessssssssssss"
+  },
+  "keywords": [
+    "memory",
+    "everos",
+    "recall"
+  ],
+  "skills": "./skills/",
+  "hooks": "./hooks/hooks.json",
+  "interface": {
+    "displayName": "EverOS Memory",
+    "shortDescription": "Cross-agent, cross-device memory backed by EverOS Cloud",
+    "developerName": "namelessssssssssss",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Read",
+      "Write"
+    ]
+  }
+}

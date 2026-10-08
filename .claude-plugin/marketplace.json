@@ -1,0 +1,8 @@
+{
+  "name": "everos-bridge",
+  "description": "Personal EverOS memory wiring for coding agents.",
+  "owner": { "name": "namelessssssssssss" },
+  "plugins": [
+    { "name": "everos", "source": "./plugin", "description": "EverOS long-term memory for Claude Code: profile, recall, capture, MCP tools." }
+  ]
+}

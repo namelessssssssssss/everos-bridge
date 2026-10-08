@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "everos": {
+      "command": "python3",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/everos/mcp_server.py"]
+    }
+  }
+}

@@ -1,0 +1,7 @@
+# 密钥与本机状态永不入库
+config.env
+*.env
+state/
+__pycache__/
+*.pyc
+.DS_Store

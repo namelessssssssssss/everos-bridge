@@ -1,0 +1,5 @@
+{
+  "mcpServers": {
+    "everos": { "command": "python3", "args": ["/opt/everos-bridge/plugin/everos/mcp_server.py"] }
+  }
+}
