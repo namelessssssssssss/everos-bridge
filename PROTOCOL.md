@@ -42,6 +42,7 @@
 ### 3.1 自动（hook）
 
 - v2 写入带 `async_mode=false`，不逐轮 flush。
+- add 只有返回已识别的成功状态才推进会话读取偏移；HTTP 成功但业务失败、未知状态或异常时保留偏移，下一次 hook 可重试。flush 只有 `extracted` / `no_extraction` 才清除 pending。
 - 消息归属：用户原话的 `sender_id` 是 owner；助手和工具消息统一用 `EVEROS_AGENT_ID`（默认 `<user_id>_agent`），原 agent 名记在 `sender_name`。
 - SessionEnd、PreCompact、闲置 2 小时的会话由 hook 补落盘。从 v1 延续下来的会话，换库前会先在 v1 落盘。
 
@@ -52,7 +53,8 @@
   - content 写结论、做了什么、证据（文件:行、MR、commit、链接、logid）；
   - user_said 放用户原话，不改写；
   - 同一话题沿用同一个 topic。
-- `memory_record_practice(topic, task, steps, conclusion)`：排障或工具用法闭环时写一条做法轨迹。过渡期会同时写 v1：v1 写完立刻生成 case，v2 也会生成但不稳定，观察一周再停。
+- `memory_record_practice(topic, task, steps, conclusion)`：排障或工具用法闭环时写一条做法轨迹。过渡期会同时写 v1：v1 生成 case 更稳定，查询仍可能有索引延迟；v2 也会生成但不稳定，观察一周再停。
+- 实践双写任一版本失败时，工具返回错误并保留各版本结果；成功的版本可能已经写入，重试仍沿用同一 topic。写入与抽取成功不代表搜索索引已经可见，需要回读确认。
 - `memory_fix_profile(operations)`：用户纠正了画像里的偏好或背景，或者画像里的进度过期了，就直接改。先用 `memory_profile` 拿到 item_id，每条操作都写 reason。
 
 ### 3.3 已知坑
@@ -62,15 +64,17 @@
 - 写完要核对：add 返回 `accumulated` 或 `extracted`，并且能用 get 或 search 查到。
 - `no_extraction` 有三种情况：缓冲为空、内容已去重、v1 时序问题。前两种正常，第三种 v2 已不存在。
 - 兜底命令：`python3 plugin/everos/hook.py --sweep`，补落盘所有待抽取的会话，并同步本地记忆。
+- 本地记忆的三次非成功重试限制按文件版本计算；正文更新后重新允许尝试。网络异常不消耗内容重试次数，`no_extraction` 可视为已去重完成。
 
 ## 4. 读
 
-- **会话开始**：注入画像（v2 与 v1 合并）。
+- **会话开始**：注入画像（v2 与 v1 合并），SessionStart 读侧最多等待 6 秒，低于宿主 10 秒上限。
 - **每条提问**：按提问检索并注入，门控有四道：
   - `EVEROS_MIN_SCORE`（默认 0.3）；
   - 同一会话已注入的不再重复；
   - 每轮 `EVEROS_RECALL_CHARS`（默认 2000 字）；
   - 总预算 `EVEROS_RECALL_TIMEOUT`（默认 18 秒），hook 超时 20 秒。
+- Kimi 首轮画像与召回共用上述总预算。超时后采用已返回的结果，不等待其他请求；去重账本只记录实际注入的条目。
 - **过渡期合并 v1**：v1 没有得分，只在提问有实际内容（去掉标点后不少于 6 个字）时，才带上 v1 的前 3 条。
 - **做法检索**：用 `memory_search` 的 `kind=practices`（v2 查 `agent_id`，v1 查 `agent_memory`）。
 - 记忆是背景参考；和当前对话冲突时以当前对话为准。
@@ -87,7 +91,7 @@
 | `EVEROS_AGENT_ID` | v2 助手消息的归属，默认 `<user_id>_agent` |
 | `EVEROS_MIN_SCORE` / `EVEROS_RECALL_TIMEOUT` / `EVEROS_RECALL_CHARS` | 检索门槛、预算、字数 |
 | `EVEROS_OWNER_ALIASES` | botmux 邮箱前缀别名 |
-| `EVEROS_INJECT=0` / `EVEROS_WRITE=0` | 关闭读侧注入 / 写侧入库 |
+| `EVEROS_INJECT=0` / `EVEROS_WRITE=0` | 关闭读侧自动注入 / 所有写侧入库（包括 MCP、flush、画像编辑、本地记忆同步） |
 | `EVEROS_HOST` | hook 命令里显式指定宿主（如 `kimi_desktop`），桌面端 payload 没有 `client_type`，靠它区分 |
 | `EVEROS_KIMI_DESKTOP_HOME` | Kimi Work 桌面端内嵌 home，默认 `~/Library/Application Support/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home` |
 

@@ -14,10 +14,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import core  # noqa: E402
 
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 INSTRUCTIONS = (
     "EverOS 是用户跨 agent、跨设备共用的长期记忆。会话开始调用 memory_profile 了解用户，"
-    "并用首条提问调用 memory_search；用户提到「上次 / 之前 / 记得 / 按我习惯」时再检索；"
+    "每条提问前都按用户的提问调用 memory_search；"
     "问「以前怎么做的」用 kind=practices。任务交付、用户纠错、偏好暴露、决策形成时调用 memory_remember"
     "（content 写结论、做了什么、证据；user_said 放用户原话）；排障或工具用法闭环时调用 "
     "memory_record_practice；用户纠正画像里的偏好或背景时调用 memory_fix_profile。检索结果仅供参考，与当前对话冲突时以当前为准。"
@@ -30,7 +30,7 @@ TOOLS = [
     {"name": "memory_search",
      "description": "按语义检索用户的长期记忆。kind=episodes 只查事件，practices 只查做法/经验，all 两者都查。",
      "inputSchema": {"type": "object", "required": ["query"], "properties": {
-         "query": {"type": "string", "description": "检索语句，直接用用户的问题或主题"},
+         "query": {"type": "string", "minLength": 1, "description": "检索语句，直接用用户的问题或主题"},
          "top_k": {"type": "integer", "default": 5, "minimum": 1, "maximum": 20},
          "kind": {"type": "string", "enum": ["all", "episodes", "practices"], "default": "all"}}}},
     {"name": "memory_recent",
@@ -42,31 +42,99 @@ TOOLS = [
      "description": "写一条结构化记忆并立即入库：结论、决策及理由、纠错、项目事实、任务结果。"
                     "同一话题沿用同一个 topic。",
      "inputSchema": {"type": "object", "required": ["topic", "content"], "properties": {
-         "topic": {"type": "string", "description": "话题短名，如 signin_eval_v4"},
-         "content": {"type": "string", "description": "结论 + 做了什么 + 证据（文件:行、MR、commit、链接）"},
+         "topic": {"type": "string", "minLength": 1, "description": "话题短名，如 signin_eval_v4"},
+         "content": {"type": "string", "minLength": 1, "description": "结论 + 做了什么 + 证据（文件:行、MR、commit、链接）"},
          "user_said": {"type": "string", "description": "用户原话（可选，不要改写）"}}}},
     {"name": "memory_record_practice",
      "description": "把一次排障或工具使用写成做法轨迹（需求 → 每步动作与结果 → 结论），"
                     "EverOS 会提炼成以后可复用的经验。",
      "inputSchema": {"type": "object", "required": ["topic", "task", "steps", "conclusion"], "properties": {
-         "topic": {"type": "string"},
-         "task": {"type": "string", "description": "要解决的问题"},
-         "steps": {"type": "array", "items": {"type": "object", "required": ["action", "result"], "properties": {
-             "action": {"type": "string"}, "result": {"type": "string"},
+         "topic": {"type": "string", "minLength": 1},
+         "task": {"type": "string", "minLength": 1, "description": "要解决的问题"},
+         "steps": {"type": "array", "minItems": 1, "items": {"type": "object", "required": ["action", "result"], "properties": {
+             "action": {"type": "string", "minLength": 1}, "result": {"type": "string", "minLength": 1},
              "why": {"type": "string", "description": "为什么这样做（可选）"}}}},
-         "conclusion": {"type": "string", "description": "根因、解法、怎么验证的"}}}},
+         "conclusion": {"type": "string", "minLength": 1, "description": "根因、解法、怎么验证的"}}}},
     {"name": "memory_fix_profile",
      "description": "直接修改用户画像（v2）：用户纠正了某个偏好或背景、或画像里的进度已过期时使用。"
                     "先用 memory_profile 看现有条目，update/delete 需要 item_id。每条操作都写 reason。",
      "inputSchema": {"type": "object", "required": ["operations"], "properties": {
-         "operations": {"type": "array", "maxItems": 50, "items": {"type": "object", "required": ["action", "type", "reason"],
+         "operations": {"type": "array", "minItems": 1, "maxItems": 50, "items": {"type": "object", "required": ["action", "type", "reason"],
              "properties": {
                  "action": {"type": "string", "enum": ["add", "update", "delete"]},
                  "type": {"type": "string", "enum": ["explicit_info", "implicit_traits"]},
-                 "item_id": {"type": "string", "description": "update / delete 时必填"},
+                 "item_id": {"type": "string", "minLength": 1, "description": "update / delete 时必填"},
                  "data": {"type": "object", "description": "add / update 时填，如 {\"category\": \"偏好\", \"description\": \"…\"}"},
-                 "reason": {"type": "string", "description": "依据，如用户原话或更新的 memory_id"}}}}}}},
+                 "reason": {"type": "string", "minLength": 1, "description": "依据，如用户原话或更新的 memory_id"}}}}}}},
 ]
+
+_TOOL_SCHEMAS = {tool["name"]: tool["inputSchema"] for tool in TOOLS}
+_WRITE_TOOLS = {"memory_remember", "memory_record_practice", "memory_fix_profile"}
+
+
+class RpcError(Exception):
+    def __init__(self, code: int, message: str):
+        super().__init__(message)
+        self.code = code
+
+
+def _validate(value, schema: dict, path: str) -> None:
+    """Validate the small set of JSON Schema keywords used by our six tools."""
+    kind = schema.get("type")
+    matches = {"object": isinstance(value, dict), "array": isinstance(value, list),
+               "string": isinstance(value, str), "integer": type(value) is int}
+    if kind in matches and not matches[kind]:
+        raise RpcError(-32602, f"Invalid params: {path} must be {kind}")
+    if "enum" in schema and value not in schema["enum"]:
+        raise RpcError(-32602, f"Invalid params: {path} has an unsupported value")
+    if kind == "object":
+        for key in schema.get("required", []):
+            if key not in value:
+                raise RpcError(-32602, f"Invalid params: {path}.{key} is required")
+        for key, child in schema.get("properties", {}).items():
+            if key in value:
+                _validate(value[key], child, f"{path}.{key}")
+    elif kind == "array":
+        if len(value) < schema.get("minItems", 0) or len(value) > schema.get("maxItems", float("inf")):
+            raise RpcError(-32602, f"Invalid params: {path} has an invalid number of items")
+        for index, item in enumerate(value):
+            _validate(item, schema.get("items", {}), f"{path}[{index}]")
+    elif kind == "string" and schema.get("minLength") and not value.strip():
+        raise RpcError(-32602, f"Invalid params: {path} must not be blank")
+    elif kind == "integer":
+        if value < schema.get("minimum", float("-inf")) or value > schema.get("maximum", float("inf")):
+            raise RpcError(-32602, f"Invalid params: {path} is out of range")
+
+
+def validate_tool(name, args) -> None:
+    if not isinstance(name, str) or name not in _TOOL_SCHEMAS:
+        raise RpcError(-32602, "Invalid params: unknown tool")
+    _validate(args, _TOOL_SCHEMAS[name], "arguments")
+    if name == "memory_fix_profile":
+        for index, op in enumerate(args["operations"]):
+            path = f"arguments.operations[{index}]"
+            if op["action"] in ("update", "delete") and not op.get("item_id", "").strip():
+                raise RpcError(-32602, f"Invalid params: {path}.item_id is required")
+            if op["action"] in ("add", "update") and not op.get("data"):
+                raise RpcError(-32602, f"Invalid params: {path}.data must be a nonempty object")
+
+
+def _valid_id(value) -> bool:
+    return isinstance(value, str) or type(value) is int
+
+
+def _is_response(msg: dict) -> bool:
+    """Ignore valid peer responses; this server does not initiate requests."""
+    if not _valid_id(msg.get("id")) or ("result" in msg) == ("error" in msg):
+        return False
+    if "result" in msg:
+        return isinstance(msg["result"], dict)
+    error = msg["error"]
+    return isinstance(error, dict) and type(error.get("code")) is int and isinstance(error.get("message"), str)
+
+
+def _error(mid, code: int, message: str) -> dict:
+    return {"jsonrpc": "2.0", "id": mid, "error": {"code": code, "message": message}}
 
 
 def host_label(client: str) -> str:
@@ -84,6 +152,9 @@ class Server:
         self.host = "mcp"
 
     def call(self, name: str, args: dict) -> str:
+        validate_tool(name, args)
+        if name in _WRITE_TOOLS:
+            core.ensure_writable()
         if not core.ready():
             raise RuntimeError("EverOS 未配置：设置 EVEROS_USER_ID 与 EVEROS_API_KEY，或写入 ~/.everos/config.env")
         if name == "memory_profile":
@@ -99,12 +170,16 @@ class Server:
                                                     args["conclusion"])
         if name == "memory_fix_profile":
             return "已修改画像 " + core.fix_profile(args["operations"])
-        raise ValueError(f"未知工具 {name}")
+        raise RpcError(-32602, "Invalid params: unknown tool")
 
     def handle(self, msg: dict) -> dict | None:
-        method, mid, params = msg.get("method"), msg.get("id"), msg.get("params") or {}
+        method, params = msg["method"], msg.get("params", {})
         if method == "initialize":
-            self.host = host_label(str((params.get("clientInfo") or {}).get("name") or "mcp"))
+            _validate(params, {"type": "object", "properties": {
+                "protocolVersion": {"type": "string"}, "capabilities": {"type": "object"},
+                "clientInfo": {"type": "object", "properties": {"name": {"type": "string"},
+                                                                  "version": {"type": "string"}}}}}, "params")
+            self.host = host_label((params.get("clientInfo") or {}).get("name") or "mcp")
             return {"protocolVersion": params.get("protocolVersion") or "2025-06-18",
                     "capabilities": {"tools": {"listChanged": False}},
                     "serverInfo": {"name": "everos", "version": VERSION},
@@ -119,14 +194,43 @@ class Server:
             return {"prompts": []}
         if method == "tools/call":
             try:
-                text = self.call(params.get("name", ""), params.get("arguments") or {})
+                text = self.call(params.get("name", ""), params.get("arguments", {}))
                 return {"content": [{"type": "text", "text": text}], "isError": False}
+            except RpcError:
+                raise
             except Exception as exc:
                 core.log(f"mcp {params.get('name')} failed: {exc!r}")
                 return {"content": [{"type": "text", "text": f"EverOS 调用失败：{exc}"}], "isError": True}
-        if mid is not None:
-            raise LookupError(method)
-        return None
+        raise RpcError(-32601, f"Method not found: {method}")
+
+    def respond(self, msg) -> dict | None:
+        """Validate the MCP envelope before dispatch, keeping bad frames recoverable."""
+        if not isinstance(msg, dict) or msg.get("jsonrpc") != "2.0":
+            return _error(None, -32600, "Invalid Request")
+        if "method" not in msg and _is_response(msg):
+            return None
+        if not isinstance(msg.get("method"), str) or "result" in msg or "error" in msg:
+            return _error(None, -32600, "Invalid Request")
+        if "id" in msg and not _valid_id(msg["id"]):
+            return _error(None, -32600, "Invalid Request")
+        # MCP notifications have no ID and never receive a response. All supported
+        # operations below are requests; notifications must not trigger tool writes.
+        if "id" not in msg:
+            return None
+        mid = msg["id"]
+        try:
+            if "params" in msg and not isinstance(msg["params"], dict):
+                raise RpcError(-32602, "Invalid params: params must be object")
+            return {"jsonrpc": "2.0", "id": mid, "result": self.handle(msg)}
+        except RpcError as exc:
+            return _error(mid, exc.code, str(exc))
+        except Exception as exc:
+            core.log(f"mcp {msg['method']} failed: {exc!r}")
+            return _error(mid, -32603, "Internal error")
+
+
+def _reject_constant(value: str) -> None:
+    raise ValueError(f"Invalid JSON constant: {value}")
 
 
 def main() -> None:
@@ -136,20 +240,13 @@ def main() -> None:
         if not line:
             continue
         try:
-            msg = json.loads(line)
-        except json.JSONDecodeError:
+            msg = json.loads(line, parse_constant=_reject_constant)
+        except (ValueError, RecursionError):
+            out = _error(None, -32700, "Parse error")
+        else:
+            out = server.respond(msg)
+        if out is None:
             continue
-        if "method" not in msg:
-            continue  # 客户端对我们请求的响应，本服务不发请求
-        try:
-            result = server.handle(msg)
-            if result is None or msg.get("id") is None:
-                continue
-            out = {"jsonrpc": "2.0", "id": msg["id"], "result": result}
-        except LookupError as exc:
-            out = {"jsonrpc": "2.0", "id": msg.get("id"), "error": {"code": -32601, "message": f"Method not found: {exc}"}}
-        except Exception as exc:
-            out = {"jsonrpc": "2.0", "id": msg.get("id"), "error": {"code": -32603, "message": str(exc)}}
         sys.stdout.write(json.dumps(out, ensure_ascii=False) + "\n")
         sys.stdout.flush()
 

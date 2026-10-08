@@ -41,21 +41,24 @@
 
 ## 验证清单（全部通过才算接入完成）
 
-- [ ] `python3 plugin/everos/hook.py --doctor` 各项 OK。
+- [ ] `python3 plugin/everos/hook.py --doctor` 各项 OK 且退出码为 0；缺配置或任一 API 检查失败时退出非零。
+- [ ] `python3 -m unittest discover -s tests -v` 通过；`install.sh --dry-run` 不修改配置也不访问 API。
+- [ ] Codex 新安装或更新的 hook 定义已经审阅并信任；实际出现注入，不能只看插件 enabled 或 MCP connected。
 - [ ] `hook.py --dry-run <会话记录文件>`：解析出来的消息角色正确、没有混进脚手架、时间戳单调递增。
 - [ ] 真实会话里，让模型复述「EverOS 相关记忆」或「用户画像」，确认注入生效。
 - [ ] 一轮对话结束后，v2 里出现这个会话的 episode，`sender_ids` 归属正确（用户是 owner，同事是 `feishu_*`）。
 - [ ] 断网或填错 key 时，会话照常进行（失败放行），`state/hook.log` 里有错误记录。
-- [ ] 提问前 hook 的超时设置生效：最慢 20 秒，超时后不注入，也不卡住会话。
+- [ ] 提问前 hook 的总预算生效：默认 18 秒，宿主上限 20 秒；Kimi 首轮画像与召回共用预算，超时只采用已经返回的结果。
 - [ ] `install.sh` 重复运行不会重复追加配置（幂等）。
 - [ ] 改完代码后在新会话里验证（MCP 服务是常驻进程，旧会话里还是旧代码）。
+- [ ] `EVEROS_WRITE=0` 时自动采集和 MCP 三个写工具均不能入库；业务错误不会推进 offset 或清除 pending；多行记忆只标记真正注入的 ID。
 
 ## 已接入宿主速查
 
 | 宿主 | L1 MCP | L2 指令 | L3 提问前注入 | L4 采集 | 关键差异 |
 | --- | --- | --- | --- | --- | --- |
 | Claude Code | 插件内 `claude-mcp.json` | `~/.claude/CLAUDE.md`（可选） | SessionStart（画像）+ UserPromptSubmit，输出 JSON `additionalContext` | Stop，读 transcript_path（JSONL） | 本地市场原地加载；SessionEnd 只有约 1.5 秒；注入单条上限 1 万字，对用户不可见 |
-| Codex | `codex mcp add`（绝对路径） | `~/.codex/AGENTS.md` | 同 Claude Code（Codex 也会设置 `CLAUDE_PLUGIN_ROOT`） | Stop，读 rollout JSONL（`response_item`） | 插件是拷贝安装；hooks.json 必须放在 `hooks/` 下；需要 `[features] hooks = true` |
+| Codex | `codex mcp add`（绝对路径） | `~/.codex/AGENTS.md` | 同 Claude Code（Codex 也会设置 `CLAUDE_PLUGIN_ROOT`） | Stop，读 rollout JSONL（`response_item`） | 插件是拷贝安装；hooks.json 必须放在 `hooks/` 下；需要 `[features] hooks = true`，并审阅、信任当前 hook 定义 |
 | Kimi Code | `~/.kimi-code/mcp.json` | — （没有 config.toml 时安装脚本会新建） | 只有 UserPromptSubmit 能注入，输出纯文本；画像放到首条提问 | Stop，按 session_id 找 `wire.jsonl` | `[[hooks]]` 只允许 event / matcher / command / timeout 四个字段 |
 | Kimi Work 桌面端（Kimi.app） | 内嵌 home 的 `mcp.json` | —（指令层由桌面端 skill 承担） | 同 Kimi Code（输出纯文本，画像放首条提问） | Stop，按 session_id 先查 `session_index.jsonl` 再找 `wire.jsonl` | 内嵌 kimi-code 0.15.7；`config.toml` 随 App 升级重写，丢了重跑 install.sh；hook 在会话启动时加载，改配置要新开会话；`ctitle-*` 标题侧会话要排除；用户消息带 `<meta>` 前导脚手架要剥掉；hook 命令经 shell 执行，用 `EVEROS_HOST=kimi_desktop` 指定宿主 |
 | TraeCode CLI（coco） | `coco mcp add` | `~/.trae/AGENTS.md`（安装脚本写入规则块） | 未接（有 hook，待按清单评估） | 未接 | 和 Codex 同源；2026-10-08 实测只靠规则加 MCP，就能在每条提问前自己检索 |

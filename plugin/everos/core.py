@@ -20,11 +20,12 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import queue
 import re
 import shlex
+import threading
 import time
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor, wait
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -133,7 +134,29 @@ def ready() -> bool:
     return bool(c.get("EVEROS_USER_ID")) and (bool(c.get("EVEROS_API_KEY")) or network_secret_mode())
 
 
-def api(path: str, body: dict, timeout: int = 90) -> dict:
+def ensure_writable() -> None:
+    """所有写入口共用开关，包括 MCP 与手工维护命令。"""
+    if cfg().get("EVEROS_WRITE") == "0":
+        raise RuntimeError("EverOS 写入已关闭（EVEROS_WRITE=0）")
+
+
+class APIResponseError(RuntimeError):
+    """服务端返回业务失败或未完成；与可重试的网络异常区分。"""
+
+
+def _check_response(out: dict) -> dict:
+    if not isinstance(out, dict):
+        raise APIResponseError("EverOS 返回了无效响应对象")
+    code = out.get("code")
+    if (code is not None and code not in (0, 200, "0", "200")) or out.get("success") is False or out.get("error"):
+        detail = str(out.get("message") or out.get("error") or "业务请求失败")[:200]
+        raise APIResponseError(f"EverOS 请求失败（code={code!r}）：{detail}")
+    if str(out.get("status", "")).lower() in ("error", "failed", "failure"):
+        raise APIResponseError("EverOS 请求失败：" + str(out.get("message") or out["status"])[:200])
+    return out
+
+
+def api(path: str, body: dict, timeout: float = 90) -> dict:
     c = cfg()
     headers = {"Content-Type": "application/json"}
     if c.get("EVEROS_API_KEY"):
@@ -145,7 +168,7 @@ def api(path: str, body: dict, timeout: int = 90) -> dict:
                                  method="POST", headers=headers)
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         raw = resp.read().decode("utf-8")
-    return json.loads(raw) if raw else {}
+    return _check_response(json.loads(raw) if raw else {})
 
 
 def ts_ms(iso: str | None) -> int:
@@ -190,19 +213,50 @@ def _profile_lines(pdata: dict, with_ids: bool = False) -> list[str]:
     return lines
 
 
-def profile_text(limit: int = 4000, with_ids: bool = False) -> str:
+def _read_jobs(jobs: dict, budget: float) -> dict:
+    """只等到共同 deadline；daemon 线程不会在 hook 退出时再等待网络。"""
+    deadline = time.monotonic() + max(0.0, budget)
+    results, completed = {}, queue.Queue()
+
+    def run(name, path, body):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        try:
+            data = _check_response(api(path, body, timeout=remaining)).get("data") or {}
+            completed.put((name, data, None))
+        except Exception as exc:
+            completed.put((name, None, exc))
+
+    if budget <= 0:
+        return results
+    for name, (path, body) in jobs.items():
+        threading.Thread(target=run, args=(name, path, body), daemon=True).start()
+    for _ in jobs:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            name, data, error = completed.get(timeout=remaining)
+        except queue.Empty:
+            break
+        if error is not None:
+            log(f"read {name} failed: {error!r}")
+        else:
+            results[name] = data
+    return results
+
+
+def profile_text(limit: int = 4000, with_ids: bool = False, budget: float | None = None) -> str:
     lines, seen = [], set()
     sources = []
     if version() == "v2":
         sources.append(("/api/v2/memory/get", {"memory_type": "profile", "user_id": owner()}))
     if read_v1():
         sources.append(("/api/v1/memories/get", {"filters": {"user_id": owner()}, "memory_type": "profile"}))
-    for path, body in sources:
-        try:
-            profiles = (api(path, body, timeout=READ_TIMEOUT).get("data") or {}).get("profiles") or []
-        except Exception as exc:
-            log(f"profile {path} failed: {exc!r}")
-            continue
+    results = _read_jobs({path: (path, body) for path, body in sources}, READ_TIMEOUT * 2 if budget is None else budget)
+    for path, _ in sources:
+        profiles = (results.get(path) or {}).get("profiles") or []
         ids = with_ids and path.startswith("/api/v2")  # 只有 v2 的条目能编辑
         for line in _profile_lines(profiles[0].get("profile_data") or {}, ids) if profiles else []:
             key = line[:40]
@@ -220,7 +274,7 @@ def substantial(query: str) -> bool:
 def search_items(query: str, top_k: int = 5, kind: str = "all", include_profile: bool = False,
                  budget: float | None = None, v1_episodes: int | None = None) -> list[dict]:
     """并行查 v2 用户轨道、v2 agent 轨道、v1 旧库（过渡期），按得分门槛过滤后合并去重。"""
-    budget = budget or READ_TIMEOUT * 2
+    deadline = time.monotonic() + max(0.0, READ_TIMEOUT * 2 if budget is None else budget)
     q, k = clip(query, 500), max(1, min(int(top_k), 20))
     jobs = {}
     if version() == "v2":
@@ -237,15 +291,7 @@ def search_items(query: str, top_k: int = 5, kind: str = "all", include_profile:
             kind, ["episodic_memory", "agent_memory"])
         jobs["v1"] = ("/api/v1/memories/search", {"filters": {"user_id": owner()}, "query": q, "method": "hybrid",
                                                   "top_k": k, "memory_types": types})
-    results = {}
-    with ThreadPoolExecutor(max_workers=max(1, len(jobs))) as pool:
-        futs = {pool.submit(api, path, body, budget): name for name, (path, body) in jobs.items()}
-        done, _ = wait(futs, timeout=budget)
-        for fut in done:
-            try:
-                results[futs[fut]] = fut.result().get("data") or {}
-            except Exception as exc:
-                log(f"search {futs[fut]} failed: {exc!r}")
+    results = _read_jobs(jobs, max(0.0, deadline - time.monotonic()))
     items = []
     v2u, v2a, v1 = results.get("v2u") or {}, results.get("v2a") or {}, results.get("v1") or {}
     for ep in v2u.get("episodes") or []:
@@ -281,16 +327,23 @@ def search_items(query: str, top_k: int = 5, kind: str = "all", include_profile:
     return out
 
 
-def format_items(items: list[dict], limit: int = 4000) -> str:
+def format_items_with_ids(items: list[dict], limit: int = 4000) -> tuple[str, list[str]]:
+    """同时返回真实展示的条目 ID，正文里的换行不影响展示条目数。"""
     label = {"case": "[做法] ", "skill": "[技能] ", "profile": "[画像] "}
-    lines = []
+    lines, shown = [], []
     for it in items:
         head = f"[{it['date']}] " if it.get("date") else label.get(it["kind"], "")
         line = f"- {head}{clip(it['text'], 260)}"
         if sum(len(x) + 1 for x in lines) + len(line) > limit:
             break
         lines.append(line)
-    return "\n".join(lines)
+        if it.get("id") is not None:
+            shown.append(str(it["id"]))
+    return "\n".join(lines), shown
+
+
+def format_items(items: list[dict], limit: int = 4000) -> str:
+    return format_items_with_ids(items, limit)[0]
 
 
 def search_text(query: str, top_k: int = 5, kind: str = "all") -> str:
@@ -347,6 +400,7 @@ def _v2_messages(msgs: list[dict]) -> list[dict]:
 
 
 def post_messages(session_id: str, msgs: list[dict], agent: bool = False, ver: str | None = None) -> str:
+    ensure_writable()
     ver = ver or version()
     batches, cur, size = [], [], 0
     for msg in msgs:
@@ -366,21 +420,32 @@ def post_messages(session_id: str, msgs: list[dict], agent: bool = False, ver: s
         else:
             out = api("/api/v1/memories/agent" if agent else "/api/v1/memories",
                       {"user_id": owner(), "session_id": session_id[:128], "async_mode": False, "messages": batch})
-        status = (out.get("data") or {}).get("status") or str(out)[:80]
+        status = _write_status(out, {"accumulated", "extracted", "buffered", "no_extraction"}, "add")
+    return status
+
+
+def _write_status(out: dict, accepted: set[str], operation: str) -> str:
+    out = _check_response(out)
+    data = out.get("data")
+    status = data.get("status") if isinstance(data, dict) else None
+    if not isinstance(status, str) or status not in accepted:
+        raise APIResponseError(f"EverOS {operation} 未完成：status={status!r}")
     return status
 
 
 def flush(session_id: str, agent: bool = False, ver: str | None = None) -> str:
+    ensure_writable()
     if (ver or version()) == "v2":
         out = api("/api/v2/memory/flush", {"session_id": session_id[:128]}, timeout=180)
     else:
         out = api("/api/v1/memories/agent/flush" if agent else "/api/v1/memories/flush",
                   {"user_id": owner(), "session_id": session_id[:128]}, timeout=180)
-    return (out.get("data") or {}).get("status") or str(out)[:80]
+    return _write_status(out, {"extracted", "no_extraction"}, "flush")
 
 
 def remember(host: str, topic: str, content: str, user_said: str = "") -> str:
     """结构化记录：用户原话（可空）+ 结论/动作/证据，立即抽取。"""
+    ensure_writable()
     t = int(time.time() * 1000)
     sid = f"{host}_{datetime.now(CST):%Y%m%d}_{slug(topic) or 'note'}"
     msgs = [{"role": "user", "sender_id": owner(), "timestamp": t - 1,
@@ -392,7 +457,8 @@ def remember(host: str, topic: str, content: str, user_said: str = "") -> str:
 
 
 def record_practice(host: str, topic: str, task: str, steps: list[dict], conclusion: str) -> str:
-    """做法轨迹：需求 → 每步动作与结果 → 结论。过渡期同时写 v1 agent 轨道（v1 当场出 case，v2 待验证）。"""
+    """做法轨迹：需求 → 每步动作与结果 → 结论。过渡期双写 v1 agent 轨道，抽取更稳定，检索仍可能延迟。"""
+    ensure_writable()
     t = int(time.time() * 1000) - (len(steps) * 2 + 2)
     sid = f"agent_{datetime.now(CST):%Y%m%d}_{slug(topic) or 'practice'}"
     msgs = [{"role": "user", "sender_id": owner(), "timestamp": t, "content": clip(task)}]
@@ -407,24 +473,41 @@ def record_practice(host: str, topic: str, task: str, steps: list[dict], conclus
         msgs.append({"role": "tool", "sender_id": host, "timestamp": t, "tool_call_id": f"call_{i}",
                      "content": clip(step.get("result", ""))})
     msgs.append({"role": "assistant", "sender_id": host, "timestamp": t + 1, "content": clip(conclusion)})
-    results = []
+    results, failed = [], False
     vers = ["v2", "v1"] if version() == "v2" and read_v1() else [version()]
     for ver in vers:
+        add = None
         try:
             add = post_messages(sid, msgs, agent=True, ver=ver)
             time.sleep(1)
             results.append(f"{ver} {add}/{flush(sid, agent=True, ver=ver)}")
         except Exception as exc:
-            results.append(f"{ver} failed: {exc!r}")
-    return f"{sid}: " + "; ".join(results)
+            failed = True
+            phase = f"（add={add}，flush 未完成）" if add is not None else ""
+            results.append(f"{ver} failed{phase}: {exc!r}")
+    result = f"{sid}: " + "; ".join(results)
+    if failed:
+        log(f"practice incomplete {result}")
+        raise RuntimeError("做法记录未完整写入；" + result)
+    return result
 
 
 def fix_profile(operations: list[dict]) -> str:
     """v2 直接改画像：action=add/update/delete，type=explicit_info/implicit_traits，带 reason。"""
+    ensure_writable()
     if version() != "v2":
         raise RuntimeError("编辑画像需要 v2（EVEROS_API_VERSION=v2）")
-    out = api("/api/v2/memory/edit", {"user_id": owner(), "operations": operations[:50]})
+    selected = operations[:50]
+    if not selected:
+        raise ValueError("画像编辑至少需要一条操作")
+    out = _check_response(api("/api/v2/memory/edit", {"user_id": owner(), "operations": selected}))
     data = out.get("data") or out
+    if not isinstance(data, dict):
+        raise APIResponseError("画像编辑返回了无效结果对象")
+    results = data.get("results")
+    if type(data.get("applied")) is not int or data.get("applied") != len(selected) or (isinstance(results, list) and any(
+            not isinstance(it, dict) or it.get("error") or it.get("status") != "applied" for it in results)):
+        raise APIResponseError(f"画像编辑未完整应用：applied={data.get('applied')!r}/{len(selected)}")
     return json.dumps({"applied": data.get("applied"), "results": data.get("results")}, ensure_ascii=False)[:1500]
 
 
@@ -689,6 +772,7 @@ def session_name(entries: list[dict], host: str, cwd: str, sid: str, title: str 
 
 
 def write_turns(payload: dict) -> None:
+    ensure_writable()
     sid = str(payload.get("session_id") or "")
     tpath = Path(str(payload.get("transcript_path") or ""))
     event = str(payload.get("hook_event_name") or "")
@@ -716,9 +800,13 @@ def write_turns(payload: dict) -> None:
         host = st.get("host") or "claude_code"
         if st.get("api", "v1") != version() and st.get("pending"):  # 换库前把旧库里的缓冲落盘
             try:
-                log(f"switch flush {st['everos_session_id']} ({st.get('api', 'v1')}) -> {flush(st['everos_session_id'], ver=st.get('api', 'v1'))}")
+                res = flush(st['everos_session_id'], ver=st.get('api', 'v1'))
+                st.update(pending=False, last_flush_ms=int(time.time() * 1000), last_flush_status=res)
+                save_state(sp, st)
+                log(f"switch flush {st['everos_session_id']} ({st.get('api', 'v1')}) -> {res}")
             except Exception as exc:
                 log(f"switch flush failed {st['everos_session_id']}: {exc!r}")
+                raise  # 旧库仍 pending，不能换 api 后把旧缓冲的重试路径丢掉
         parse = {"codex": messages_codex, "kimi": messages_kimi, "kimi_desktop": messages_kimi}.get(host, messages_claude)
         msgs = parse(entries, host)
         if msgs:
@@ -755,6 +843,7 @@ def _frontmatter(text: str) -> tuple[dict, str]:
 
 def sync_local_memory(limit: int | None = None) -> None:
     """Claude Code 本地记忆（~/.claude/projects/*/memory/*.md）新增或改动后同步进 EverOS。"""
+    ensure_writable()
     STATE.mkdir(parents=True, exist_ok=True)
     with open(STATE / "localmem.lock", "w") as lk:
         try:
@@ -768,7 +857,8 @@ def sync_local_memory(limit: int | None = None) -> None:
                 continue
             key, mtime = str(f), f.stat().st_mtime
             prev = ledger.get(key, {})
-            if prev.get("mtime", 0) >= mtime or prev.get("attempts", 0) >= 3:
+            attempts = prev.get("attempts", 0) if prev.get("attempted_mtime") == mtime else 0
+            if prev.get("mtime", 0) >= mtime or attempts >= 3:
                 continue
             if limit is not None and done >= limit:
                 break
@@ -787,15 +877,21 @@ def sync_local_memory(limit: int | None = None) -> None:
                 add = post_messages(sid, msgs)
                 time.sleep(1)
                 res = flush(sid)
-                ok = res == "extracted" or (version() == "v2" and add == "extracted")
-                ledger[key] = {"mtime": mtime if ok else 0, "session": sid, "add": add, "flush": res,
-                               "attempts": 0 if ok else prev.get("attempts", 0) + 1,
+                # flush 已验证 extracted/no_extraction：后者是空缓冲或内容去重，同样完成。
+                ledger[key] = {"mtime": mtime, "attempted_mtime": mtime, "session": sid, "add": add, "flush": res,
+                               "attempts": 0,
                                "synced_at": datetime.now(CST).isoformat(timespec="seconds")}
                 save_state(LOCALMEM_LEDGER, ledger)
                 log(f"localmem {sid} -> {add}/{res}")
                 done += 1
             except Exception as exc:  # 单条超时跳过；连续 3 次失败说明网络或鉴权有问题，停手
+                # 业务未完成只限制本文件版本；网络故障不消耗内容重试次数。
+                ledger[key] = {**prev, "attempted_mtime": mtime, "session": sid,
+                               "attempts": attempts + 1 if isinstance(exc, APIResponseError) else attempts,
+                               "last_error": str(exc)[:200]}
+                save_state(LOCALMEM_LEDGER, ledger)
                 log(f"localmem failed {sid}: {exc!r}")
+                done += 1
                 fails += 1
                 if fails >= 3:
                     break
@@ -805,6 +901,7 @@ def sync_local_memory(limit: int | None = None) -> None:
 
 def sweep(force: bool = False) -> None:
     """补 flush 闲置会话并同步本地记忆；限频，避免每轮都扫。"""
+    ensure_writable()
     now = time.time()
     STATE.mkdir(parents=True, exist_ok=True)
     if not force and SWEEP_MARK.exists() and now - SWEEP_MARK.stat().st_mtime < SWEEP_EVERY_MIN * 60:
@@ -829,8 +926,10 @@ def sweep(force: bool = False) -> None:
     sync_local_memory(limit=None if force else 10)
 
 
-def doctor() -> str:
+def doctor_result() -> tuple[str, bool]:
+    """返回可读诊断及健康状态，供安装器用退出码判断真实结果。"""
     c = cfg()
+    healthy = ready()
     lines = [f"EVEROS_HOME   {HOME}（config.env {'存在' if (HOME / 'config.env').is_file() else '无'}）",
              f"API           {version()}{'，过渡期同时读 v1' if version() == 'v2' and read_v1() else ''}；base {c['EVEROS_API_BASE']}",
              f"user_id       {c.get('EVEROS_USER_ID') or '缺失：设置 EVEROS_USER_ID'}",
@@ -849,9 +948,16 @@ def doctor() -> str:
     for name, path, body in checks:
         try:
             t = time.time()
-            out = api(path, body, timeout=15)
-            lines.append(f"{name:<10}  OK，共 {(out.get('data') or {}).get('total_count')} 条，耗时 {time.time() - t:.1f}s")
+            out = _check_response(api(path, body, timeout=15))
+            if not isinstance(out.get("data"), dict):
+                raise APIResponseError("诊断读取缺少 data 结果对象")
+            lines.append(f"{name:<10}  OK，共 {out['data'].get('total_count')} 条，耗时 {time.time() - t:.1f}s")
         except Exception as exc:
+            healthy = False
             lines.append(f"{name:<10}  失败：{exc!r}（云端环境需放行 api.evermind.ai）")
     lines.append(f"状态目录      {STATE}（{len(list(SESS_DIR.glob('*.json')))} 个会话账本）")
-    return "\n".join(lines)
+    return "\n".join(lines), healthy
+
+
+def doctor() -> str:
+    return doctor_result()[0]
