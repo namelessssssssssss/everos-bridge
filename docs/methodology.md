@@ -65,6 +65,7 @@ EverOS 是所有 agent、所有设备共用的记忆主库。
 | 2026-10-08 | 现在就切 v2：新写入只进 v2，读取时合并 v1 | v1 即将退役，v2 不丢写入、不丢旧时间戳、能设得分门槛、能改画像；旧数据由官方迁移，迁完就关掉 v1 读取 |
 | 2026-10-08 | 每条提问都检索，超时 20 秒 | owner 选择：完整性优先于延迟 |
 | 2026-10-08 | 做法轨迹同时写 v1 | v2 会生成 case，但不稳定：真实空间里有一条轨迹出了 case（质量 0.9），探针空间 10 分钟仍为 0；v1 写完立刻就有。连续观察一周 v2 稳定生成后再停 |
+| 2026-10-08 | Kimi Work 桌面端接 App 内嵌 runtime（`runtime/kimi-code/config.toml` + `home/mcp.json`），宿主用 `EVEROS_HOST=kimi_desktop` 显式指定 | 桌面端没有独立 CLI，payload 没有 `client_type`；内嵌引擎（kimi-code 0.15.7）与 CLI 同源，hook / MCP / wire.jsonl 机制完全一致，解析器直接复用 |
 
 ## 已知坑（大多静默失败，不报错）
 
@@ -83,6 +84,11 @@ EverOS 是所有 agent、所有设备共用的记忆主库。
 | MCP 服务是常驻进程 | 改了插件代码后，已打开会话里的 MCP 还是旧代码（hook 每次新起进程，立即生效） | 新开会话，或在 Claude Code 里执行 `/reload-plugins` |
 | Claude Desktop 运行时覆盖配置 | App 开着时，外部写进 `claude_desktop_config.json` 的 MCP 会被它自己保存偏好时冲掉 | 退出 App 后再写，或在 App 设置里加；安装脚本检测到 App 在运行就不写 |
 | 非 UTF-8 locale 下的 bash | `$VAR（` 这种写法，会把全角字符的字节当成变量名的一部分，`set -u` 时报 unbound variable | 紧跟非 ASCII 字符的变量一律写成 `${VAR}`（2026-10-08 新 agent 自举测试中发现） |
+| Kimi Work 桌面端的 config.toml 被 App 重写 | App 升级 / 重 provisioning 后，手加的 `[[hooks]]` 没了 | 重跑 `install.sh`（幂等）；hook 装在 `runtime/kimi-code/config.toml`，不是 `~/.kimi-code` |
+| 桌面端 hook 在会话启动时加载 | 改了 hook 配置，当前会话不生效 | 新开会话验证；别在旧会话里反复试 |
+| 桌面端的 ctitle-* 侧会话 | 标题生成也会触发 UserPromptSubmit / Stop，把标题生成提示词当对话入库 | 按 session_id 前缀 `ctitle-` 整体跳过（不检索、不采集） |
+| 桌面端用户消息带 `<meta>` 前导 | 入库的用户原话开头带 `<meta awareness="low" .../>` | `messages_kimi` 解析时剥掉前导 `<meta .../>` |
+| 桌面端 hook payload 没有 client_type | 没法像 Kimi Code CLI 那样靠 `client_type` 识别宿主 | hook 命令带 `EVEROS_HOST=kimi_desktop`（引擎经 shell 执行，环境变量前缀有效）；stdin 字段是 snake_case（引擎自动从驼峰转换） |
 
 ## 演进路线
 

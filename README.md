@@ -14,6 +14,7 @@
 | Claude Code | 插件（hook + MCP + skill） | ✅ | ✅ | ✅ | ✅ |
 | Codex CLI / App | 插件（hook）+ MCP | ✅ | ✅ | ✅ | ✅ |
 | Kimi Code | config.toml hook + MCP | ✅（首条提问时注入） | ✅ | ✅ | ✅ |
+| Kimi Work 桌面端（Kimi.app） | runtime config.toml hook + MCP | ✅（首条提问时注入） | ✅ | ✅ | ✅ |
 | TraeCode CLI（coco）、Gemini CLI | MCP + 全局规则文件 | 规则要求模型自己调用（coco 已实测） | 同左 | — | ✅ |
 | Claude Desktop（含 Cowork）、Cursor | MCP | 由模型按说明调用 | 由模型按说明调用 | — | ✅ |
 | Claude Code on the web（云端） | setup script + 仓库级 hook + 网络密钥 | ✅ | ✅ | ✅ | ✅ |
@@ -35,7 +36,7 @@ git clone https://github.com/namelessssssssssss/everos-bridge ~/.everos-bridge
 python3 ~/.everos-bridge/plugin/everos/hook.py --doctor
 ```
 
-更新时：先 `git -C ~/.everos-bridge pull`，再重跑 `install.sh`。Claude Code 直接从本地 clone 加载插件；Codex 是拷贝安装，所以要重跑。
+更新时：先 `git -C ~/.everos-bridge pull`，再重跑 `install.sh`。Claude Code 直接从本地 clone 加载插件；Codex 是拷贝安装，所以要重跑。Kimi Work 桌面端的 `config.toml` 会被 App 升级重写，升级后同样重跑 `install.sh` 恢复。
 
 ## 云端（Claude Code on the web）
 
