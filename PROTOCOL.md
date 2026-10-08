@@ -51,7 +51,7 @@
   - content 写结论、做了什么、证据（文件:行、MR、commit、链接、logid）；
   - user_said 放用户原话，不改写；
   - 同一话题沿用同一个 topic。
-- `memory_record_practice(topic, task, steps, conclusion)`：排障或工具用法闭环时写一条做法轨迹。过渡期会同时写 v1，因为 v1 写完立刻生成 case，v2 是否生成还在确认。
+- `memory_record_practice(topic, task, steps, conclusion)`：排障或工具用法闭环时写一条做法轨迹。过渡期会同时写 v1：v1 写完立刻生成 case，v2 也会生成但不稳定，观察一周再停。
 - `memory_fix_profile(operations)`：用户纠正了画像里的偏好或背景，或者画像里的进度过期了，就直接改。先用 `memory_profile` 拿到 item_id，每条操作都写 reason。
 
 ### 3.3 已知坑
