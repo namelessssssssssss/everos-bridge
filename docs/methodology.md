@@ -80,6 +80,7 @@ EverOS 是所有 agent、所有设备共用的记忆主库。
 | Kimi 的 hook 输入不带会话记录路径 | 无法直接读取会话记录 | 按 session_id 去找 `~/.kimi-code/sessions/*/session_<id>/agents/main/wire.jsonl` |
 | Claude Code 的 SessionEnd 预算约 1.5 秒 | 插件里的 timeout 撑不大，重活会被打断 | 写入一律转到后台子进程 |
 | botmux 转来的飞书消息 | 同事的话会被记到 owner 名下 | 按 `<sender>` 标注真实发送者，`EVEROS_OWNER_ALIASES` 认 owner |
+| MCP 服务是常驻进程 | 改了插件代码后，已打开会话里的 MCP 还是旧代码（hook 每次新起进程，立即生效） | 新开会话，或在 Claude Code 里执行 `/reload-plugins` |
 
 ## 演进路线
 
