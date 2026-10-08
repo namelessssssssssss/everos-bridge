@@ -15,11 +15,23 @@
 
 ## 接入步骤（按顺序做，每步核对结果）
 
-1. **环境**：确认有 `python3`（≥ 3.9）和 `git`。仓库建议放在 `~/.everos-bridge`，下文记作 `$REPO`。
+1. **环境与仓库**：确认有 `python3`（≥ 3.9）和 `git`。仓库放在 `~/.everos-bridge`，下文记作 `$REPO`。
+   - 仓库是私有的，网页链接和 raw 链接都读不到，直接用 gh 拉取：`gh repo clone namelessssssssssss/everos-bridge ~/.everos-bridge`；
+   - `gh auth status` 显示未登录时，请用户先执行 `gh auth login`；
+   - 已经拉过的，执行 `git -C ~/.everos-bridge pull`。
 2. **配置**：检查环境变量或 `~/.everos/config.env` 里是否有 `EVEROS_USER_ID` 和 `EVEROS_API_KEY`。
-   - 没有就直接问用户，不要猜，也不要去别处搜；
-   - 由 `install.sh` 交互写入 `~/.everos/config.env`，权限 0600。
-   - 默认 `EVEROS_API_VERSION=v2`。官方还没把用户的 v1 旧数据迁到 v2 之前，加上 `EVEROS_READ_V1=1`，读取时会合并旧库。
+   - 没有就停下来问用户，不要猜，也不要去别处搜。
+   - 推荐让用户自己写这个文件（权限 0600），key 就不会出现在聊天记录里。模板如下：
+     ```dotenv
+     EVEROS_API_BASE=https://api.evermind.ai
+     EVEROS_USER_ID=<用户的记忆空间>
+     EVEROS_API_KEY=<EverOS API key>
+     EVEROS_OWNER_ALIASES=<botmux 邮箱前缀，可留空>
+     EVEROS_API_VERSION=v2
+     EVEROS_READ_V1=<官方迁完 v1 旧数据前填 1，迁完填 0>
+     ```
+   - 用户在聊天里直接给了值的话，用环境变量传给安装脚本，由脚本写文件：`EVEROS_USER_ID=… EVEROS_API_KEY=… EVEROS_READ_V1=1 $REPO/install.sh`。
+   - agent 不能代替用户回答交互输入；没有终端时脚本不会进入交互，而是提示后退出。
 3. **接线**：运行 `$REPO/install.sh`。脚本会检测本机装了哪些 agent，逐个接上，改动前先备份原配置。
 4. **验证**：
    - `python3 $REPO/plugin/everos/hook.py --doctor`，各项都是 OK；
@@ -54,7 +66,7 @@
 
 ## 给用户的一句话启动指令
 
-> 读取 https://github.com/namelessssssssssss/everos-bridge 的 AGENTS.md，按步骤把 EverOS 记忆接到你自己和这台机器上的其他 agent。
+> 用 gh 把私有仓库 namelessssssssssss/everos-bridge 拉到 ~/.everos-bridge，读里面的 AGENTS.md，按步骤把 EverOS 记忆接到你自己和这台机器上的其他 agent。
 
 ## 不要做
 

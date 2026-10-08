@@ -23,7 +23,7 @@
 
 把下面这句话发给任意 agent：
 
-> 读取 https://github.com/namelessssssssssss/everos-bridge 的 AGENTS.md，按步骤把 EverOS 记忆接到你自己和这台机器上的其他 agent。
+> 用 gh 把私有仓库 namelessssssssssss/everos-bridge 拉到 ~/.everos-bridge，读里面的 AGENTS.md，按步骤把 EverOS 记忆接到你自己和这台机器上的其他 agent。
 
 也可以手动装：
 

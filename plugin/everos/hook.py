@@ -37,7 +37,8 @@ def on_prompt(payload: dict, kimi: bool = False) -> None:
     """每条提问都检索：v2 用得分门槛过滤，同一会话已注入过的不再重复，总预算与字数有上限。"""
     sid = str(payload.get("session_id") or "")
     prompt = str(payload.get("prompt") or "").strip()
-    if not prompt:
+    # 后台任务通知、系统提醒也会触发 UserPromptSubmit，不是用户提问，检索只会带来噪声
+    if not prompt or prompt.startswith(core._SKIP_PREFIX + ("<system-reminder>",)):
         return
     state_p = core.RECALL_DIR / f"{sid or 'nosession'}.json"
     st = core.load_state(state_p)

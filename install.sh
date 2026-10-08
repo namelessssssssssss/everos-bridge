@@ -20,22 +20,35 @@ has() { command -v "$1" >/dev/null 2>&1; }
 command -v python3 >/dev/null 2>&1 || { say "需要 python3"; exit 1; }
 
 # 1. 配置：环境变量优先；都没有就交互写入 $EVEROS_HOME/config.env（0600，永不入库）
-say "== 配置（$HOME_DIR）"
-if [ -f "$HOME_DIR/config.env" ] || [ -n "${EVEROS_API_KEY:-}" ]; then
-  say "  已有配置，跳过"
+say "== 配置（${HOME_DIR}）"
+if [ -f "${HOME_DIR}/config.env" ]; then
+  say "  已有 ${HOME_DIR}/config.env，跳过"
+elif [ -n "${EVEROS_USER_ID:-}" ] && [ -n "${EVEROS_API_KEY:-}" ]; then
+  # 非交互（agent 调用）：用环境变量写配置文件，保证之后从任何入口启动的 agent 都能读到
+  if [ "$DRY" = 1 ]; then say "  [dry-run] 用环境变量写入 ${HOME_DIR}/config.env"; else
+    mkdir -p "${HOME_DIR}"; umask 077
+    printf 'EVEROS_API_BASE=%s\nEVEROS_USER_ID=%s\nEVEROS_API_KEY=%s\nEVEROS_OWNER_ALIASES=%s\nEVEROS_API_VERSION=v2\nEVEROS_READ_V1=%s\n' \
+      "${EVEROS_API_BASE:-https://api.evermind.ai}" "${EVEROS_USER_ID}" "${EVEROS_API_KEY}" "${EVEROS_OWNER_ALIASES:-}" "${EVEROS_READ_V1:-0}" \
+      > "${HOME_DIR}/config.env"
+    say "  已用环境变量写入 ${HOME_DIR}/config.env（0600）"
+  fi
+elif [ ! -t 0 ]; then
+  say "  没有配置，且当前不是交互终端。请先写好 ${HOME_DIR}/config.env（模板见 AGENTS.md 第 2 步），"
+  say "  或带上环境变量重跑：EVEROS_USER_ID=… EVEROS_API_KEY=… EVEROS_READ_V1=0|1 $0"
+  exit 1
 elif [ "$DRY" = 1 ]; then
-  say "  [dry-run] 将询问 user_id 和 API key 并写入 $HOME_DIR/config.env"
+  say "  [dry-run] 将询问 user_id 和 API key 并写入 ${HOME_DIR}/config.env"
 else
-  mkdir -p "$HOME_DIR"
+  mkdir -p "${HOME_DIR}"
   printf 'EverOS user_id: '; read -r uid
-  printf 'EverOS API key（输入不回显）: '; stty -echo; read -r key; stty echo; printf '\n'
+  printf 'EverOS API key（输入不回显）: '; stty -echo 2>/dev/null || true; read -r key; stty echo 2>/dev/null || true; printf '\n'
   printf 'EverOS 邮箱前缀别名（botmux 用，可留空）: '; read -r aliases
   printf '官方是否还没把你的 v1 旧数据迁到 v2？还没迁完就输入 y，读取时会合并旧库 [y/N]: '; read -r v1
   case "$v1" in y|Y) readv1=1 ;; *) readv1=0 ;; esac
   umask 077
   printf 'EVEROS_API_BASE=https://api.evermind.ai\nEVEROS_USER_ID=%s\nEVEROS_API_KEY=%s\nEVEROS_OWNER_ALIASES=%s\nEVEROS_API_VERSION=v2\nEVEROS_READ_V1=%s\n' \
-    "$uid" "$key" "$aliases" "$readv1" > "$HOME_DIR/config.env"
-  say "  已写入 $HOME_DIR/config.env"
+    "$uid" "$key" "$aliases" "$readv1" > "${HOME_DIR}/config.env"
+  say "  已写入 ${HOME_DIR}/config.env"
 fi
 
 # JSON 配置合并：mcpServers.everos（Claude Desktop / Cursor / Gemini 通用格式）
@@ -73,7 +86,7 @@ for ev, groups in list(d.get("hooks", {}).items()):
     d["hooks"][ev] = keep
 open(p, "w").write(json.dumps(d, ensure_ascii=False, indent=2) + "\n")
 PY
-      say "  已移除 settings.json 里旧的 everos_hook.py 直挂 hook（备份 .bak-everos-$STAMP）"
+      say "  已移除 settings.json 里旧的 everos_hook.py 直挂 hook（备份 .bak-everos-${STAMP}）"
     fi
   fi
 fi
