@@ -182,6 +182,25 @@ fi
 say "== 其他 MCP 客户端可手动添加"
 say "  python3 $MCP"
 
+# 6.5 Kimi Work 桌面端（Kimi.app 内嵌 kimi-code）：MCP（home/mcp.json）+ runtime config.toml [[hooks]]
+# 桌面端 config.toml 由 App 在升级 / 重 provisioning 时重写，丢失后重跑本脚本即可恢复（幂等）
+DKC="${EVEROS_KIMI_DESKTOP_CONFIG:-$HOME/Library/Application Support/kimi-desktop/daimon-share/daimon/runtime/kimi-code/config.toml}"
+if [ -f "$DKC" ]; then
+  say "== Kimi Work 桌面端"
+  merge_mcp_json "$(dirname "$DKC")/home/mcp.json"
+  if ! grep -q 'EVEROS_HOST=kimi_desktop' "$DKC"; then
+    run cp -p "$DKC" "$DKC.bak-everos-$STAMP"
+    if [ "$DRY" = 0 ]; then
+      for spec in UserPromptSubmit:20 Stop:10 PreCompact:10 SessionEnd:5; do
+        printf '\n[[hooks]]\nevent = "%s"\ncommand = "EVEROS_HOST=kimi_desktop python3 %s"\ntimeout = %s\n' "${spec%%:*}" "$HOOK" "${spec##*:}" >> "$DKC"
+      done
+      say "  已在 $DKC 追加 4 条 [[hooks]]（EVEROS_HOST=kimi_desktop）"
+    else
+      say "  [dry-run] 在 $DKC 追加 UserPromptSubmit / Stop / PreCompact / SessionEnd 的 [[hooks]]"
+    fi
+  fi
+fi
+
 # 7. 自检
 say "== 自检"
 python3 "$HOOK" --doctor || true

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""生命周期 hook 入口：Claude Code、Codex（插件，都设置 CLAUDE_PLUGIN_ROOT）与 Kimi Code（config.toml [[hooks]]）共用。
+"""生命周期 hook 入口：Claude Code、Codex（插件，都设置 CLAUDE_PLUGIN_ROOT）与 Kimi Code / Kimi Work 桌面端（config.toml [[hooks]]）共用。
 
   SessionStart      注入用户画像
   UserPromptSubmit  每条提问都按提问检索并注入相关记忆（得分门槛 + 会话内去重 + 预算上限）
@@ -26,6 +26,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import core  # noqa: E402
 
 HEADER = "（EverOS 自动注入，仅供参考；与当前对话冲突时以当前为准）"
+# hook 命令里可显式指定宿主（如 EVEROS_HOST=kimi_desktop python3 hook.py），覆盖 client_type 探测
+HOST_OVERRIDE = os.environ.get("EVEROS_HOST", "")
+
+
+def is_kimi_like(payload: dict) -> bool:
+    """Kimi Code CLI 与 Kimi Work 桌面端都把 stdout 原文追加进上下文（SessionStart 只通知不注入）。"""
+    if HOST_OVERRIDE in ("kimi", "kimi_desktop"):
+        return True
+    return str(payload.get("client_type") or "").startswith("kimi")
 
 
 def emit(event: str, text: str) -> None:
@@ -78,7 +87,8 @@ def main() -> int:
         if args[:1] == ["--dry-run"]:
             entries, _ = core.read_new_entries(Path(args[1]), 0)
             host = core.detect_host(entries, args[1])
-            parse = {"codex": core.messages_codex, "kimi": core.messages_kimi}.get(host, core.messages_claude)
+            parse = {"codex": core.messages_codex, "kimi": core.messages_kimi,
+                     "kimi_desktop": core.messages_kimi}.get(host, core.messages_claude)
             msgs = parse(entries, host)
             print(core.session_name(entries, host, "", Path(args[1]).stem))
             for m in msgs:
@@ -97,10 +107,13 @@ def main() -> int:
         raw = sys.stdin.read()
         payload = json.loads(raw or "{}")
         event = str(payload.get("hook_event_name") or "")
+        sid0 = str(payload.get("session_id") or "")
+        if sid0.startswith("ctitle-"):  # 桌面端标题生成侧会话：不检索、不采集
+            return 0
         c = core.cfg()
         if not core.ready():
             return 0
-        kimi = str(payload.get("client_type") or "").startswith("kimi")
+        kimi = is_kimi_like(payload)
         if event in ("SessionStart", "UserPromptSubmit"):
             if c.get("EVEROS_INJECT") == "0":
                 return 0

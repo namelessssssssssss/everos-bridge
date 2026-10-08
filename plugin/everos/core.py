@@ -39,6 +39,8 @@ RECALL_WORDS = ("上次", "之前", "以前", "我说过", "记得", "按我习�
                 "remember", "previously", "as before")
 
 _REMINDER = re.compile(r"<system-reminder>.*?</system-reminder>", re.S)
+# Kimi Work 桌面端给每条用户提问加的前导脚手架（不是用户原话）
+_DESKTOP_META = re.compile(r"^<meta\b[^>]*?/?>\s*", re.S)
 _SKIP_PREFIX = ("<local-command-", "<task-notification>", "[SYSTEM NOTIFICATION",
                 "Caveat: The messages below")
 # Codex 以 role=user 注入的脚手架（环境、AGENTS.md、插件推荐等），不是用户原话
@@ -448,6 +450,9 @@ def read_new_entries(path: Path, offset: int) -> tuple[list[dict], int]:
 def detect_host(entries: list[dict], transcript: str = "") -> str:
     if "/.codex/" in transcript or any(o.get("type") in ("session_meta", "response_item") for o in entries[:50]):
         return "codex"
+    # 桌面端（Kimi Work）与 Kimi Code CLI 的 wire.jsonl 同构，只能靠路径区分；必须先于 kimi 判断
+    if "kimi-desktop" in transcript:
+        return "kimi_desktop"
     if "/.kimi-code/" in transcript or any(o.get("type") in ("turn.prompt", "context.append_message")
                                            for o in entries[:50]):
         return "kimi"
@@ -459,6 +464,34 @@ def kimi_transcript(session_id: str) -> Path | None:
     sid = session_id.removeprefix("session_")
     base = Path(os.environ.get("KIMI_CODE_HOME") or Path.home() / ".kimi-code") / "sessions"
     hits = sorted(base.glob(f"*/session_{sid}/agents/main/wire.jsonl"))
+    return hits[0] if hits else None
+
+
+def desktop_home() -> Path:
+    """Kimi Work 桌面端内嵌 kimi-code 的 home（daimon 托管，App 升级可能重建）。"""
+    if os.environ.get("EVEROS_KIMI_DESKTOP_HOME"):
+        return Path(os.environ["EVEROS_KIMI_DESKTOP_HOME"]).expanduser()
+    return (Path.home() / "Library/Application Support/kimi-desktop/daimon-share/daimon"
+            / "runtime/kimi-code/home")
+
+
+def desktop_transcript(session_id: str) -> Path | None:
+    """桌面端会话目录是 sessions/wd_*/<conv-xxx>/agents/main/wire.jsonl，先查 session_index.jsonl 精确映射。"""
+    if not session_id or session_id.startswith("ctitle-"):  # ctitle-* 是标题生成侧会话，不采集
+        return None
+    home = desktop_home()
+    idx = home / "session_index.jsonl"
+    if idx.is_file():
+        try:  # 索引按时间追加，倒序找最新映射
+            for line in reversed(idx.read_text(encoding="utf-8").splitlines()):
+                if f'"sessionId":"{session_id}"' not in line:
+                    continue
+                p = Path(json.loads(line).get("sessionDir") or "") / "agents/main/wire.jsonl"
+                if p.is_file():
+                    return p
+        except Exception:
+            pass
+    hits = sorted(home.glob(f"sessions/*/{session_id}/agents/main/wire.jsonl"))
     return hits[0] if hits else None
 
 
@@ -608,7 +641,7 @@ def messages_codex(entries: list[dict], host: str = "codex") -> list[dict]:
 
 
 def messages_kimi(entries: list[dict], host: str = "kimi") -> list[dict]:
-    """Kimi Code wire.jsonl：用户原话在 context.append_message（origin=user），回复在 content.part（text）。"""
+    """Kimi Code / Kimi Work 桌面端 wire.jsonl：用户原话在 context.append_message（origin=user），回复在 content.part（text）。"""
     msgs: list[dict] = []
     for o in entries:
         t = o.get("type")
@@ -617,7 +650,8 @@ def messages_kimi(entries: list[dict], host: str = "kimi") -> list[dict]:
             if m.get("role") != "user" or (m.get("origin") or {}).get("kind") != "user":
                 continue
             text = "\n".join(c.get("text", "") for c in m.get("content") or [] if isinstance(c, dict)
-                             and c.get("type") == "text").strip()
+                             and c.get("type") == "text")
+            text = _DESKTOP_META.sub("", text).strip()  # 桌面端 <meta .../> 前导脚手架
             if text:
                 text, sender = split_botmux(text)
                 msgs.append({"role": "user", **sender, "timestamp": int(o.get("time") or 0) or ts_ms(None),
@@ -650,7 +684,7 @@ def session_name(entries: list[dict], host: str, cwd: str, sid: str, title: str 
             first_ts = o["timestamp"]
     day = (datetime.fromisoformat(first_ts.replace("Z", "+00:00")).astimezone(CST) if first_ts
            else datetime.now(CST))
-    prefix = {"claude_code": "cc", "codex": "cx", "kimi": "km"}.get(host, slug(host, 12) or "agent")
+    prefix = {"claude_code": "cc", "codex": "cx", "kimi": "km", "kimi_desktop": "kw"}.get(host, slug(host, 12) or "agent")
     return f"{prefix}_{day:%Y%m%d}_{slug(title or Path(cwd or 'x').name) or 'session'}_{sid[:8]}"
 
 
@@ -658,8 +692,12 @@ def write_turns(payload: dict) -> None:
     sid = str(payload.get("session_id") or "")
     tpath = Path(str(payload.get("transcript_path") or ""))
     event = str(payload.get("hook_event_name") or "")
-    if not tpath.is_file() and str(payload.get("client_type", "")).startswith("kimi") and sid:
-        tpath = kimi_transcript(sid) or tpath
+    host_hint = os.environ.get("EVEROS_HOST", "")
+    if not tpath.is_file() and sid:
+        if host_hint == "kimi_desktop" or sid.startswith(("conv-", "ctitle-")):
+            tpath = desktop_transcript(sid) or tpath
+        elif host_hint == "kimi" or str(payload.get("client_type", "")).startswith("kimi"):
+            tpath = kimi_transcript(sid) or tpath
     if not sid or not tpath.is_file():
         return
     SESS_DIR.mkdir(parents=True, exist_ok=True)
@@ -681,7 +719,7 @@ def write_turns(payload: dict) -> None:
                 log(f"switch flush {st['everos_session_id']} ({st.get('api', 'v1')}) -> {flush(st['everos_session_id'], ver=st.get('api', 'v1'))}")
             except Exception as exc:
                 log(f"switch flush failed {st['everos_session_id']}: {exc!r}")
-        parse = {"codex": messages_codex, "kimi": messages_kimi}.get(host, messages_claude)
+        parse = {"codex": messages_codex, "kimi": messages_kimi, "kimi_desktop": messages_kimi}.get(host, messages_claude)
         msgs = parse(entries, host)
         if msgs:
             res = post_messages(st["everos_session_id"], msgs)
