@@ -68,6 +68,24 @@ PY
   say "  已写入 $f"
 }
 
+# 全局指令规则（L2）：只有 MCP 的 agent 靠它做到「每条提问先检索」；用标记包裹，重复运行会替换旧块
+RULES="$REPO/plugin/rules/everos-rules.md"
+upsert_rules() {
+  f="$1"
+  [ "$DRY" = 1 ] && { say "  [dry-run] 在 ${f} 写入 EverOS 规则块"; return 0; }
+  mkdir -p "$(dirname "$f")"; [ -f "$f" ] && cp -p "$f" "$f.bak-everos-$STAMP"
+  python3 - "$f" "$RULES" <<'PY2'
+import sys, re, os
+path, rules = sys.argv[1], open(sys.argv[2]).read().strip()
+block = f"<!-- everos-bridge:begin -->\n{rules}\n<!-- everos-bridge:end -->"
+old = open(path).read() if os.path.exists(path) else ""
+pat = re.compile(r"<!-- everos-bridge:begin -->.*?<!-- everos-bridge:end -->", re.S)
+new = pat.sub(block, old) if pat.search(old) else (old.rstrip() + "\n\n" + block + "\n").lstrip()
+open(path, "w").write(new)
+PY2
+  say "  已在 ${f} 写入 EverOS 规则块"
+}
+
 # 2. Claude Code：插件（hook + MCP + skill），并清掉旧的用户级直挂 hook，避免重复写入
 if has claude; then
   say "== Claude Code"
@@ -99,8 +117,22 @@ if has codex; then
   # MCP 用绝对路径注册在 config.toml（插件里的 MCP 声明只给 Claude Code，避免 Codex 读到未展开的变量）
   run codex mcp remove everos >/dev/null 2>&1 || true
   run codex mcp add everos -- python3 "$MCP" || true
-  grep -q '^hooks *= *true' "$HOME/.codex/config.toml" 2>/dev/null || \
-    say "  注意：Codex 的 hook 需要在 ~/.codex/config.toml 的 [features] 下设 hooks = true"
+  C="$HOME/.codex/config.toml"
+  if ! grep -q '^hooks *= *true' "$C" 2>/dev/null; then
+    if [ "$DRY" = 1 ]; then say "  [dry-run] 在 ${C} 打开 [features] hooks = true"; else
+      [ -f "$C" ] && cp -p "$C" "$C.bak-everos-$STAMP"
+      python3 - "$C" <<'PY2'
+import sys, re, os
+p = sys.argv[1]; s = open(p).read() if os.path.exists(p) else ""
+if re.search(r"^\[features\]\s*$", s, re.M):
+    s = re.sub(r"^\[features\]\s*$", "[features]\nhooks = true", s, count=1, flags=re.M)
+else:
+    s = s.rstrip() + "\n\n[features]\nhooks = true\n"
+open(p, "w").write(s)
+PY2
+      say "  已在 ${C} 打开 [features] hooks = true"
+    fi
+  fi
 fi
 
 # 4. TraeCode CLI（coco / traecli）：MCP
@@ -108,16 +140,23 @@ for bin in coco traecli; do
   if has "$bin"; then
     say "== $bin"
     if ! "$bin" mcp get everos >/dev/null 2>&1; then run "$bin" mcp add everos -- python3 "$MCP" || true; fi
+    upsert_rules "${TRAECLI_HOME:-${TRAE_HOME:-$HOME/.trae}}/AGENTS.md"
     break
   fi
 done
 
 # 5. 用 mcpServers JSON 的客户端：Claude Desktop（含 Cowork）、Cursor、Gemini CLI
 say "== 其他 MCP 客户端"
-merge_mcp_json "$HOME/Library/Application Support/Claude/claude_desktop_config.json"
-merge_mcp_json "$HOME/.config/Claude/claude_desktop_config.json"
+if pgrep -f "Claude.app/Contents/MacOS/Claude" >/dev/null 2>&1; then
+  say "  Claude Desktop 正在运行：它会用内存里的配置覆盖外部改动，这次先不写。"
+  say "  退出 Claude Desktop 后重跑本脚本，或在 App 的「设置 → 开发者 → 编辑配置」里加入 mcpServers.everos：python3 ${MCP}"
+else
+  merge_mcp_json "$HOME/Library/Application Support/Claude/claude_desktop_config.json"
+  merge_mcp_json "$HOME/.config/Claude/claude_desktop_config.json"
+fi
 merge_mcp_json "$HOME/.cursor/mcp.json"
 merge_mcp_json "$HOME/.gemini/settings.json"
+has gemini && upsert_rules "$HOME/.gemini/GEMINI.md"
 
 # 6. Kimi Code：MCP（~/.kimi-code/mcp.json）+ config.toml 里的 [[hooks]]（自动读写）
 if has kimi; then
@@ -125,6 +164,7 @@ if has kimi; then
   K="${KIMI_CODE_HOME:-$HOME/.kimi-code}"
   [ -f "$K/mcp.json" ] || { [ "$DRY" = 1 ] || { mkdir -p "$K"; printf '{}\n' > "$K/mcp.json"; }; }
   merge_mcp_json "$K/mcp.json"
+  [ -f "$K/config.toml" ] || { [ "$DRY" = 1 ] || { mkdir -p "$K"; : > "$K/config.toml"; }; }
   if [ -f "$K/config.toml" ] && ! grep -q 'everos/hook.py' "$K/config.toml"; then
     run cp -p "$K/config.toml" "$K/config.toml.bak-everos-$STAMP"
     if [ "$DRY" = 0 ]; then
@@ -145,4 +185,4 @@ say "  python3 $MCP"
 # 7. 自检
 say "== 自检"
 python3 "$HOOK" --doctor || true
-say "完成。Claude Code、Codex 在新会话生效；Claude Desktop 需要重启。"
+say "完成。Claude Code、Codex、Kimi 在新会话生效；Claude Desktop 见上面的提示。"

@@ -56,8 +56,8 @@
 | --- | --- | --- | --- | --- | --- |
 | Claude Code | 插件内 `claude-mcp.json` | `~/.claude/CLAUDE.md`（可选） | SessionStart（画像）+ UserPromptSubmit，输出 JSON `additionalContext` | Stop，读 transcript_path（JSONL） | 本地市场原地加载；SessionEnd 只有约 1.5 秒；注入单条上限 1 万字，对用户不可见 |
 | Codex | `codex mcp add`（绝对路径） | `~/.codex/AGENTS.md` | 同 Claude Code（Codex 也会设置 `CLAUDE_PLUGIN_ROOT`） | Stop，读 rollout JSONL（`response_item`） | 插件是拷贝安装；hooks.json 必须放在 `hooks/` 下；需要 `[features] hooks = true` |
-| Kimi Code | `~/.kimi-code/mcp.json` | — | 只有 UserPromptSubmit 能注入，输出纯文本；画像放到首条提问 | Stop，按 session_id 找 `wire.jsonl` | `[[hooks]]` 只允许 event / matcher / command / timeout 四个字段 |
-| TraeCode CLI（coco） | `coco mcp add` | — | 未接（有 hook，待按清单评估） | 未接 | 和 Codex 同源 |
-| Claude Desktop / Cowork | `claude_desktop_config.json` | claude.ai 上的 skill | — | — | 需要重启 App；Cowork 靠 skill |
+| Kimi Code | `~/.kimi-code/mcp.json` | — （没有 config.toml 时安装脚本会新建） | 只有 UserPromptSubmit 能注入，输出纯文本；画像放到首条提问 | Stop，按 session_id 找 `wire.jsonl` | `[[hooks]]` 只允许 event / matcher / command / timeout 四个字段 |
+| TraeCode CLI（coco） | `coco mcp add` | `~/.trae/AGENTS.md`（安装脚本写入规则块） | 未接（有 hook，待按清单评估） | 未接 | 和 Codex 同源；2026-10-08 实测只靠规则加 MCP，就能在每条提问前自己检索 |
+| Claude Desktop / Cowork | `claude_desktop_config.json`（App 退出时写，或在 App 设置里加） | claude.ai 上的 skill | — | — | App 运行时会覆盖外部改动；Cowork 靠 skill |
 | Cursor、Gemini CLI | `mcp.json` / `settings.json` | `~/.gemini/GEMINI.md` | — | — | 只有 MCP |
 | Claude Code on the web | 仓库里的 `.mcp.json` | 仓库 CLAUDE.md、claude.ai 上的 skill | 仓库 `.claude/settings.json` 里的 hook | 同左 | 不装插件；要用网络密钥放行 `api.evermind.ai`，见 README「云端」 |

@@ -18,7 +18,7 @@
 1. **环境与仓库**：确认有 `python3`（≥ 3.9）和 `git`。仓库放在 `~/.everos-bridge`，下文记作 `$REPO`。
    - 仓库是私有的，网页链接和 raw 链接都读不到，直接用 gh 拉取：`gh repo clone namelessssssssssss/everos-bridge ~/.everos-bridge`；
    - `gh auth status` 显示未登录时，请用户先执行 `gh auth login`；
-   - 已经拉过的，执行 `git -C ~/.everos-bridge pull`。
+   - 已经拉过的，执行 `git -C ~/.everos-bridge pull`；如果报 `could not read Username`，先执行 `gh auth setup-git`。
 2. **配置**：检查环境变量或 `~/.everos/config.env` 里是否有 `EVEROS_USER_ID` 和 `EVEROS_API_KEY`。
    - 没有就停下来问用户，不要猜，也不要去别处搜。
    - 推荐让用户自己写这个文件（权限 0600），key 就不会出现在聊天记录里。模板如下：
@@ -32,7 +32,9 @@
      ```
    - 用户在聊天里直接给了值的话，用环境变量传给安装脚本，由脚本写文件：`EVEROS_USER_ID=… EVEROS_API_KEY=… EVEROS_READ_V1=1 $REPO/install.sh`。
    - agent 不能代替用户回答交互输入；没有终端时脚本不会进入交互，而是提示后退出。
-3. **接线**：运行 `$REPO/install.sh`。脚本会检测本机装了哪些 agent，逐个接上，改动前先备份原配置。
+3. **接线**：运行 `$REPO/install.sh`。脚本会检测本机装了哪些 agent，逐个接上，改动前先备份原配置；重复运行不会重复追加。
+   - 只有 MCP 的 agent（如 coco、Gemini），脚本会把 `plugin/rules/everos-rules.md` 写进它的全局指令文件，让它每条提问先检索。
+   - Claude Desktop 运行时会用内存里的配置覆盖外部改动，脚本检测到它在运行就不写，会给出指引：退出 App 后重跑，或在 App 设置里手动加。
 4. **验证**：
    - `python3 $REPO/plugin/everos/hook.py --doctor`，各项都是 OK；
    - 提问前检索：执行下面这条命令，应输出相关记忆：

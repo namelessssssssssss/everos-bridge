@@ -81,6 +81,8 @@ EverOS 是所有 agent、所有设备共用的记忆主库。
 | Claude Code 的 SessionEnd 预算约 1.5 秒 | 插件里的 timeout 撑不大，重活会被打断 | 写入一律转到后台子进程 |
 | botmux 转来的飞书消息 | 同事的话会被记到 owner 名下 | 按 `<sender>` 标注真实发送者，`EVEROS_OWNER_ALIASES` 认 owner |
 | MCP 服务是常驻进程 | 改了插件代码后，已打开会话里的 MCP 还是旧代码（hook 每次新起进程，立即生效） | 新开会话，或在 Claude Code 里执行 `/reload-plugins` |
+| Claude Desktop 运行时覆盖配置 | App 开着时，外部写进 `claude_desktop_config.json` 的 MCP 会被它自己保存偏好时冲掉 | 退出 App 后再写，或在 App 设置里加；安装脚本检测到 App 在运行就不写 |
+| 非 UTF-8 locale 下的 bash | `$VAR（` 这种写法，会把全角字符的字节当成变量名的一部分，`set -u` 时报 unbound variable | 紧跟非 ASCII 字符的变量一律写成 `${VAR}`（2026-10-08 新 agent 自举测试中发现） |
 
 ## 演进路线
 

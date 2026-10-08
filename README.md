@@ -14,7 +14,8 @@
 | Claude Code | 插件（hook + MCP + skill） | ✅ | ✅ | ✅ | ✅ |
 | Codex CLI / App | 插件（hook）+ MCP | ✅ | ✅ | ✅ | ✅ |
 | Kimi Code | config.toml hook + MCP | ✅（首条提问时注入） | ✅ | ✅ | ✅ |
-| Claude Desktop（含 Cowork）、Cursor、Gemini CLI、TraeCode CLI | MCP | 由模型按说明调用 | 由模型按说明调用 | — | ✅ |
+| TraeCode CLI（coco）、Gemini CLI | MCP + 全局规则文件 | 规则要求模型自己调用（coco 已实测） | 同左 | — | ✅ |
+| Claude Desktop（含 Cowork）、Cursor | MCP | 由模型按说明调用 | 由模型按说明调用 | — | ✅ |
 | Claude Code on the web（云端） | setup script + 仓库级 hook + 网络密钥 | ✅ | ✅ | ✅ | ✅ |
 
 所有代码都是纯 Python 标准库，不用装任何依赖；任何异常都放行，不会卡住 agent。接口用 EverOS v2，v1 旧库在过渡期只读（`EVEROS_READ_V1=1`）。
@@ -53,12 +54,13 @@ AGENTS.md / CLAUDE.md             Agent 入口（CLAUDE.md 引用 AGENTS.md）
 PROTOCOL.md                       读写规则（唯一依据）
 docs/methodology.md               方法论：原则、决策记录、已知坑、演进路线
 docs/agent-onboarding.md          新 Agent 接入：自查清单、实现步骤、验证清单、已接入宿主速查
-install.sh                        检测本机 agent 并逐个接线（改动前备份，幂等）
+install.sh                        检测本机 agent 并逐个接线（改动前备份，幂等；支持非交互）
 plugin/                           Claude Code 与 Codex 共用的插件目录
   .claude-plugin/plugin.json      Claude Code 清单（MCP 声明在 claude-mcp.json）
   .codex-plugin/plugin.json       Codex 清单（Codex 的 MCP 由 install.sh 用绝对路径写进 config.toml）
   hooks/hooks.json                生命周期 hook
   skills/everos-memory/SKILL.md   通用 skill（Agent Skills 格式）
+  rules/everos-rules.md           写进只有 MCP 的 agent 全局指令文件的规则块
   everos/core.py                  核心：v2 读写（含 v1 过渡）、各宿主会话记录解析、补落盘、本地记忆同步
   everos/hook.py                  hook 入口与命令行：--doctor / --dry-run / --sweep / --sync-localmem
   everos/mcp_server.py            stdio MCP 服务：6 个 memory_* 工具
