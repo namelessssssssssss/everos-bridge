@@ -6,7 +6,7 @@
   Stop              把新增的完整轮次写入 EverOS（转交后台子进程，立即返回）
   SessionEnd / PreCompact  写完剩余轮次并 flush
 
-fail-open：任何异常只记日志并 exit 0，绝不阻塞会话。
+fail-open：生命周期事件的异常只记日志并 exit 0，绝不阻塞会话；--doctor 失败返回非零退出码。
 
 手工用法：
   hook.py --doctor                      检查配置、连通性、状态目录
@@ -20,6 +20,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -53,21 +54,21 @@ def on_prompt(payload: dict, kimi: bool = False) -> None:
     st = core.load_state(state_p)
     first = not st.get("turns")
     budget = core._num("EVEROS_RECALL_TIMEOUT", 18)
+    deadline = time.monotonic() + max(0.0, budget)
     chars = int(core._num("EVEROS_RECALL_CHARS", 2000))
     blocks = []
     if kimi and first:  # Kimi 的 SessionStart 只通知不注入，画像放到首条提问一起给
-        profile = core.profile_text()
+        profile = core.profile_text(budget=max(0.0, deadline - time.monotonic()))
         if profile:
             blocks.append(f"【EverOS 用户画像】{HEADER}\n{profile}")
-    items = core.search_items(prompt, top_k=5, budget=budget,
+    items = core.search_items(prompt, top_k=5, budget=max(0.0, deadline - time.monotonic()),
                               v1_episodes=3 if core.substantial(prompt) else 0)
     seen = set(st.get("ids") or [])
-    fresh = [it for it in items if it.get("id") not in seen]
-    text = core.format_items(fresh, limit=chars)
+    fresh = [it for it in items if str(it.get("id")) not in seen]
+    text, shown_ids = core.format_items_with_ids(fresh, limit=chars)
     if text:
         blocks.append(f"【EverOS 相关记忆】{HEADER}\n{text}")
-        shown = text.count("\n") + 1
-        seen.update(str(it.get("id")) for it in fresh[:shown])
+        seen.update(shown_ids)
     st.update(turns=st.get("turns", 0) + 1, ids=sorted(seen)[-500:])
     core.save_state(state_p, st)
     if not blocks:
@@ -82,8 +83,9 @@ def main() -> int:
     args = sys.argv[1:]
     try:
         if args[:1] == ["--doctor"]:
-            print(core.doctor())
-            return 0
+            report, healthy = core.doctor_result()
+            print(report)
+            return 0 if healthy else 1
         if args[:1] == ["--dry-run"]:
             entries, _ = core.read_new_entries(Path(args[1]), 0)
             host = core.detect_host(entries, args[1])
@@ -118,7 +120,7 @@ def main() -> int:
             if c.get("EVEROS_INJECT") == "0":
                 return 0
             if event == "SessionStart" and not kimi:
-                text = core.profile_text()
+                text = core.profile_text(budget=min(core.READ_TIMEOUT, core._num("EVEROS_RECALL_TIMEOUT", 18)))
                 if text:
                     emit("SessionStart", f"【EverOS 用户画像】{HEADER}\n{text}")
             elif event == "UserPromptSubmit":
@@ -134,6 +136,8 @@ def main() -> int:
             child.stdin.close()
     except Exception as exc:  # fail-open：记忆读写永远不值得打断一次对话
         core.log(f"error {args[:1] or 'hook'}: {exc!r}")
+        if args[:1] == ["--doctor"]:
+            return 1
     return 0
 
 
