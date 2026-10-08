@@ -8,6 +8,12 @@
   EVEROS_API_BASE       默认 https://api.evermind.ai（兼容旧名 EVEROS_BASE_URL）
   EVEROS_OWNER_ALIASES  botmux <sender> 邮箱前缀命中即视为 owner，逗号分隔
   EVEROS_INJECT=0       关闭读侧注入；EVEROS_WRITE=0 关闭写侧
+  EVEROS_API_VERSION    v2（默认）或 v1；v1 即将退役，只为回退保留
+  EVEROS_READ_V1=1      过渡期：读取时同时查 v1 旧库并合并（官方迁完数据后关掉）
+  EVEROS_AGENT_ID       v2 里助手消息的归属 agent，默认 <user_id>_agent；原 agent 名记在 sender_name
+  EVEROS_MIN_SCORE      v2 检索的得分门槛，默认 0.3
+  EVEROS_RECALL_TIMEOUT 每条提问检索的总预算（秒），默认 18；hook 超时 20 秒
+  EVEROS_RECALL_CHARS   每轮注入上限（字），默认 2000
 """
 from __future__ import annotations
 
@@ -18,6 +24,7 @@ import re
 import shlex
 import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, wait
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -79,7 +86,9 @@ def cfg() -> dict:
                 k, v = line.split("=", 1)
                 out[k.strip()] = v.strip()
     for k in ("EVEROS_API_KEY", "EVEROS_USER_ID", "EVEROS_API_BASE", "EVEROS_BASE_URL",
-              "EVEROS_OWNER_ALIASES", "EVEROS_INJECT", "EVEROS_WRITE"):
+              "EVEROS_OWNER_ALIASES", "EVEROS_INJECT", "EVEROS_WRITE", "EVEROS_API_VERSION",
+              "EVEROS_READ_V1", "EVEROS_AGENT_ID", "EVEROS_MIN_SCORE", "EVEROS_RECALL_TIMEOUT",
+              "EVEROS_RECALL_CHARS"):
         if os.environ.get(k):
             out[k] = os.environ[k]
     out.setdefault("EVEROS_API_BASE", out.get("EVEROS_BASE_URL", "https://api.evermind.ai"))
@@ -91,6 +100,25 @@ def owner() -> str:
     if not uid:
         raise RuntimeError("EVEROS_USER_ID 未配置")
     return uid
+
+
+def version() -> str:
+    return "v1" if cfg().get("EVEROS_API_VERSION", "v2").lower() == "v1" else "v2"
+
+
+def read_v1() -> bool:
+    return version() == "v1" or cfg().get("EVEROS_READ_V1") == "1"
+
+
+def agent_id() -> str:
+    return cfg().get("EVEROS_AGENT_ID") or f"{owner()}_agent"
+
+
+def _num(key: str, default: float) -> float:
+    try:
+        return float(cfg().get(key, default))
+    except ValueError:
+        return default
 
 
 def network_secret_mode() -> bool:
@@ -149,63 +177,175 @@ def slug(text: str, limit: int = 40) -> str:
     return re.sub(r"[^\w一-鿿]+", "_", text).strip("_")[:limit]
 
 
-# ---------- 读：画像与召回 ----------
+# ---------- 读：画像与召回（v2 为主，过渡期合并 v1） ----------
 
-def profile_text(limit: int = 4000) -> str:
-    out = api("/api/v1/memories/get", {"filters": {"user_id": owner()}, "memory_type": "profile"},
-              timeout=READ_TIMEOUT)
-    profiles = (out.get("data") or {}).get("profiles") or []
-    if not profiles:
-        return ""
-    pdata = profiles[0].get("profile_data") or {}
-    lines = [f"- {it.get('category', '')}：{clip(it.get('description', ''), 220)}"
+def _profile_lines(pdata: dict, with_ids: bool = False) -> list[str]:
+    def tag(it):
+        return f"（{it.get('item_id')}）" if with_ids and it.get("item_id") else ""
+    lines = [f"- {it.get('category', '')}{tag(it)}：{clip(it.get('description', ''), 220)}"
              for it in pdata.get("explicit_info") or []]
-    lines += [f"- 特质：{clip(it.get('description', ''), 160)}" for it in pdata.get("implicit_traits") or []]
+    lines += [f"- 特质{tag(it)}：{clip(it.get('description', ''), 160)}" for it in pdata.get("implicit_traits") or []]
+    return lines
+
+
+def profile_text(limit: int = 4000, with_ids: bool = False) -> str:
+    lines, seen = [], set()
+    sources = []
+    if version() == "v2":
+        sources.append(("/api/v2/memory/get", {"memory_type": "profile", "user_id": owner()}))
+    if read_v1():
+        sources.append(("/api/v1/memories/get", {"filters": {"user_id": owner()}, "memory_type": "profile"}))
+    for path, body in sources:
+        try:
+            profiles = (api(path, body, timeout=READ_TIMEOUT).get("data") or {}).get("profiles") or []
+        except Exception as exc:
+            log(f"profile {path} failed: {exc!r}")
+            continue
+        ids = with_ids and path.startswith("/api/v2")  # 只有 v2 的条目能编辑
+        for line in _profile_lines(profiles[0].get("profile_data") or {}, ids) if profiles else []:
+            key = line[:40]
+            if key not in seen:
+                seen.add(key)
+                lines.append(line)
     return "\n".join(lines)[:limit]
 
 
-def search_text(query: str, top_k: int = 5, kind: str = "all") -> str:
-    types = {"episodes": ["episodic_memory"], "practices": ["agent_memory"]}.get(
-        kind, ["episodic_memory", "agent_memory"])
-    out = api("/api/v1/memories/search",
-              {"filters": {"user_id": owner()}, "query": clip(query, 500), "method": "hybrid",
-               "top_k": max(1, min(int(top_k), 20)), "memory_types": types}, timeout=READ_TIMEOUT * 2)
-    data = out.get("data") or {}
+def substantial(query: str) -> bool:
+    """v1 没有得分没法过滤噪声，只在提问有实际内容时才带上 v1 结果。"""
+    return len(re.sub(r"\s|[，。！？、,.!?~]", "", query)) >= 6
+
+
+def search_items(query: str, top_k: int = 5, kind: str = "all", include_profile: bool = False,
+                 budget: float | None = None, v1_episodes: int | None = None) -> list[dict]:
+    """并行查 v2 用户轨道、v2 agent 轨道、v1 旧库（过渡期），按得分门槛过滤后合并去重。"""
+    budget = budget or READ_TIMEOUT * 2
+    q, k = clip(query, 500), max(1, min(int(top_k), 20))
+    jobs = {}
+    if version() == "v2":
+        if kind in ("all", "episodes"):
+            jobs["v2u"] = ("/api/v2/memory/search", {"query": q, "user_id": owner(), "method": "hybrid", "top_k": k,
+                                                     "min_score": _num("EVEROS_MIN_SCORE", 0.3),
+                                                     "include_profile": include_profile})
+        if kind in ("all", "practices"):
+            jobs["v2a"] = ("/api/v2/memory/search", {"query": q, "agent_id": agent_id(), "method": "hybrid", "top_k": 3})
+    if v1_episodes is None:
+        v1_episodes = k
+    if read_v1():
+        types = {"episodes": ["episodic_memory"], "practices": ["agent_memory"]}.get(
+            kind, ["episodic_memory", "agent_memory"])
+        jobs["v1"] = ("/api/v1/memories/search", {"filters": {"user_id": owner()}, "query": q, "method": "hybrid",
+                                                  "top_k": k, "memory_types": types})
+    results = {}
+    with ThreadPoolExecutor(max_workers=max(1, len(jobs))) as pool:
+        futs = {pool.submit(api, path, body, budget): name for name, (path, body) in jobs.items()}
+        done, _ = wait(futs, timeout=budget)
+        for fut in done:
+            try:
+                results[futs[fut]] = fut.result().get("data") or {}
+            except Exception as exc:
+                log(f"search {futs[fut]} failed: {exc!r}")
+    items = []
+    v2u, v2a, v1 = results.get("v2u") or {}, results.get("v2a") or {}, results.get("v1") or {}
+    for ep in v2u.get("episodes") or []:
+        items.append({"id": ep.get("id"), "kind": "episode", "date": str(ep.get("timestamp", ""))[:10],
+                      "score": float(ep.get("score") or 0), "text": ep.get("summary") or ep.get("subject") or ""})
+    for pr in v2u.get("profiles") or []:
+        pdata = pr.get("profile_data") if isinstance(pr, dict) and "profile_data" in pr else None
+        lines = _profile_lines(pdata)[:6] if pdata else [f"- {pr.get('description', '')}"]
+        for line in lines:
+            items.append({"id": "profile:" + line[:40], "kind": "profile", "text": line[2:]})
+    for case in v2a.get("agent_cases") or []:
+        if float(case.get("score") or 0) >= AGENT_MIN_SCORE:
+            items.append({"id": case.get("id"), "kind": "case", "text": f"{case.get('task_intent', '')} → {case.get('key_insight', '')}"})
+    for skill in v2a.get("agent_skills") or []:
+        if float(skill.get("score") or 0) >= AGENT_MIN_SCORE:
+            items.append({"id": skill.get("id"), "kind": "skill", "text": f"{skill.get('name', '')}：{skill.get('description', '')}"})
+    for ep in (v1.get("episodes") or [])[:v1_episodes]:  # v1 没有得分，条数由调用方按提问是否有实际内容决定
+        items.append({"id": ep.get("id"), "kind": "episode", "date": str(ep.get("timestamp", ""))[:10],
+                      "text": ep.get("summary") or ep.get("subject") or "", "src": "v1"})
+    agent = v1.get("agent_memory") or {}
+    for case in agent.get("cases") or []:
+        if float(case.get("score") or 0) >= AGENT_MIN_SCORE:
+            items.append({"id": case.get("id"), "kind": "case", "text": f"{case.get('task_intent', '')} → {case.get('key_insight', '')}"})
+    for skill in agent.get("skills") or []:
+        if float(skill.get("score") or 0) >= AGENT_MIN_SCORE:
+            items.append({"id": skill.get("id"), "kind": "skill", "text": f"{skill.get('name', '')}：{skill.get('description', '')}"})
+    out, seen = [], set()
+    for it in items:
+        key = re.sub(r"\s", "", str(it["text"]))[:40]
+        if it["text"] and key not in seen:
+            seen.add(key)
+            out.append(it)
+    return out
+
+
+def format_items(items: list[dict], limit: int = 4000) -> str:
+    label = {"case": "[做法] ", "skill": "[技能] ", "profile": "[画像] "}
     lines = []
-    for ep in data.get("episodes") or []:
-        lines.append(f"- [{str(ep.get('timestamp', ''))[:10]}] "
-                     f"{clip(ep.get('summary') or ep.get('subject') or '', 260)}")
-    agent = data.get("agent_memory") or {}
-    for case in [c for c in agent.get("cases") or [] if float(c.get("score") or 0) >= AGENT_MIN_SCORE][:3]:
-        lines.append(f"- [做法] {clip(case.get('task_intent', ''), 120)} → {clip(case.get('key_insight', ''), 180)}")
-    for skill in [s for s in agent.get("skills") or [] if float(s.get("score") or 0) >= AGENT_MIN_SCORE][:3]:
-        lines.append(f"- [技能] {skill.get('name', '')}：{clip(skill.get('description', ''), 180)}")
+    for it in items:
+        head = f"[{it['date']}] " if it.get("date") else label.get(it["kind"], "")
+        line = f"- {head}{clip(it['text'], 260)}"
+        if sum(len(x) + 1 for x in lines) + len(line) > limit:
+            break
+        lines.append(line)
     return "\n".join(lines)
+
+
+def search_text(query: str, top_k: int = 5, kind: str = "all") -> str:
+    return format_items(search_items(query, top_k, kind))
 
 
 def recent_text(days: int = 7, limit: int = 20) -> str:
     cutoff = time.time() - days * 86400
-    lines, page = [], 1
-    while len(lines) < limit and page <= 5:
-        out = api("/api/v1/memories/get", {"filters": {"user_id": owner()}, "memory_type": "episodic_memory",
-                                           "page": page, "page_size": 50}, timeout=READ_TIMEOUT * 2)
-        eps = (out.get("data") or {}).get("episodes") or []
-        if not eps:
-            break
-        for ep in eps:
-            if ts_ms(str(ep.get("timestamp"))) / 1000 < cutoff:
-                return "\n".join(lines)
-            lines.append(f"- [{str(ep.get('timestamp', ''))[:10]}] {clip(ep.get('subject') or ep.get('summary') or '', 160)}")
-            if len(lines) >= limit:
+    rows = []
+    if version() == "v2":
+        try:
+            out = api("/api/v2/memory/get", {"memory_type": "episode", "user_id": owner(), "page_size": min(limit, 100),
+                                             "sort_by": "timestamp", "sort_order": "desc",
+                                             "filters": {"timestamp": {"gte": int(cutoff * 1000)}}}, timeout=READ_TIMEOUT * 2)
+            rows += (out.get("data") or {}).get("episodes") or []
+        except Exception as exc:
+            log(f"recent v2 failed: {exc!r}")
+    if read_v1():
+        page = 1
+        while page <= 5:
+            out = api("/api/v1/memories/get", {"filters": {"user_id": owner()}, "memory_type": "episodic_memory",
+                                               "page": page, "page_size": 50}, timeout=READ_TIMEOUT * 2)
+            eps = (out.get("data") or {}).get("episodes") or []
+            fresh = [e for e in eps if ts_ms(str(e.get("timestamp"))) / 1000 >= cutoff]
+            rows += fresh
+            if len(fresh) < len(eps) or not eps:
                 break
-        page += 1
+            page += 1
+    rows.sort(key=lambda e: str(e.get("timestamp", "")), reverse=True)
+    lines, seen = [], set()
+    for ep in rows:
+        text = ep.get("subject") or ep.get("summary") or ""
+        if text[:40] in seen:
+            continue
+        seen.add(text[:40])
+        lines.append(f"- [{str(ep.get('timestamp', ''))[:10]}] {clip(text, 160)}")
+        if len(lines) >= limit:
+            break
     return "\n".join(lines)
 
 
 # ---------- 写：结构化记录 ----------
 
-def post_messages(session_id: str, msgs: list[dict], agent: bool = False) -> str:
-    path = "/api/v1/memories/agent" if agent else "/api/v1/memories"
+def _v2_messages(msgs: list[dict]) -> list[dict]:
+    """v2 按 sender_id 归属：助手与工具消息统一记到 agent_id，原 agent 名放进 sender_name。"""
+    out = []
+    for m in msgs:
+        m = dict(m)
+        if m["role"] in ("assistant", "tool"):
+            m.setdefault("sender_name", m.get("sender_id") or "agent")
+            m["sender_id"] = agent_id()
+        out.append(m)
+    return out
+
+
+def post_messages(session_id: str, msgs: list[dict], agent: bool = False, ver: str | None = None) -> str:
+    ver = ver or version()
     batches, cur, size = [], [], 0
     for msg in msgs:
         n = len(json.dumps(msg, ensure_ascii=False).encode("utf-8"))
@@ -218,15 +358,22 @@ def post_messages(session_id: str, msgs: list[dict], agent: bool = False) -> str
         batches.append(cur)
     status = ""
     for batch in batches:
-        out = api(path, {"user_id": owner(), "session_id": session_id[:128], "async_mode": False,
-                         "messages": batch})
+        if ver == "v2":
+            out = api("/api/v2/memory/add", {"session_id": session_id[:128], "async_mode": False,
+                                             "messages": _v2_messages(batch)})
+        else:
+            out = api("/api/v1/memories/agent" if agent else "/api/v1/memories",
+                      {"user_id": owner(), "session_id": session_id[:128], "async_mode": False, "messages": batch})
         status = (out.get("data") or {}).get("status") or str(out)[:80]
     return status
 
 
-def flush(session_id: str, agent: bool = False) -> str:
-    path = "/api/v1/memories/agent/flush" if agent else "/api/v1/memories/flush"
-    out = api(path, {"user_id": owner(), "session_id": session_id[:128]}, timeout=180)
+def flush(session_id: str, agent: bool = False, ver: str | None = None) -> str:
+    if (ver or version()) == "v2":
+        out = api("/api/v2/memory/flush", {"session_id": session_id[:128]}, timeout=180)
+    else:
+        out = api("/api/v1/memories/agent/flush" if agent else "/api/v1/memories/flush",
+                  {"user_id": owner(), "session_id": session_id[:128]}, timeout=180)
     return (out.get("data") or {}).get("status") or str(out)[:80]
 
 
@@ -243,7 +390,7 @@ def remember(host: str, topic: str, content: str, user_said: str = "") -> str:
 
 
 def record_practice(host: str, topic: str, task: str, steps: list[dict], conclusion: str) -> str:
-    """agent 轨道轨迹：需求 → 每步动作与结果 → 结论；EverOS 会提炼成可复用的做法。"""
+    """做法轨迹：需求 → 每步动作与结果 → 结论。过渡期同时写 v1 agent 轨道（v1 当场出 case，v2 待验证）。"""
     t = int(time.time() * 1000) - (len(steps) * 2 + 2)
     sid = f"agent_{datetime.now(CST):%Y%m%d}_{slug(topic) or 'practice'}"
     msgs = [{"role": "user", "sender_id": owner(), "timestamp": t, "content": clip(task)}]
@@ -258,9 +405,25 @@ def record_practice(host: str, topic: str, task: str, steps: list[dict], conclus
         msgs.append({"role": "tool", "sender_id": host, "timestamp": t, "tool_call_id": f"call_{i}",
                      "content": clip(step.get("result", ""))})
     msgs.append({"role": "assistant", "sender_id": host, "timestamp": t + 1, "content": clip(conclusion)})
-    add = post_messages(sid, msgs, agent=True)
-    time.sleep(1)
-    return f"{sid}: {add}/{flush(sid, agent=True)}"
+    results = []
+    vers = ["v2", "v1"] if version() == "v2" and read_v1() else [version()]
+    for ver in vers:
+        try:
+            add = post_messages(sid, msgs, agent=True, ver=ver)
+            time.sleep(1)
+            results.append(f"{ver} {add}/{flush(sid, agent=True, ver=ver)}")
+        except Exception as exc:
+            results.append(f"{ver} failed: {exc!r}")
+    return f"{sid}: " + "; ".join(results)
+
+
+def fix_profile(operations: list[dict]) -> str:
+    """v2 直接改画像：action=add/update/delete，type=explicit_info/implicit_traits，带 reason。"""
+    if version() != "v2":
+        raise RuntimeError("编辑画像需要 v2（EVEROS_API_VERSION=v2）")
+    out = api("/api/v2/memory/edit", {"user_id": owner(), "operations": operations[:50]})
+    data = out.get("data") or out
+    return json.dumps({"applied": data.get("applied"), "results": data.get("results")}, ensure_ascii=False)[:1500]
 
 
 # ---------- 写：会话记录 → 消息 ----------
@@ -513,18 +676,23 @@ def write_turns(payload: dict) -> None:
                       everos_session_id=session_name(head, host, str(payload.get("cwd") or ""),
                                                      sid.removeprefix("session_"), str(payload.get("session_title") or "")))
         host = st.get("host") or "claude_code"
+        if st.get("api", "v1") != version() and st.get("pending"):  # 换库前把旧库里的缓冲落盘
+            try:
+                log(f"switch flush {st['everos_session_id']} ({st.get('api', 'v1')}) -> {flush(st['everos_session_id'], ver=st.get('api', 'v1'))}")
+            except Exception as exc:
+                log(f"switch flush failed {st['everos_session_id']}: {exc!r}")
         parse = {"codex": messages_codex, "kimi": messages_kimi}.get(host, messages_claude)
         msgs = parse(entries, host)
         if msgs:
             res = post_messages(st["everos_session_id"], msgs)
-            st.update(pending=True, last_write_ms=int(time.time() * 1000), last_write_status=res,
+            st.update(pending=True, api=version(), last_write_ms=int(time.time() * 1000), last_write_status=res,
                       writes=st.get("writes", 0) + 1, messages=st.get("messages", 0) + len(msgs))
             log(f"{event} add {st['everos_session_id']} +{len(msgs)} -> {res}")
         st["offset"] = new_offset
         save_state(sp, st)
         if event in ("SessionEnd", "PreCompact") and st.get("pending"):
             try:
-                res = flush(st["everos_session_id"])
+                res = flush(st["everos_session_id"], ver=st.get("api"))
                 st.update(pending=False, last_flush_ms=int(time.time() * 1000), last_flush_status=res)
                 save_state(sp, st)
                 log(f"{event} flush {st['everos_session_id']} -> {res}")
@@ -569,7 +737,7 @@ def sync_local_memory(limit: int | None = None) -> None:
             meta, body = _frontmatter(f.read_text(encoding="utf-8"))
             project = re.sub(r"^-Users-[^-]+-(GolandProjects-)?", "", f.parent.parent.name).replace("-", "_")
             sid = f"cc_localmem_{project}_{meta.get('name') or f.stem}"[:128]
-            # 时间戳用同步时刻：约 2 个月前的旧时间戳会被 EverOS 静默丢弃（accumulated 但不抽取）
+            # 时间戳用同步时刻：v1 会静默丢弃约 2 个月前的时间戳（v2 实测 62 天前仍可入库）
             t = int(time.time() * 1000)
             born = datetime.fromtimestamp(getattr(f.stat(), "st_birthtime", mtime), CST)
             dates = f"首次记录 {born:%Y-%m-%d}，最后更新 {datetime.fromtimestamp(mtime, CST):%Y-%m-%d}"
@@ -581,7 +749,7 @@ def sync_local_memory(limit: int | None = None) -> None:
                 add = post_messages(sid, msgs)
                 time.sleep(1)
                 res = flush(sid)
-                ok = res == "extracted"
+                ok = res == "extracted" or (version() == "v2" and add == "extracted")
                 ledger[key] = {"mtime": mtime if ok else 0, "session": sid, "add": add, "flush": res,
                                "attempts": 0 if ok else prev.get("attempts", 0) + 1,
                                "synced_at": datetime.now(CST).isoformat(timespec="seconds")}
@@ -614,7 +782,7 @@ def sweep(force: bool = False) -> None:
             idle_h = (now * 1000 - st.get("last_write_ms", 0)) / 3_600_000
             if st.get("pending") and (force or idle_h >= IDLE_FLUSH_H):
                 try:
-                    res = flush(st["everos_session_id"])
+                    res = flush(st["everos_session_id"], ver=st.get("api", "v1"))
                     st.update(pending=False, last_flush_ms=int(now * 1000), last_flush_status=res)
                     save_state(p, st)
                     log(f"sweep flush {st['everos_session_id']} -> {res}")
@@ -626,18 +794,26 @@ def sweep(force: bool = False) -> None:
 def doctor() -> str:
     c = cfg()
     lines = [f"EVEROS_HOME   {HOME}（config.env {'存在' if (HOME / 'config.env').is_file() else '无'}）",
-             f"API base      {c['EVEROS_API_BASE']}",
+             f"API           {version()}{'，过渡期同时读 v1' if version() == 'v2' and read_v1() else ''}；base {c['EVEROS_API_BASE']}",
              f"user_id       {c.get('EVEROS_USER_ID') or '缺失：设置 EVEROS_USER_ID'}",
              "API key       " + ("已配置" if c.get("EVEROS_API_KEY") else
                                   "未配置，云端走网络密钥" if network_secret_mode() else
                                   "缺失：设置 EVEROS_API_KEY 或写入 config.env"),
-             f"读侧注入      {'关' if c.get('EVEROS_INJECT') == '0' else '开'}；写侧 {'关' if c.get('EVEROS_WRITE') == '0' else '开'}"]
-    try:
-        t = time.time()
-        out = api("/api/v1/memories/get", {"filters": {"user_id": owner()}, "memory_type": "episodic_memory",
-                                           "page": 1, "page_size": 1}, timeout=15)
-        lines.append(f"连通性        OK，episode 共 {(out.get('data') or {}).get('total_count')} 条，耗时 {time.time() - t:.1f}s")
-    except Exception as exc:
-        lines.append(f"连通性        失败：{exc!r}（云端环境需放行 api.evermind.ai）")
+             f"读侧注入      {'关' if c.get('EVEROS_INJECT') == '0' else '开'}；写侧 {'关' if c.get('EVEROS_WRITE') == '0' else '开'}；"
+             f"min_score {_num('EVEROS_MIN_SCORE', 0.3)}；每轮预算 {_num('EVEROS_RECALL_TIMEOUT', 18):.0f}s / {int(_num('EVEROS_RECALL_CHARS', 2000))} 字"]
+    checks = []
+    if version() == "v2" and c.get("EVEROS_USER_ID"):
+        checks += [("v2 用户记忆", "/api/v2/memory/get", {"memory_type": "episode", "user_id": owner(), "page_size": 1}),
+                   ("v2 做法 case", "/api/v2/memory/get", {"memory_type": "agent_case", "agent_id": agent_id(), "page_size": 1})]
+    if read_v1() and c.get("EVEROS_USER_ID"):
+        checks.append(("v1 旧库", "/api/v1/memories/get", {"filters": {"user_id": owner()}, "memory_type": "episodic_memory",
+                                                            "page": 1, "page_size": 1}))
+    for name, path, body in checks:
+        try:
+            t = time.time()
+            out = api(path, body, timeout=15)
+            lines.append(f"{name:<10}  OK，共 {(out.get('data') or {}).get('total_count')} 条，耗时 {time.time() - t:.1f}s")
+        except Exception as exc:
+            lines.append(f"{name:<10}  失败：{exc!r}（云端环境需放行 api.evermind.ai）")
     lines.append(f"状态目录      {STATE}（{len(list(SESS_DIR.glob('*.json')))} 个会话账本）")
     return "\n".join(lines)

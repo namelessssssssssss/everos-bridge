@@ -30,9 +30,11 @@ else
   printf 'EverOS user_id: '; read -r uid
   printf 'EverOS API key（输入不回显）: '; stty -echo; read -r key; stty echo; printf '\n'
   printf 'EverOS 邮箱前缀别名（botmux 用，可留空）: '; read -r aliases
+  printf '官方是否还没把你的 v1 旧数据迁到 v2？还没迁完就输入 y，读取时会合并旧库 [y/N]: '; read -r v1
+  case "$v1" in y|Y) readv1=1 ;; *) readv1=0 ;; esac
   umask 077
-  printf 'EVEROS_API_BASE=https://api.evermind.ai\nEVEROS_USER_ID=%s\nEVEROS_API_KEY=%s\nEVEROS_OWNER_ALIASES=%s\n' \
-    "$uid" "$key" "$aliases" > "$HOME_DIR/config.env"
+  printf 'EVEROS_API_BASE=https://api.evermind.ai\nEVEROS_USER_ID=%s\nEVEROS_API_KEY=%s\nEVEROS_OWNER_ALIASES=%s\nEVEROS_API_VERSION=v2\nEVEROS_READ_V1=%s\n' \
+    "$uid" "$key" "$aliases" "$readv1" > "$HOME_DIR/config.env"
   say "  已写入 $HOME_DIR/config.env"
 fi
 
@@ -113,7 +115,7 @@ if has kimi; then
   if [ -f "$K/config.toml" ] && ! grep -q 'everos/hook.py' "$K/config.toml"; then
     run cp -p "$K/config.toml" "$K/config.toml.bak-everos-$STAMP"
     if [ "$DRY" = 0 ]; then
-      for spec in UserPromptSubmit:15 Stop:10 PreCompact:10 SessionEnd:5; do
+      for spec in UserPromptSubmit:20 Stop:10 PreCompact:10 SessionEnd:5; do
         printf '\n[[hooks]]\nevent = "%s"\ncommand = "python3 %s"\ntimeout = %s\n' "${spec%%:*}" "$HOOK" "${spec##*:}" >> "$K/config.toml"
       done
       say "  已在 $K/config.toml 追加 4 条 [[hooks]]"

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """EverOS MCP 服务（stdio，纯标准库）：任何支持 MCP 的 agent 都能用同一套记忆。
 
-工具：memory_profile / memory_search / memory_recent / memory_remember / memory_record_practice。
+工具：memory_profile / memory_search / memory_recent / memory_remember / memory_record_practice / memory_fix_profile。
 配置同 core.py（环境变量或 ~/.everos/config.env）。stdout 只走协议消息，日志写 stderr。
 """
 from __future__ import annotations
@@ -14,13 +14,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import core  # noqa: E402
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 INSTRUCTIONS = (
     "EverOS 是用户跨 agent、跨设备共用的长期记忆。会话开始调用 memory_profile 了解用户，"
     "并用首条提问调用 memory_search；用户提到「上次 / 之前 / 记得 / 按我习惯」时再检索；"
     "问「以前怎么做的」用 kind=practices。任务交付、用户纠错、偏好暴露、决策形成时调用 memory_remember"
     "（content 写结论、做了什么、证据；user_said 放用户原话）；排障或工具用法闭环时调用 "
-    "memory_record_practice。检索结果仅供参考，与当前对话冲突时以当前为准。"
+    "memory_record_practice；用户纠正画像里的偏好或背景时调用 memory_fix_profile。检索结果仅供参考，与当前对话冲突时以当前为准。"
 )
 
 TOOLS = [
@@ -55,6 +55,17 @@ TOOLS = [
              "action": {"type": "string"}, "result": {"type": "string"},
              "why": {"type": "string", "description": "为什么这样做（可选）"}}}},
          "conclusion": {"type": "string", "description": "根因、解法、怎么验证的"}}}},
+    {"name": "memory_fix_profile",
+     "description": "直接修改用户画像（v2）：用户纠正了某个偏好或背景、或画像里的进度已过期时使用。"
+                    "先用 memory_profile 看现有条目，update/delete 需要 item_id。每条操作都写 reason。",
+     "inputSchema": {"type": "object", "required": ["operations"], "properties": {
+         "operations": {"type": "array", "maxItems": 50, "items": {"type": "object", "required": ["action", "type", "reason"],
+             "properties": {
+                 "action": {"type": "string", "enum": ["add", "update", "delete"]},
+                 "type": {"type": "string", "enum": ["explicit_info", "implicit_traits"]},
+                 "item_id": {"type": "string", "description": "update / delete 时必填"},
+                 "data": {"type": "object", "description": "add / update 时填，如 {\"category\": \"偏好\", \"description\": \"…\"}"},
+                 "reason": {"type": "string", "description": "依据，如用户原话或更新的 memory_id"}}}}}}},
 ]
 
 
@@ -76,7 +87,7 @@ class Server:
         if not core.ready():
             raise RuntimeError("EverOS 未配置：设置 EVEROS_USER_ID 与 EVEROS_API_KEY，或写入 ~/.everos/config.env")
         if name == "memory_profile":
-            return core.profile_text(limit=8000) or "（画像为空）"
+            return core.profile_text(limit=8000, with_ids=True) or "（画像为空）"
         if name == "memory_search":
             return core.search_text(args["query"], args.get("top_k", 5), args.get("kind", "all")) or "（没有相关记忆）"
         if name == "memory_recent":
@@ -86,6 +97,8 @@ class Server:
         if name == "memory_record_practice":
             return "已写入 " + core.record_practice(self.host, args["topic"], args["task"], args["steps"],
                                                     args["conclusion"])
+        if name == "memory_fix_profile":
+            return "已修改画像 " + core.fix_profile(args["operations"])
         raise ValueError(f"未知工具 {name}")
 
     def handle(self, msg: dict) -> dict | None:

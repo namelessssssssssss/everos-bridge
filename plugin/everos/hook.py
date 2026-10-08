@@ -2,7 +2,7 @@
 """生命周期 hook 入口：Claude Code、Codex（插件，都设置 CLAUDE_PLUGIN_ROOT）与 Kimi Code（config.toml [[hooks]]）共用。
 
   SessionStart      注入用户画像
-  UserPromptSubmit  会话首条提问，或提到「上次 / 之前 / 记得…」时，按提问检索并注入相关记忆
+  UserPromptSubmit  每条提问都按提问检索并注入相关记忆（得分门槛 + 会话内去重 + 预算上限）
   Stop              把新增的完整轮次写入 EverOS（转交后台子进程，立即返回）
   SessionEnd / PreCompact  写完剩余轮次并 flush
 
@@ -34,23 +34,32 @@ def emit(event: str, text: str) -> None:
 
 
 def on_prompt(payload: dict, kimi: bool = False) -> None:
+    """每条提问都检索：v2 用得分门槛过滤，同一会话已注入过的不再重复，总预算与字数有上限。"""
     sid = str(payload.get("session_id") or "")
-    prompt = str(payload.get("prompt") or "")
-    marker = core.RECALL_DIR / sid
-    first = bool(sid) and not marker.exists()
-    if not prompt.strip() or not (first or any(w in prompt.lower() for w in core.RECALL_WORDS)):
+    prompt = str(payload.get("prompt") or "").strip()
+    if not prompt:
         return
-    if first:
-        core.RECALL_DIR.mkdir(parents=True, exist_ok=True)
-        marker.touch()
+    state_p = core.RECALL_DIR / f"{sid or 'nosession'}.json"
+    st = core.load_state(state_p)
+    first = not st.get("turns")
+    budget = core._num("EVEROS_RECALL_TIMEOUT", 18)
+    chars = int(core._num("EVEROS_RECALL_CHARS", 2000))
     blocks = []
     if kimi and first:  # Kimi 的 SessionStart 只通知不注入，画像放到首条提问一起给
         profile = core.profile_text()
         if profile:
             blocks.append(f"【EverOS 用户画像】{HEADER}\n{profile}")
-    recall = core.search_text(prompt)
-    if recall:
-        blocks.append(f"【EverOS 相关记忆】{HEADER}\n{recall}")
+    items = core.search_items(prompt, top_k=5, budget=budget,
+                              v1_episodes=3 if core.substantial(prompt) else 0)
+    seen = set(st.get("ids") or [])
+    fresh = [it for it in items if it.get("id") not in seen]
+    text = core.format_items(fresh, limit=chars)
+    if text:
+        blocks.append(f"【EverOS 相关记忆】{HEADER}\n{text}")
+        shown = text.count("\n") + 1
+        seen.update(str(it.get("id")) for it in fresh[:shown])
+    st.update(turns=st.get("turns", 0) + 1, ids=sorted(seen)[-500:])
+    core.save_state(state_p, st)
     if not blocks:
         return
     if kimi:

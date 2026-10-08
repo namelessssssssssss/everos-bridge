@@ -1,6 +1,6 @@
 {
   "name": "everos",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "EverOS long-term memory: injects your profile at session start, recalls related memories for the first prompt, saves every turn, and exposes MCP memory tools.",
   "author": {
     "name": "namelessssssssssss"
