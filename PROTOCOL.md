@@ -99,6 +99,8 @@
 
 状态在 `$EVEROS_HOME/state/`：`sessions/*.json` 是会话账本，`recall/*.json` 记录本会话已注入过的条目，`localmem.json` 是本地记忆同步账本，`hook.log` 是日志。
 
+Codex 升级前必须保存已有 EverOS 插件版本缓存，CLI 操作后恢复被移除的旧目录（操作失败时也恢复）。运行中的聊天仍可能持有旧版 hook 的绝对路径；不能仅安装新版本就删除旧入口，也不能把旧版本路径指向不同内容。新聊天加载新版本，旧缓存不自动清理。
+
 新设备、各 agent、云端的装法见 [AGENTS.md](AGENTS.md) 和 README。
 
 ## 6. 维护

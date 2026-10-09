@@ -23,13 +23,20 @@ except ImportError:  # The installer itself supports Python 3.9 without dependen
 
 
 FAKE_CLI = r'''
-import json, os, sys
+import json, os, shutil, sys
 from pathlib import Path
 name, args = Path(sys.argv[0]).name, sys.argv[1:]
 home = Path(os.environ["EVEROS_INSTALL_HOME"])
 with open(os.environ["FAKECLI_LOG"], "a") as output:
     output.write(json.dumps([name] + args) + "\n")
 action = " ".join([name] + args)
+if name == "codex" and args[:2] == ["plugin", "add"] and os.environ.get("FAKECLI_PRUNE_CODEX_CACHE"):
+    cache = Path(os.environ.get("CODEX_HOME", str(home / ".codex"))) / "plugins/cache/everos-bridge/everos"
+    if cache.exists():
+        shutil.rmtree(cache)
+    new = cache / "0.3.2/everos/hook.py"
+    new.parent.mkdir(parents=True)
+    new.write_text("new hook\n")
 if os.environ.get("FAIL_ACTION") and action.startswith(os.environ["FAIL_ACTION"]):
     print("simulated host CLI failure", file=sys.stderr)
     sys.exit(9)
@@ -230,6 +237,38 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("审阅并信任", result.stdout)
         self.assertFalse(any("trust" in str(call) for call in self.calls()))
         self.assertFalse((self.home / ".codex/AGENTS.md").exists())
+
+    def test_codex_upgrade_preserves_old_cache_and_leaves_new_cache_untouched(self):
+        self.cli("codex")
+        self.env["FAKECLI_PRUNE_CODEX_CACHE"] = "1"
+        for root in (".codex", "alternate-codex"):
+            with self.subTest(root=root):
+                self.env["CODEX_HOME"] = str(self.home / root)
+                base = root + "/plugins/cache/everos-bridge/everos/"
+                old = self.put(base + "0.3.1/everos/hook.py", "old hook\n")
+                core = self.put(base + "0.3.1/everos/core.py", "old core\n")
+                result = self.run_install()
+                self.assertEqual(old.read_text(), "old hook\n")
+                self.assertEqual(core.read_text(), "old core\n")
+                self.assertEqual((self.home / base / "0.3.2/everos/hook.py").read_text(), "new hook\n")
+                self.assertIn("已恢复旧版缓存", result.stdout)
+
+    def test_codex_failed_upgrade_also_restores_removed_old_cache(self):
+        self.cli("codex")
+        old = self.put(".codex/plugins/cache/everos-bridge/everos/0.3.1/everos/hook.py", "old hook\n")
+        self.env.update(FAKECLI_PRUNE_CODEX_CACHE="1", FAIL_ACTION="codex plugin add")
+        result = self.run_install(expect=1)
+        self.assertEqual(old.read_text(), "old hook\n")
+        self.assertNotIn("接线与自检完成", result.stdout)
+
+    def test_codex_cache_preservation_dry_run_does_not_write_or_call_cli(self):
+        self.cli("codex")
+        old = self.put(".codex/plugins/cache/everos-bridge/everos/0.3.1/everos/hook.py", "old hook\n")
+        self.env["FAKECLI_PRUNE_CODEX_CACHE"] = "1"
+        self.run_install("--dry-run")
+        self.assertEqual(old.read_text(), "old hook\n")
+        self.assertEqual(list(old.parents[2].iterdir()), [old.parents[1]])
+        self.assertFalse(any(call[0] == "codex" for call in self.calls()))
 
     def test_codex_old_marketplace_source_is_migrated_and_verified(self):
         self.cli("codex")
