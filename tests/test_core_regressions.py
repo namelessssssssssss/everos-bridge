@@ -286,6 +286,253 @@ class RecallTests(IsolatedCore):
         self.assertLess(time.monotonic() - start, 1.0)
 
 
+class AgenticRecallTests(IsolatedCore):
+    @staticmethod
+    def episode(identifier="episode", text="the direct historical answer"):
+        return {"id": identifier, "summary": text, "score": .02}
+
+    @staticmethod
+    def case(identifier="case", score=.02):
+        return {"id": identifier, "task_intent": identifier, "key_insight": "a useful practice", "score": score}
+
+    def test_agentic_reaches_both_v2_tracks_without_hybrid_score_floor(self):
+        self.api.side_effect = lambda path, body, timeout: {"data": (
+            {"episodes": [self.episode()]} if body.get("user_id") else {
+                "agent_cases": [self.case()],
+                "agent_skills": [{"id": "skill", "name": "skill", "description": "a useful skill", "score": .01}]})}
+        notices = []
+        items = core.search_items("implicit historical question", top_k=100, method="agentic", notices=notices)
+        self.assertEqual({it["id"] for it in items}, {"episode", "case", "skill"})
+        self.assertEqual(self.api.call_count, 2)
+        for call in self.api.call_args_list:
+            self.assertEqual(call.args[0], "/api/v2/memory/search")
+            self.assertEqual(call.args[1]["method"], "agentic")
+            self.assertEqual(call.args[1]["top_k"], 100)
+            self.assertNotIn("min_score", call.args[1])
+        self.assertEqual(notices, [])
+
+    def test_agentic_queries_only_requested_tracks(self):
+        for kind, expected in (("episodes", "user_id"), ("practices", "agent_id")):
+            with self.subTest(kind=kind):
+                self.api.reset_mock()
+                self.api.side_effect = lambda path, body, timeout: {"data": (
+                    {"episodes": [self.episode()]} if body.get("user_id") else {"agent_cases": [self.case()]})}
+                items = core.search_items("history", top_k=-1, kind=kind, method="agentic")
+                self.assertEqual(len(items), 1)
+                self.api.assert_called_once()
+                self.assertIn(expected, self.api.call_args.args[1])
+                self.assertEqual(self.api.call_args.args[1]["top_k"], -1)
+
+    def test_invalid_method_fails_before_network_work(self):
+        with patch.object(core, "_read_jobs") as read:
+            for method in ("keyword", "vector", "Agentic", "", None, False, []):
+                with self.subTest(method=method), self.assertRaisesRegex(ValueError, "method"):
+                    core.search_items("query", method=method)
+            read.assert_not_called()
+        self.api.assert_not_called()
+
+    def test_agentic_zero_budget_does_not_start_network_work(self):
+        notices = []
+        self.assertEqual(core.search_items("history", method="agentic", budget=0, notices=notices), [])
+        self.api.assert_not_called()
+        self.assertEqual(notices, [])
+
+    def test_user_track_failure_falls_back_without_repeating_successful_agent_track(self):
+        def fake_api(path, body, timeout):
+            if body.get("agent_id"):
+                return {"data": {"agent_cases": [self.case("primary-low-score")]}}
+            if body["method"] == "agentic":
+                raise TimeoutError("user track unavailable")
+            self.assertEqual(body["min_score"], .3)
+            return {"data": {"episodes": [self.episode("recovered-user")]}}
+        self.api.side_effect = fake_api
+        notices = []
+        items = core.search_items("history", method="agentic", budget=.3, notices=notices)
+        self.assertEqual({it["id"] for it in items}, {"recovered-user", "primary-low-score"})
+        self.assertEqual(sum(bool(c.args[1].get("agent_id")) for c in self.api.call_args_list), 1)
+        self.assertEqual(sum(c.args[1]["method"] == "hybrid" for c in self.api.call_args_list), 1)
+        self.assertEqual(len(notices), 1)
+        self.assertIn("agentic", notices[0])
+        self.assertIn("hybrid", notices[0])
+
+    def test_empty_agent_track_falls_back_and_restores_hybrid_case_and_skill_floor(self):
+        def fake_api(path, body, timeout):
+            if body.get("user_id"):
+                return {"data": {"episodes": [self.episode("primary-user")]}}
+            if body["method"] == "agentic":
+                return {"data": {"agent_cases": [], "agent_skills": []}}
+            return {"data": {"agent_cases": [self.case("too-low", .01), self.case("at-floor", .55)],
+                             "agent_skills": [
+                                 {"id": "low-skill", "name": "low", "description": "noise", "score": .01},
+                                 {"id": "good-skill", "name": "good", "description": "useful", "score": .8}]}}
+        self.api.side_effect = fake_api
+        notices = []
+        items = core.search_items("history", method="agentic", budget=.3, notices=notices)
+        self.assertEqual({it["id"] for it in items}, {"primary-user", "at-floor", "good-skill"})
+        self.assertEqual(sum(bool(c.args[1].get("user_id")) for c in self.api.call_args_list), 1)
+        self.assertEqual(len(notices), 1)
+        self.assertIn("agentic", notices[0])
+        self.assertIn("hybrid", notices[0])
+
+    def test_blank_episode_bodies_trigger_fallback_but_readable_subject_is_kept(self):
+        for primary in ({"summary": "", "subject": ""}, {"summary": " \n", "subject": "\t "}):
+            with self.subTest(primary=primary):
+                self.api.reset_mock()
+                self.api.side_effect = lambda path, body, timeout: {"data": {"episodes": (
+                    [dict(primary, id="blank")] if body["method"] == "agentic" else [self.episode("recovered")])}}
+                notices = []
+                items = core.search_items("history", kind="episodes", method="agentic", notices=notices)
+                self.assertEqual([it["id"] for it in items], ["recovered"])
+                self.assertEqual(self.api.call_count, 2)
+                self.assertEqual(len(notices), 1)
+                self.assertIn("hybrid", notices[0])
+        self.api.reset_mock()
+        self.api.side_effect = None
+        self.api.return_value = {"data": {"episodes": [
+            {"id": "subject", "summary": " \n", "subject": " the readable subject "}]}}
+        items = core.search_items("history", kind="episodes", method="agentic")
+        self.assertEqual([it["id"] for it in items], ["subject"])
+        self.assertEqual(items[0]["text"], "the readable subject")
+        self.api.assert_called_once()
+
+    def test_hybrid_default_keeps_existing_score_filters_and_never_deepens_empty_results(self):
+        self.api.return_value = {"data": {}}
+        self.assertEqual(core.search_items("history"), [])
+        self.assertEqual(self.api.call_count, 2)
+        for call in self.api.call_args_list:
+            body = call.args[1]
+            self.assertEqual(body["method"], "hybrid")
+            if body.get("user_id"):
+                self.assertEqual(body["min_score"], .3)
+        self.api.reset_mock()
+        self.api.return_value = {"data": {"agent_cases": [self.case("low", .01), self.case("high", .6)]}}
+        self.assertEqual([it["id"] for it in core.search_items("history", kind="practices")], ["high"])
+        self.api.assert_called_once()
+
+    def test_legacy_tracks_remain_hybrid_and_keep_their_score_floor_during_deep_search(self):
+        def fake_api(path, body, timeout):
+            if path.startswith("/api/v1/"):
+                self.assertEqual(body["method"], "hybrid")
+                return {"data": {"episodes": [self.episode("legacy-episode")],
+                                 "agent_memory": {"cases": [self.case("legacy-low", .02),
+                                                             self.case("legacy-high", .8)]}}}
+            if body.get("user_id"):
+                return {"data": {"episodes": [self.episode("v2-episode", "new direct answer")]}}
+            return {"data": {"agent_cases": [self.case("v2-low", .02)]}}
+        self.api.side_effect = fake_api
+        with patch.dict(os.environ, {"EVEROS_READ_V1": "1"}):
+            items = core.search_items("history", method="agentic")
+        self.assertEqual({it["id"] for it in items}, {"legacy-episode", "legacy-high", "v2-episode", "v2-low"})
+        self.assertEqual(self.api.call_count, 3)
+
+    def test_v1_only_agentic_downgrade_is_visible_and_uses_hybrid(self):
+        self.api.return_value = {"data": {"episodes": [self.episode("legacy")]}}
+        with patch.dict(os.environ, {"EVEROS_API_VERSION": "v1", "EVEROS_READ_V1": "1"}):
+            text = core.search_text("history", top_k=-1, kind="episodes", method="agentic")
+        self.assertIn("v1", text)
+        self.assertIn("agentic", text)
+        self.assertIn("hybrid", text)
+        self.assertIn("direct historical answer", text)
+        self.api.assert_called_once()
+        self.assertEqual(self.api.call_args.args[1]["method"], "hybrid")
+        self.assertEqual(self.api.call_args.args[1]["top_k"], -1)
+
+    def test_empty_primary_and_empty_fallback_are_successful_empty_search(self):
+        self.api.return_value = {"data": {}}
+        notices = []
+        self.assertEqual(core.search_items("history", method="agentic", budget=.3, notices=notices), [])
+        self.assertEqual(self.api.call_count, 4)
+        self.assertEqual(len(notices), 2)
+        self.assertTrue(all("agentic" in note and "hybrid" in note for note in notices))
+
+    def test_every_track_and_fallback_technical_failure_is_reported(self):
+        self.api.side_effect = TimeoutError("offline")
+        with self.assertRaises(core.APIResponseError):
+            core.search_items("history", method="agentic", budget=.3)
+        self.assertEqual(self.api.call_count, 4)
+        self.assertEqual({c.args[1]["method"] for c in self.api.call_args_list}, {"agentic", "hybrid"})
+
+    def test_failed_fallback_keeps_successful_track_and_exposes_degradation(self):
+        def fake_api(path, body, timeout):
+            if body.get("user_id"):
+                return {"data": {"episodes": [self.episode("kept")]}}
+            raise RuntimeError("practice service down")
+        self.api.side_effect = fake_api
+        text = core.search_text("history", method="agentic")
+        self.assertIn("direct historical answer", text)
+        self.assertIn("agentic", text)
+        self.assertIn("hybrid", text)
+        self.assertEqual(sum(bool(c.args[1].get("user_id")) for c in self.api.call_args_list), 1)
+
+    def test_default_agentic_budget_reserves_time_for_fallback(self):
+        budgets = []
+        def empty_tracks(jobs, budget):
+            budgets.append(budget)
+            return {name: {} for name in jobs}
+        with patch.object(core, "_read_jobs", side_effect=empty_tracks):
+            core.search_items("history", method="agentic")
+        self.assertEqual(len(budgets), 2)
+        self.assertGreater(budgets[0], 32)
+        self.assertLessEqual(budgets[0], 33)
+        self.assertGreater(budgets[1], 11)
+        self.assertLessEqual(budgets[1], 12)
+
+    def test_primary_and_fallback_share_one_deadline_and_keep_fast_results(self):
+        def fake_api(path, body, timeout):
+            if body.get("agent_id"):
+                return {"data": {"agent_cases": [self.case("fast")]}}
+            time.sleep(.8)
+            return {"data": {"episodes": [self.episode("late")]}}
+        self.api.side_effect = fake_api
+        notices = []
+        start = time.monotonic()
+        items = core.search_items("history", method="agentic", budget=.12, notices=notices)
+        self.assertLess(time.monotonic() - start, .45)
+        self.assertEqual([it["id"] for it in items], ["fast"])
+        self.assertEqual(sum(bool(c.args[1].get("agent_id")) for c in self.api.call_args_list), 1)
+        self.assertTrue(all(0 < c.kwargs["timeout"] <= .12 for c in self.api.call_args_list))
+        self.assertTrue(any("hybrid" in note for note in notices))
+
+    def test_mcp_search_output_includes_fallback_notice_within_existing_character_budget(self):
+        def fake_api(path, body, timeout):
+            if body.get("user_id") and body["method"] == "agentic":
+                return {"data": {}}
+            if body.get("user_id"):
+                return {"data": {"episodes": [self.episode(str(i), f"answer {i}: " + "x" * 400)
+                                               for i in range(100)]}}
+            return {"data": {"agent_cases": [self.case("practice")]}}
+        self.api.side_effect = fake_api
+        text = core.search_text("history", top_k=100, method="agentic")
+        self.assertLessEqual(len(text), 4000)
+        self.assertIn("agentic", text)
+        self.assertIn("hybrid", text)
+        self.assertIn("answer 0:", text)
+
+    def test_hook_remains_hybrid_with_its_existing_eighteen_second_budget(self):
+        with patch.dict(os.environ, {"EVEROS_RECALL_TIMEOUT": "18"}), \
+                patch.object(core, "search_items", return_value=[]) as search:
+            hook.on_prompt({"session_id": "hook-still-fast", "prompt": "meaningful question"})
+        self.assertEqual(search.call_args.kwargs.get("method", "hybrid"), "hybrid")
+        self.assertGreater(search.call_args.kwargs["budget"], 17)
+        self.assertLessEqual(search.call_args.kwargs["budget"], 18)
+
+    def test_deep_search_subprocess_exits_without_waiting_for_late_workers(self):
+        script = "\n".join([
+            "import sys, time", f"sys.path.insert(0, {str(SOURCE)!r})", "import core",
+            "def slow(*args, **kwargs):", "    time.sleep(3)", "    return {'data': {}}",
+            "core.api = slow", "try:",
+            "    core.search_items('history', method='agentic', budget=.1)",
+            "except core.APIResponseError:", "    print('failed within budget')", "print('finished')",
+        ])
+        start = time.monotonic()
+        out = subprocess.run([sys.executable, "-c", script], env=dict(os.environ), capture_output=True,
+                             text=True, timeout=2)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("failed within budget", out.stdout)
+        self.assertIn("finished", out.stdout)
+        self.assertLess(time.monotonic() - start, 1.5)
+
+
 class LocalMemoryTests(IsolatedCore):
     def test_new_file_version_retries_after_three_incomplete_flushes(self):
         note = self.local_note()

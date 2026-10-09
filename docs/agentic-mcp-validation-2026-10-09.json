@@ -1,0 +1,94 @@
+[
+  {
+    "case": "implicit_episode",
+    "kind": "episodes",
+    "accepted": true,
+    "server": {
+      "name": "everos",
+      "version": "0.3.3"
+    },
+    "method_schema": {
+      "type": "string",
+      "enum": [
+        "hybrid",
+        "agentic"
+      ],
+      "default": "hybrid",
+      "description": "agentic 为按次深检索，允许更长等待；不会改变每轮自动检索的默认方式。"
+    },
+    "isError": false,
+    "rpc_error": null,
+    "elapsed_s": 13.495,
+    "output_chars": 1358,
+    "target_fragment_present": true,
+    "fallback_visible": false,
+    "api_traces": [
+      {
+        "path": "/api/v1/memories/search",
+        "method": "hybrid",
+        "track": "v1",
+        "elapsed_s": 0.811,
+        "request_id": null,
+        "min_score_sent": false,
+        "target_found": false,
+        "target_score": null
+      },
+      {
+        "path": "/api/v2/memory/search",
+        "method": "agentic",
+        "track": "user",
+        "elapsed_s": 13.401,
+        "request_id": "02179153799872300000000000000000000ffff0a24719af8b264",
+        "min_score_sent": false,
+        "target_found": true,
+        "target_score": 0.9993945360183716
+      }
+    ]
+  },
+  {
+    "case": "practice_score_scale",
+    "kind": "practices",
+    "accepted": true,
+    "server": {
+      "name": "everos",
+      "version": "0.3.3"
+    },
+    "method_schema": {
+      "type": "string",
+      "enum": [
+        "hybrid",
+        "agentic"
+      ],
+      "default": "hybrid",
+      "description": "agentic 为按次深检索，允许更长等待；不会改变每轮自动检索的默认方式。"
+    },
+    "isError": false,
+    "rpc_error": null,
+    "elapsed_s": 10.937,
+    "output_chars": 1730,
+    "target_fragment_present": true,
+    "fallback_visible": false,
+    "api_traces": [
+      {
+        "path": "/api/v1/memories/search",
+        "method": "hybrid",
+        "track": "v1",
+        "elapsed_s": 1.109,
+        "request_id": null,
+        "min_score_sent": false,
+        "target_found": false,
+        "target_score": null
+      },
+      {
+        "path": "/api/v2/memory/search",
+        "method": "agentic",
+        "track": "agent",
+        "elapsed_s": 10.85,
+        "request_id": "02179153799871900000000000000000000ffff0a24576ce271a0",
+        "min_score_sent": false,
+        "target_found": true,
+        "target_score": 0.3885708451271057
+      }
+    ]
+  }
+]

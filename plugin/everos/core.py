@@ -35,6 +35,7 @@ MAX_BODY_BYTES = 250_000       # 单次 add 请求体上限（留余量）
 IDLE_FLUSH_H = 2
 SWEEP_EVERY_MIN = 30
 READ_TIMEOUT = 6               # 读侧同步注入的网络超时，宁可不注入也不拖慢会话
+AGENTIC_TIMEOUT = 45           # MCP 显式深检索的共同预算，包含回退
 AGENT_MIN_SCORE = 0.55         # 「做法」类召回的相关度门槛
 RECALL_WORDS = ("上次", "之前", "以前", "我说过", "记得", "按我习惯", "老规矩", "last time",
                 "remember", "previously", "as before")
@@ -271,21 +272,55 @@ def substantial(query: str) -> bool:
     return len(re.sub(r"\s|[，。！？、,.!?~]", "", query)) >= 6
 
 
+def _recall_text(row: dict, first: str, second: str, separator: str | None = None) -> str:
+    values = [str(row.get(key) or "").strip() for key in (first, second)]
+    if separator is None:
+        return values[0] or values[1]
+    return separator.join(values) if any(values) else ""
+
+
+def _has_search_hits(name: str, data: dict) -> bool:
+    if name == "v2u":
+        if any(_recall_text(ep, "summary", "subject") for ep in data.get("episodes") or []):
+            return True
+        for profile in data.get("profiles") or []:
+            pdata = profile.get("profile_data") or {}
+            rows = (pdata.get("explicit_info") or []) + (pdata.get("implicit_traits") or [])
+            if str(profile.get("description") or "").strip() or any(
+                    str(row.get("description") or "").strip() for row in rows):
+                return True
+        return False
+    return any(_recall_text(row, "task_intent", "key_insight", " → ") for row in data.get("agent_cases") or []) or any(
+        _recall_text(row, "name", "description", "：") for row in data.get("agent_skills") or [])
+
+
 def search_items(query: str, top_k: int = 5, kind: str = "all", include_profile: bool = False,
-                 budget: float | None = None, v1_episodes: int | None = None) -> list[dict]:
+                 budget: float | None = None, v1_episodes: int | None = None,
+                 method: str = "hybrid", notices: list[str] | None = None) -> list[dict]:
     """并行查 v2 用户轨道、v2 agent 轨道、v1 旧库（过渡期），按得分门槛过滤后合并去重。"""
-    deadline = time.monotonic() + max(0.0, READ_TIMEOUT * 2 if budget is None else budget)
     if type(top_k) is not int or (top_k != -1 and not 1 <= top_k <= 100):
         raise ValueError("top_k must be -1 or in 1..100")
+    if method not in ("hybrid", "agentic"):
+        raise ValueError("method must be hybrid or agentic")
+    deep = method == "agentic" and version() == "v2"
+    total_budget = max(0.0, (AGENTIC_TIMEOUT if deep else READ_TIMEOUT * 2) if budget is None else budget)
+    deadline = time.monotonic() + total_budget
+    if total_budget <= 0:
+        return []
+    notes = notices if notices is not None else []
+    if method == "agentic" and not deep:
+        notes.append("（当前使用 v1，agentic 不可用，本次按 hybrid 检索。）")
     q, k = clip(query, 500), top_k
     jobs = {}
     if version() == "v2":
         if kind in ("all", "episodes"):
-            jobs["v2u"] = ("/api/v2/memory/search", {"query": q, "user_id": owner(), "method": "hybrid", "top_k": k,
-                                                     "min_score": _num("EVEROS_MIN_SCORE", 0.3),
-                                                     "include_profile": include_profile})
+            body = {"query": q, "user_id": owner(), "method": method, "top_k": k,
+                    "include_profile": include_profile}
+            if method == "hybrid":
+                body["min_score"] = _num("EVEROS_MIN_SCORE", 0.3)
+            jobs["v2u"] = ("/api/v2/memory/search", body)
         if kind in ("all", "practices"):
-            jobs["v2a"] = ("/api/v2/memory/search", {"query": q, "agent_id": agent_id(), "method": "hybrid", "top_k": k})
+            jobs["v2a"] = ("/api/v2/memory/search", {"query": q, "agent_id": agent_id(), "method": method, "top_k": k})
     if v1_episodes is None:
         v1_episodes = k
     if read_v1():
@@ -293,35 +328,63 @@ def search_items(query: str, top_k: int = 5, kind: str = "all", include_profile:
             kind, ["episodic_memory", "agent_memory"])
         jobs["v1"] = ("/api/v1/memories/search", {"filters": {"user_id": owner()}, "query": q, "method": "hybrid",
                                                   "top_k": k, "memory_types": types})
-    results = _read_jobs(jobs, max(0.0, deadline - time.monotonic()))
+    reserve = min(READ_TIMEOUT * 2, total_budget / 3) if deep else 0.0
+    results = _read_jobs(jobs, max(0.0, deadline - time.monotonic() - reserve))
+    agent_method = method
+    if deep:
+        fallback = {}
+        labels = {"v2u": "用户记忆", "v2a": "做法记忆"}
+        for name, (path, body) in jobs.items():
+            if name not in labels:
+                continue
+            data = results.get(name) or {}
+            if name in results and _has_search_hits(name, data):
+                continue
+            hybrid = dict(body, method="hybrid")
+            if name == "v2u":
+                hybrid["min_score"] = _num("EVEROS_MIN_SCORE", 0.3)
+            fallback[name] = (path, hybrid)
+        if fallback:
+            recovered = _read_jobs(fallback, max(0.0, min(READ_TIMEOUT * 2, deadline - time.monotonic())))
+            for name in fallback:
+                reason = "未命中" if name in results else "失败或超时"
+                if name in recovered:
+                    results[name] = recovered[name]
+                    if name == "v2a":
+                        agent_method = "hybrid"
+                    notes.append(f"（{labels[name]}的 agentic {reason}，已回退 hybrid。）")
+                else:
+                    notes.append(f"（{labels[name]}的 agentic {reason}，hybrid 回退也失败或超时。）")
+    if method == "agentic" and jobs and not results:
+        raise APIResponseError("记忆检索失败或超时，未获得任何成功轨道；请重试。")
     items = []
     v2u, v2a, v1 = results.get("v2u") or {}, results.get("v2a") or {}, results.get("v1") or {}
     for ep in v2u.get("episodes") or []:
         items.append({"id": ep.get("id"), "kind": "episode", "date": str(ep.get("timestamp", ""))[:10],
-                      "score": float(ep.get("score") or 0), "text": ep.get("summary") or ep.get("subject") or ""})
+                      "score": float(ep.get("score") or 0), "text": _recall_text(ep, "summary", "subject")})
     for pr in v2u.get("profiles") or []:
         pdata = pr.get("profile_data") if isinstance(pr, dict) and "profile_data" in pr else None
         lines = _profile_lines(pdata)[:6] if pdata else [f"- {pr.get('description', '')}"]
         for line in lines:
             items.append({"id": "profile:" + line[:40], "kind": "profile", "text": line[2:]})
     for case in v2a.get("agent_cases") or []:
-        if float(case.get("score") or 0) >= AGENT_MIN_SCORE:
-            items.append({"id": case.get("id"), "kind": "case", "text": f"{case.get('task_intent', '')} → {case.get('key_insight', '')}"})
+        if agent_method == "agentic" or float(case.get("score") or 0) >= AGENT_MIN_SCORE:
+            items.append({"id": case.get("id"), "kind": "case", "text": _recall_text(case, "task_intent", "key_insight", " → ")})
     for skill in v2a.get("agent_skills") or []:
-        if float(skill.get("score") or 0) >= AGENT_MIN_SCORE:
-            items.append({"id": skill.get("id"), "kind": "skill", "text": f"{skill.get('name', '')}：{skill.get('description', '')}"})
+        if agent_method == "agentic" or float(skill.get("score") or 0) >= AGENT_MIN_SCORE:
+            items.append({"id": skill.get("id"), "kind": "skill", "text": _recall_text(skill, "name", "description", "：")})
     # -1 delegates sizing to the server; Python's [:-1] would silently drop its last result.
     v1_limit = None if v1_episodes == -1 else v1_episodes
     for ep in (v1.get("episodes") or [])[:v1_limit]:  # v1 没有得分，条数由调用方按提问是否有实际内容决定
         items.append({"id": ep.get("id"), "kind": "episode", "date": str(ep.get("timestamp", ""))[:10],
-                      "text": ep.get("summary") or ep.get("subject") or "", "src": "v1"})
+                      "text": _recall_text(ep, "summary", "subject"), "src": "v1"})
     agent = v1.get("agent_memory") or {}
     for case in agent.get("cases") or []:
         if float(case.get("score") or 0) >= AGENT_MIN_SCORE:
-            items.append({"id": case.get("id"), "kind": "case", "text": f"{case.get('task_intent', '')} → {case.get('key_insight', '')}"})
+            items.append({"id": case.get("id"), "kind": "case", "text": _recall_text(case, "task_intent", "key_insight", " → ")})
     for skill in agent.get("skills") or []:
         if float(skill.get("score") or 0) >= AGENT_MIN_SCORE:
-            items.append({"id": skill.get("id"), "kind": "skill", "text": f"{skill.get('name', '')}：{skill.get('description', '')}"})
+            items.append({"id": skill.get("id"), "kind": "skill", "text": _recall_text(skill, "name", "description", "：")})
     out, seen = [], set()
     for it in items:
         key = re.sub(r"\s", "", str(it["text"]))[:40]
@@ -350,8 +413,12 @@ def format_items(items: list[dict], limit: int = 4000) -> str:
     return format_items_with_ids(items, limit)[0]
 
 
-def search_text(query: str, top_k: int = 5, kind: str = "all") -> str:
-    return format_items(search_items(query, top_k, kind))
+def search_text(query: str, top_k: int = 5, kind: str = "all", method: str = "hybrid") -> str:
+    notices = []
+    items = search_items(query, top_k, kind, method=method, notices=notices)
+    prefix = "\n".join(notices)
+    text = format_items(items, limit=max(0, 4000 - len(prefix) - bool(prefix)))
+    return prefix + "\n" + (text or "（没有相关记忆）") if prefix else text
 
 
 def recent_text(days: int = 7, limit: int = 20) -> str:

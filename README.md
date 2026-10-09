@@ -21,6 +21,18 @@
 
 Python 代码只用标准库，不用安装依赖；运行期 hook 失败放行，MCP 和安装器会明确报告失败。接口用 EverOS v2，v1 旧库在过渡期合并读取（`EVEROS_READ_V1=1`），做法轨迹仍按协议双写。
 
+## 按次深检索
+
+`memory_search` 默认 `method="hybrid"`。隐含描述或复杂历史问题未被普通召回覆盖时，可显式选择 `agentic`：
+
+```json
+{"query":"写入成功后紧接着抽取却说没有内容，那次问题的根因是什么？","kind":"episodes","top_k":5,"method":"agentic"}
+```
+
+`kind` 仍支持 `all` / `episodes` / `practices`，`top_k` 支持 `-1` 或 `1–100`。agentic 的共同预算为 45 秒，包含按轨道 hybrid 回退；输出会说明失败、超时或空结果时的回退。全部轨道技术失败时工具报错，不伪装成没有记忆。v1 兼容请求始终用 hybrid，v1-only 会提示降级。
+
+agentic 不套用 hybrid 的得分门槛，回退结果恢复对应门槛。每次输出仍限制在 4000 字内；它是按次补查选项，hook 仍用 hybrid 和原预算。插件更新后需重连 MCP 或新开聊天加载新 schema。质量对比见 [调研报告](docs/retrieval-study-2026-10-09.md)。
+
 ## 新设备 / 新工作区
 
 把下面这句话发给任意 agent：
