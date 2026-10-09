@@ -275,7 +275,9 @@ def search_items(query: str, top_k: int = 5, kind: str = "all", include_profile:
                  budget: float | None = None, v1_episodes: int | None = None) -> list[dict]:
     """并行查 v2 用户轨道、v2 agent 轨道、v1 旧库（过渡期），按得分门槛过滤后合并去重。"""
     deadline = time.monotonic() + max(0.0, READ_TIMEOUT * 2 if budget is None else budget)
-    q, k = clip(query, 500), max(1, min(int(top_k), 20))
+    if type(top_k) is not int or (top_k != -1 and not 1 <= top_k <= 100):
+        raise ValueError("top_k must be -1 or in 1..100")
+    q, k = clip(query, 500), top_k
     jobs = {}
     if version() == "v2":
         if kind in ("all", "episodes"):
@@ -283,7 +285,7 @@ def search_items(query: str, top_k: int = 5, kind: str = "all", include_profile:
                                                      "min_score": _num("EVEROS_MIN_SCORE", 0.3),
                                                      "include_profile": include_profile})
         if kind in ("all", "practices"):
-            jobs["v2a"] = ("/api/v2/memory/search", {"query": q, "agent_id": agent_id(), "method": "hybrid", "top_k": 3})
+            jobs["v2a"] = ("/api/v2/memory/search", {"query": q, "agent_id": agent_id(), "method": "hybrid", "top_k": k})
     if v1_episodes is None:
         v1_episodes = k
     if read_v1():
@@ -308,7 +310,9 @@ def search_items(query: str, top_k: int = 5, kind: str = "all", include_profile:
     for skill in v2a.get("agent_skills") or []:
         if float(skill.get("score") or 0) >= AGENT_MIN_SCORE:
             items.append({"id": skill.get("id"), "kind": "skill", "text": f"{skill.get('name', '')}：{skill.get('description', '')}"})
-    for ep in (v1.get("episodes") or [])[:v1_episodes]:  # v1 没有得分，条数由调用方按提问是否有实际内容决定
+    # -1 delegates sizing to the server; Python's [:-1] would silently drop its last result.
+    v1_limit = None if v1_episodes == -1 else v1_episodes
+    for ep in (v1.get("episodes") or [])[:v1_limit]:  # v1 没有得分，条数由调用方按提问是否有实际内容决定
         items.append({"id": ep.get("id"), "kind": "episode", "date": str(ep.get("timestamp", ""))[:10],
                       "text": ep.get("summary") or ep.get("subject") or "", "src": "v1"})
     agent = v1.get("agent_memory") or {}

@@ -194,6 +194,31 @@ class ResponseAndWriteTests(IsolatedCore):
 
 
 class RecallTests(IsolatedCore):
+    def test_top_k_reaches_user_agent_and_legacy_queries_without_clamping(self):
+        for top_k in (-1, 1, 21, 100):
+            with self.subTest(top_k=top_k), patch.dict(os.environ, {"EVEROS_READ_V1": "1"}), \
+                    patch.object(core, "_read_jobs", return_value={}) as read:
+                core.search_items("query", top_k=top_k)
+                jobs = read.call_args.args[0]
+                self.assertEqual(set(jobs), {"v2u", "v2a", "v1"})
+                self.assertTrue(all(body["top_k"] == top_k for _, body in jobs.values()))
+
+    def test_invalid_top_k_fails_before_any_query_is_started(self):
+        with patch.object(core, "_read_jobs") as read:
+            for top_k in (-2, 0, 101, True, 1.5, "5"):
+                with self.subTest(top_k=top_k), self.assertRaisesRegex(ValueError, "top_k"):
+                    core.search_items("query", top_k=top_k)
+            read.assert_not_called()
+
+    def test_server_sized_legacy_results_keep_the_last_item_and_hook_cap(self):
+        episodes = [{"id": str(i), "summary": f"legacy result {i}"} for i in range(5)]
+        with patch.dict(os.environ, {"EVEROS_READ_V1": "1"}), \
+                patch.object(core, "_read_jobs", return_value={"v1": {"episodes": episodes}}):
+            items = core.search_items("query", top_k=-1)
+            self.assertEqual([it["id"] for it in items], [str(i) for i in range(5)])
+            capped = core.search_items("query", top_k=-1, v1_episodes=3)
+            self.assertEqual([it["id"] for it in capped], ["0", "1", "2"])
+
     def test_multiline_ids_only_cover_actual_items_and_hidden_item_can_reappear(self):
         items = [{"id": "shown", "kind": "episode", "text": "first\nsecond\nthird"},
                  {"id": "hidden", "kind": "episode", "text": "x" * 60}]

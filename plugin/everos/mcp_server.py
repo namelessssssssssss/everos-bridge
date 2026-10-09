@@ -14,7 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import core  # noqa: E402
 
-VERSION = "0.3.1"
+VERSION = "0.3.2"
 INSTRUCTIONS = (
     "EverOS 是用户跨 agent、跨设备共用的长期记忆。会话开始调用 memory_profile 了解用户，"
     "每条提问前都按用户的提问调用 memory_search；"
@@ -31,7 +31,9 @@ TOOLS = [
      "description": "按语义检索用户的长期记忆。kind=episodes 只查事件，practices 只查做法/经验，all 两者都查。",
      "inputSchema": {"type": "object", "required": ["query"], "properties": {
          "query": {"type": "string", "minLength": 1, "description": "检索语句，直接用用户的问题或主题"},
-         "top_k": {"type": "integer", "default": 5, "minimum": 1, "maximum": 20},
+         "top_k": {"type": "integer", "default": 5,
+                   "description": "每类记忆的召回上限：1–100；-1 交给服务端决定。输出仍受字数预算限制。",
+                   "anyOf": [{"enum": [-1]}, {"type": "integer", "minimum": 1, "maximum": 100}]},
          "kind": {"type": "string", "enum": ["all", "episodes", "practices"], "default": "all"}}}},
     {"name": "memory_recent",
      "description": "列出最近几天的记忆标题，用来回顾近期在做什么。",
@@ -85,6 +87,15 @@ def _validate(value, schema: dict, path: str) -> None:
                "string": isinstance(value, str), "integer": type(value) is int}
     if kind in matches and not matches[kind]:
         raise RpcError(-32602, f"Invalid params: {path} must be {kind}")
+    if "anyOf" in schema:
+        for option in schema["anyOf"]:
+            try:
+                _validate(value, option, path)
+                break
+            except RpcError:
+                continue
+        else:
+            raise RpcError(-32602, f"Invalid params: {path} does not match an allowed value")
     if "enum" in schema and value not in schema["enum"]:
         raise RpcError(-32602, f"Invalid params: {path} has an unsupported value")
     if kind == "object":

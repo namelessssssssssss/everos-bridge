@@ -119,12 +119,21 @@ class McpTests(unittest.TestCase):
     def test_search_and_recent_validate_types_bounds_and_enum(self):
         bad_search = [{}, {"query": 4}, {"query": " "}, {"query": "x", "kind": "profiles"},
                       {"query": "x", "top_k": True}, {"query": "x", "top_k": 0},
-                      {"query": "x", "top_k": 21}, {"query": "x", "top_k": 2.5}]
+                      {"query": "x", "top_k": -2}, {"query": "x", "top_k": 101},
+                      {"query": "x", "top_k": 2.5}, {"query": "x", "top_k": "100"}]
         bad_recent = [{"days": 0}, {"days": 91}, {"days": False}, {"limit": 101}, {"limit": "2"}]
         for name, cases in (("memory_search", bad_search), ("memory_recent", bad_recent)):
             for args in cases:
                 with self.subTest(name=name, args=args):
                     self.assert_invalid_params(self.call_tool(name, args))
+
+    def test_search_accepts_official_top_k_range_and_passes_it_unchanged(self):
+        for top_k in (-1, *range(1, 101)):
+            with self.subTest(top_k=top_k), \
+                    mock.patch.object(mcp_server.core, "search_text", return_value="search") as search:
+                response = self.call_tool("memory_search", {"query": "task", "top_k": top_k})
+                self.assertFalse(response["result"]["isError"])
+                search.assert_called_once_with("task", top_k, "all")
 
     def test_read_tools_pass_valid_defaults(self):
         with mock.patch.object(mcp_server.core, "profile_text", return_value="profile") as profile:
