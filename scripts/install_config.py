@@ -2,6 +2,7 @@
 """Installer config editing and host CLI orchestration (standard library only)."""
 
 import argparse
+from contextlib import contextmanager
 import getpass
 import json
 import os
@@ -204,6 +205,46 @@ class Installer:
             else:
                 backup(path)
 
+    @contextmanager
+    def preserve_codex_cache(self):
+        """Keep exact old hook paths usable for chats running during an upgrade."""
+        codex = Path(self.environment.get("CODEX_HOME", str(self.home / ".codex")))
+        cache = codex / "plugins/cache/everos-bridge/everos"
+        if self.dry:
+            print("  [dry-run] 保存并恢复旧版 Codex EverOS 缓存，供运行中的聊天使用")
+            yield
+            return
+        versions = [path for path in cache.iterdir()
+                    if path.is_dir() and (path / "everos/hook.py").is_file()] if cache.is_dir() else []
+        if not versions:
+            yield
+            return
+        saved = Path(tempfile.mkdtemp(prefix="everos-codex-cache-"))
+        keep_saved = False
+        try:
+            for version in versions:
+                shutil.copytree(version, saved / version.name, symlinks=True)
+            try:
+                yield
+            finally:
+                try:
+                    for version in versions:
+                        if version.exists() or version.is_symlink():
+                            continue
+                        cache.mkdir(parents=True, exist_ok=True)
+                        with tempfile.TemporaryDirectory(prefix=".restore-", dir=str(cache)) as staging:
+                            restored = Path(staging) / version.name
+                            shutil.copytree(saved / version.name, restored, symlinks=True)
+                            os.replace(restored, version)
+                        print("  已恢复旧版缓存，供运行中的聊天使用：" + str(version))
+                except OSError:
+                    keep_saved = True
+                    print("旧版缓存恢复失败，备份保留在 " + str(saved), file=sys.stderr)
+                    raise
+        finally:
+            if not keep_saved:
+                shutil.rmtree(saved)
+
     def config(self):
         path = self.everos / "config.env"
         print("== 配置（{}）".format(self.everos))
@@ -317,8 +358,9 @@ class Installer:
             self.before_cli(config)
             if not self.dry:
                 config.parent.mkdir(parents=True, exist_ok=True)
-            self.marketplace("codex")
-            self.run(["codex", "plugin", "add", "everos@everos-bridge"])
+            with self.preserve_codex_cache():
+                self.marketplace("codex")
+                self.run(["codex", "plugin", "add", "everos@everos-bridge"])
             self.mcp_cli("codex")
             self.edit(config, enable_codex_hooks(config.read_text() if config.exists() else ""))
             print("  新或更新的 hook 定义需在新会话中按 Codex 提示审阅并信任，之后自动读写才生效。")

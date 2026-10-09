@@ -1,0 +1,2112 @@
+{
+  "as_of": "2026-10-09",
+  "cases_frozen_before_requests": true,
+  "cases": [
+    {
+      "id": "U01",
+      "track": "user",
+      "query": "写入接口说成功，紧接着的抽取却说没有内容，后来靠补做一次操作才找回记忆。那次问题是什么原因，怎样修复？",
+      "acceptable_ids": [
+        "6ac77a80d439dd01518321e0"
+      ]
+    },
+    {
+      "id": "U02",
+      "track": "user",
+      "query": "组内AI目标里哪些是主线、哪些只是配角？我的个人记忆系统探索应不应该写成团队承诺？",
+      "acceptable_ids": [
+        "6ac7ceb65d325a40ac36ce76",
+        "6ac7cf024962e1b444f35cad"
+      ]
+    },
+    {
+      "id": "U03",
+      "track": "user",
+      "query": "那个拿签到题试知识检索的实验，为什么请求成功甚至只查文档也不能算评测通过？正式跑之前需要先处理什么？",
+      "acceptable_ids": [
+        "6ac8620ba815721e4d47c506",
+        "6ac8620498f58eb4500722d8"
+      ]
+    },
+    {
+      "id": "U04",
+      "track": "user",
+      "query": "上次创建反转子实验后，为什么不能看创建成功就收尾？父实验没启动和末尾指标没存全分别怎么处理？",
+      "acceptable_ids": [
+        "6ac88f8f75ab71645658af80"
+      ]
+    },
+    {
+      "id": "U05",
+      "track": "user",
+      "query": "10月9日音乐版那次PPE部署最后落到哪个版本和代码提交？双端实例就绪后，还剩哪些验证没做？",
+      "acceptable_ids": [
+        "6ac88300a815721e4d47e055"
+      ]
+    },
+    {
+      "id": "U06",
+      "track": "user",
+      "query": "升级EverOS 0.3.2后旧聊天收尾找不到脚本，为什么新插件装好了仍会失败？怎样兼顾旧聊天和升级失败的回滚？",
+      "acceptable_ids": [
+        "6ac8abd5e0d725a31a0a27a7"
+      ]
+    },
+    {
+      "id": "A01",
+      "track": "agent",
+      "query": "换一台没有环境和凭据的机器，怎么证明Agent只凭仓库指引就能重建整套记忆接线，而不是依赖旧机器的隐含配置？",
+      "acceptable_ids": [
+        "6ac76ea7ad2d7bdce54730ce"
+      ]
+    },
+    {
+      "id": "A02",
+      "track": "agent",
+      "query": "评测知识检索时，长题面失败以后怎么设计最小探针、确认来源是否污染，以及避免把能查到误当成隔离通过？",
+      "acceptable_ids": [
+        "6ac8621f313b3bcc29e0eb6c"
+      ]
+    },
+    {
+      "id": "A03",
+      "track": "agent",
+      "query": "旧记忆服务要退役，新服务的做法抽取又不够稳定时，怎样迁移还保持老数据可读、实践经验可用？",
+      "acceptable_ids": [
+        "6ac761f1cff907988e8e82e5"
+      ]
+    }
+  ],
+  "top_k": 5,
+  "repeats": 2,
+  "timeout_s": 55,
+  "max_concurrency": 3,
+  "random_seed": 20261009,
+  "scope_note": "Known-record retrieval study; target IDs frozen before requests; two repeats are not independent questions. No end-to-end answer accuracy or full precision labels.",
+  "results": [
+    {
+      "case_id": "A01",
+      "track": "agent",
+      "arm": "agentic",
+      "repeat": 1,
+      "ok": true,
+      "elapsed_s": 12.326,
+      "request_id": "02179153648706600000000000000000000ffff0a24719ad25f42",
+      "target_rank": 1,
+      "hits": {
+        "episodes": [],
+        "agent_cases": [
+          {
+            "id": "6ac76ea7ad2d7bdce54730ce",
+            "title": "验证新 agent 仅凭 AGENTS.md 能在新设备重建 EverOS 读写流程",
+            "score": 0.9771121144294739
+          },
+          {
+            "id": "6ac7c734cff907988e8e9813",
+            "title": "熟悉bytedcli命令行工具能力并建立跨Agent可复用的记忆记录",
+            "score": 0.07459495216608047
+          },
+          {
+            "id": "6ac79342cff907988e8e8d1e",
+            "title": "恢复 EverOS Bridge 在 Codex 和本机宿主的接线并完成可复现的读写验收",
+            "score": 0.057498328387737274
+          },
+          {
+            "id": "6ac85bb7d2f4d8af7e59fcb1",
+            "title": "验证kbase_with_novel_ug_knowledge空间的CLI查询方式并确认评测接线可用性",
+            "score": 0.028567923232913017
+          },
+          {
+            "id": "6ac761f1cff907988e8e82e5",
+            "title": "将 EverOS 接线从 v1 切换到 v2 并保持 v1 旧数据可读性",
+            "score": 0.025932954624295235
+          }
+        ],
+        "agent_skills": [
+          {
+            "id": "6ac76ec3075ce2959596e8ac",
+            "title": "两阶段隔离验证确保系统可重建性",
+            "score": 0.5544741153717041
+          },
+          {
+            "id": "6ac88651633c7f992a458048",
+            "title": "基于运行时事实源的PPE部署方法沉淀",
+            "score": 0.19366781413555145
+          },
+          {
+            "id": "6ac7c752075ce2959596ef9e",
+            "title": "隔离副作用探查CLI工具真实能力",
+            "score": 0.010937394574284554
+          },
+          {
+            "id": "6ac76202075ce2959596e602",
+            "title": "构建双写兼容层实现系统平滑迁移",
+            "score": 0.007783886976540089
+          },
+          {
+            "id": "6ac89bd47dd8f2cb5ab0c564",
+            "title": "处理环境变量空值触发校验失败问题",
+            "score": 0.0015338448574766517
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "A01",
+      "track": "agent",
+      "arm": "agentic",
+      "repeat": 2,
+      "ok": true,
+      "elapsed_s": 14.677,
+      "request_id": "02179153648414500000000000000000000ffff0a24719a942157",
+      "target_rank": 1,
+      "hits": {
+        "episodes": [],
+        "agent_cases": [
+          {
+            "id": "6ac76ea7ad2d7bdce54730ce",
+            "title": "验证新 agent 仅凭 AGENTS.md 能在新设备重建 EverOS 读写流程",
+            "score": 0.977218747138977
+          },
+          {
+            "id": "6ac7c734cff907988e8e9813",
+            "title": "熟悉bytedcli命令行工具能力并建立跨Agent可复用的记忆记录",
+            "score": 0.07337235659360886
+          },
+          {
+            "id": "6ac79342cff907988e8e8d1e",
+            "title": "恢复 EverOS Bridge 在 Codex 和本机宿主的接线并完成可复现的读写验收",
+            "score": 0.05657780170440674
+          },
+          {
+            "id": "6ac85bb7d2f4d8af7e59fcb1",
+            "title": "验证kbase_with_novel_ug_knowledge空间的CLI查询方式并确认评测接线可用性",
+            "score": 0.028213344514369965
+          },
+          {
+            "id": "6ac761f1cff907988e8e82e5",
+            "title": "将 EverOS 接线从 v1 切换到 v2 并保持 v1 旧数据可读性",
+            "score": 0.023444993421435356
+          }
+        ],
+        "agent_skills": [
+          {
+            "id": "6ac76ec3075ce2959596e8ac",
+            "title": "两阶段隔离验证确保系统可重建性",
+            "score": 0.5689526796340942
+          },
+          {
+            "id": "6ac88651633c7f992a458048",
+            "title": "基于运行时事实源的PPE部署方法沉淀",
+            "score": 0.21470001339912415
+          },
+          {
+            "id": "6ac7c752075ce2959596ef9e",
+            "title": "隔离副作用探查CLI工具真实能力",
+            "score": 0.011503295972943306
+          },
+          {
+            "id": "6ac76202075ce2959596e602",
+            "title": "构建双写兼容层实现系统平滑迁移",
+            "score": 0.008153568021953106
+          },
+          {
+            "id": "6ac89bd47dd8f2cb5ab0c564",
+            "title": "处理环境变量空值触发校验失败问题",
+            "score": 0.0016690458869561553
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "A01",
+      "track": "agent",
+      "arm": "hybrid",
+      "repeat": 1,
+      "ok": true,
+      "elapsed_s": 2.782,
+      "request_id": "02179153650459900000000000000000000ffff0a24576cb5939c",
+      "target_rank": 1,
+      "hits": {
+        "episodes": [],
+        "agent_cases": [
+          {
+            "id": "6ac76ea7ad2d7bdce54730ce",
+            "title": "验证新 agent 仅凭 AGENTS.md 能在新设备重建 EverOS 读写流程",
+            "score": 0.6438678915347853
+          },
+          {
+            "id": "6ac79342cff907988e8e8d1e",
+            "title": "恢复 EverOS Bridge 在 Codex 和本机宿主的接线并完成可复现的读写验收",
+            "score": 0.5535451839365177
+          },
+          {
+            "id": "6ac7c734cff907988e8e9813",
+            "title": "熟悉bytedcli命令行工具能力并建立跨Agent可复用的记忆记录",
+            "score": 0.5497582781151829
+          },
+          {
+            "id": "6ac795d9ad2d7bdce5473673",
+            "title": "导入本地ClaudeCode遗留的全局记忆文件至EverOS v2，补全缺失项并修复同步账本状态",
+            "score": 0.5420869862413749
+          },
+          {
+            "id": "6ac85bb7d2f4d8af7e59fcb1",
+            "title": "验证kbase_with_novel_ug_knowledge空间的CLI查询方式并确认评测接线可用性",
+            "score": 0.4603228062992029
+          }
+        ],
+        "agent_skills": [
+          {
+            "id": "6ac76ec3075ce2959596e8ac",
+            "title": "两阶段隔离验证确保系统可重建性",
+            "score": 0.9603740572929382
+          },
+          {
+            "id": "6ac88651633c7f992a458048",
+            "title": "基于运行时事实源的PPE部署方法沉淀",
+            "score": 0.7786750793457031
+          },
+          {
+            "id": "6ac76202075ce2959596e602",
+            "title": "构建双写兼容层实现系统平滑迁移",
+            "score": 0.013494662940502167
+          },
+          {
+            "id": "6ac7c752075ce2959596ef9e",
+            "title": "隔离副作用探查CLI工具真实能力",
+            "score": 0.01205560751259327
+          },
+          {
+            "id": "6ac89bd47dd8f2cb5ab0c564",
+            "title": "处理环境变量空值触发校验失败问题",
+            "score": 0.002608770038932562
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "A01",
+      "track": "agent",
+      "arm": "hybrid",
+      "repeat": 2,
+      "ok": true,
+      "elapsed_s": 1.015,
+      "request_id": "02179153644741900000000000000000000ffff0a24576c665654",
+      "target_rank": 1,
+      "hits": {
+        "episodes": [],
+        "agent_cases": [
+          {
+            "id": "6ac76ea7ad2d7bdce54730ce",
+            "title": "验证新 agent 仅凭 AGENTS.md 能在新设备重建 EverOS 读写流程",
+            "score": 0.6436164973418379
+          },
+          {
+            "id": "6ac79342cff907988e8e8d1e",
+            "title": "恢复 EverOS Bridge 在 Codex 和本机宿主的接线并完成可复现的读写验收",
+            "score": 0.5538853648632358
+          },
+          {
+            "id": "6ac7c734cff907988e8e9813",
+            "title": "熟悉bytedcli命令行工具能力并建立跨Agent可复用的记忆记录",
+            "score": 0.5499053317145405
+          },
+          {
+            "id": "6ac795d9ad2d7bdce5473673",
+            "title": "导入本地ClaudeCode遗留的全局记忆文件至EverOS v2，补全缺失项并修复同步账本状态",
+            "score": 0.542019264159826
+          },
+          {
+            "id": "6ac85bb7d2f4d8af7e59fcb1",
+            "title": "验证kbase_with_novel_ug_knowledge空间的CLI查询方式并确认评测接线可用性",
+            "score": 0.4601454808657576
+          }
+        ],
+        "agent_skills": [
+          {
+            "id": "6ac76ec3075ce2959596e8ac",
+            "title": "两阶段隔离验证确保系统可重建性",
+            "score": 0.9609396457672119
+          },
+          {
+            "id": "6ac88651633c7f992a458048",
+            "title": "基于运行时事实源的PPE部署方法沉淀",
+            "score": 0.7907719612121582
+          },
+          {
+            "id": "6ac76202075ce2959596e602",
+            "title": "构建双写兼容层实现系统平滑迁移",
+            "score": 0.012676396407186985
+          },
+          {
+            "id": "6ac7c752075ce2959596ef9e",
+            "title": "隔离副作用探查CLI工具真实能力",
+            "score": 0.012270969338715076
+          },
+          {
+            "id": "6ac89bd47dd8f2cb5ab0c564",
+            "title": "处理环境变量空值触发校验失败问题",
+            "score": 0.002806261880323291
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "A01",
+      "track": "agent",
+      "arm": "hybrid_rerank",
+      "repeat": 1,
+      "ok": true,
+      "elapsed_s": 6.071,
+      "request_id": "02179153639853400000000000000000000ffff0a24576c50c394",
+      "target_rank": 1,
+      "hits": {
+        "episodes": [],
+        "agent_cases": [
+          {
+            "id": "6ac76ea7ad2d7bdce54730ce",
+            "title": "验证新 agent 仅凭 AGENTS.md 能在新设备重建 EverOS 读写流程",
+            "score": 0.6442979785548051
+          },
+          {
+            "id": "6ac79342cff907988e8e8d1e",
+            "title": "恢复 EverOS Bridge 在 Codex 和本机宿主的接线并完成可复现的读写验收",
+            "score": 0.5540956627860252
+          },
+          {
+            "id": "6ac7c734cff907988e8e9813",
+            "title": "熟悉bytedcli命令行工具能力并建立跨Agent可复用的记忆记录",
+            "score": 0.5509220263215556
+          },
+          {
+            "id": "6ac795d9ad2d7bdce5473673",
+            "title": "导入本地ClaudeCode遗留的全局记忆文件至EverOS v2，补全缺失项并修复同步账本状态",
+            "score": 0.5425926100162414
+          },
+          {
+            "id": "6ac85bb7d2f4d8af7e59fcb1",
+            "title": "验证kbase_with_novel_ug_knowledge空间的CLI查询方式并确认评测接线可用性",
+            "score": 0.4606841727523645
+          }
+        ],
+        "agent_skills": []
+      }
+    },
+    {
+      "case_id": "A01",
+      "track": "agent",
+      "arm": "hybrid_rerank",
+      "repeat": 2,
+      "ok": true,
+      "elapsed_s": 5.736,
+      "request_id": "02179153649620400000000000000000000ffff0a24576cfad3c8",
+      "target_rank": 1,
+      "hits": {
+        "episodes": [],
+        "agent_cases": [
+          {
+            "id": "6ac76ea7ad2d7bdce54730ce",
+            "title": "验证新 agent 仅凭 AGENTS.md 能在新设备重建 EverOS 读写流程",
+            "score": 0.6438668281142088
+          },
+          {
+            "id": "6ac79342cff907988e8e8d1e",
+            "title": "恢复 EverOS Bridge 在 Codex 和本机宿主的接线并完成可复现的读写验收",
+            "score": 0.5535467487333289
+          },
+          {
+            "id": "6ac7c734cff907988e8e9813",
+            "title": "熟悉bytedcli命令行工具能力并建立跨Agent可复用的记忆记录",
+            "score": 0.5497585726801572
+          },
+          {
+            "id": "6ac795d9ad2d7bdce5473673",
+            "title": "导入本地ClaudeCode遗留的全局记忆文件至EverOS v2，补全缺失项并修复同步账本状态",
+            "score": 0.5420856853530192
+          },
+          {
+            "id": "6ac85bb7d2f4d8af7e59fcb1",
+            "title": "验证kbase_with_novel_ug_knowledge空间的CLI查询方式并确认评测接线可用性",
+            "score": 0.46032429765952115
+          }
+        ],
+        "agent_skills": []
+      }
+    },
+    {
+      "case_id": "A02",
+      "track": "agent",
+      "arm": "agentic",
+      "repeat": 1,
+      "ok": true,
+      "elapsed_s": 12.638,
+      "request_id": "02179153645806000000000000000000000ffff0a24719a3c9e1b",
+      "target_rank": 1,
+      "hits": {
+        "episodes": [],
+        "agent_cases": [
+          {
+            "id": "6ac8621f313b3bcc29e0eb6c",
+            "title": "使用签到评测case测试专用KBase空间的查询功能与来源隔离效果",
+            "score": 0.3827139139175415
+          },
+          {
+            "id": "6ac85bb7d2f4d8af7e59fcb1",
+            "title": "验证kbase_with_novel_ug_knowledge空间的CLI查询方式并确认评测接线可用性",
+            "score": 0.04112902656197548
+          },
+          {
+            "id": "6ac88fb1f805d994f5d0f4b6",
+            "title": "为Libra5489580创建反转子实验，完整继承父关系、组结构、指标并处理父未启动硬门禁",
+            "score": 0.006340354215353727
+          },
+          {
+            "id": "6ac79342cff907988e8e8d1e",
+            "title": "恢复 EverOS Bridge 在 Codex 和本机宿主的接线并完成可复现的读写验收",
+            "score": 0.0027250603307038546
+          },
+          {
+            "id": "6ac7c734cff907988e8e9813",
+            "title": "熟悉bytedcli命令行工具能力并建立跨Agent可复用的记忆记录",
+            "score": 0.0019840269815176725
+          }
+        ],
+        "agent_skills": [
+          {
+            "id": "6ac76ec3075ce2959596e8ac",
+            "title": "两阶段隔离验证确保系统可重建性",
+            "score": 0.07455387711524963
+          },
+          {
+            "id": "6ac7c752075ce2959596ef9e",
+            "title": "隔离副作用探查CLI工具真实能力",
+            "score": 0.019767526537179947
+          },
+          {
+            "id": "6ac88651633c7f992a458048",
+            "title": "基于运行时事实源的PPE部署方法沉淀",
+            "score": 0.001109182252548635
+          },
+          {
+            "id": "6ac76202075ce2959596e602",
+            "title": "构建双写兼容层实现系统平滑迁移",
+            "score": 1.13030710053863e-05
+          },
+          {
+            "id": "6ac89bd47dd8f2cb5ab0c564",
+            "title": "处理环境变量空值触发校验失败问题",
+            "score": 5.617390343104489e-06
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "A02",
+      "track": "agent",
+      "arm": "agentic",
+      "repeat": 2,
+      "ok": true,
+      "elapsed_s": 13.633,
+      "request_id": "02179153647258800000000000000000000ffff0a24576c6bf070",
+      "target_rank": 1,
+      "hits": {
+        "episodes": [],
+        "agent_cases": [
+          {
+            "id": "6ac8621f313b3bcc29e0eb6c",
+            "title": "使用签到评测case测试专用KBase空间的查询功能与来源隔离效果",
+            "score": 0.3931274116039276
+          },
+          {
+            "id": "6ac85bb7d2f4d8af7e59fcb1",
+            "title": "验证kbase_with_novel_ug_knowledge空间的CLI查询方式并确认评测接线可用性",
+            "score": 0.04152049124240875
+          },
+          {
+            "id": "6ac88fb1f805d994f5d0f4b6",
+            "title": "为Libra5489580创建反转子实验，完整继承父关系、组结构、指标并处理父未启动硬门禁",
+            "score": 0.0059923576191067696
+          },
+          {
+            "id": "6ac79342cff907988e8e8d1e",
+            "title": "恢复 EverOS Bridge 在 Codex 和本机宿主的接线并完成可复现的读写验收",
+            "score": 0.0028916371520608664
+          },
+          {
+            "id": "6ac7c734cff907988e8e9813",
+            "title": "熟悉bytedcli命令行工具能力并建立跨Agent可复用的记忆记录",
+            "score": 0.0019780320581048727
+          }
+        ],
+        "agent_skills": [
+          {
+            "id": "6ac76ec3075ce2959596e8ac",
+            "title": "两阶段隔离验证确保系统可重建性",
+            "score": 0.0733959972858429
+          },
+          {
+            "id": "6ac7c752075ce2959596ef9e",
+            "title": "隔离副作用探查CLI工具真实能力",
+            "score": 0.019886234775185585
+          },
+          {
+            "id": "6ac88651633c7f992a458048",
+            "title": "基于运行时事实源的PPE部署方法沉淀",
+            "score": 0.001044679549522698
+          },
+          {
+            "id": "6ac76202075ce2959596e602",
+            "title": "构建双写兼容层实现系统平滑迁移",
+            "score": 1.1487573829072062e-05
+          },
+          {
+            "id": "6ac89bd47dd8f2cb5ab0c564",
+            "title": "处理环境变量空值触发校验失败问题",
+            "score": 5.656482699123444e-06
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "A02",
+      "track": "agent",
+      "arm": "hybrid",
+      "repeat": 1,
+      "ok": true,
+      "elapsed_s": 5.232,
+      "request_id": "02179153645281300000000000000000000ffff0a24576c11c78f",
+      "target_rank": 1,
+      "hits": {
+        "episodes": [],
+        "agent_cases": [
+          {
+            "id": "6ac8621f313b3bcc29e0eb6c",
+            "title": "使用签到评测case测试专用KBase空间的查询功能与来源隔离效果",
+            "score": 0.5984521436884949
+          },
+          {
+            "id": "6ac85bb7d2f4d8af7e59fcb1",
+            "title": "验证kbase_with_novel_ug_knowledge空间的CLI查询方式并确认评测接线可用性",
+            "score": 0.5596531679531
+          },
+          {
+            "id": "6ac76ea7ad2d7bdce54730ce",
+            "title": "验证新 agent 仅凭 AGENTS.md 能在新设备重建 EverOS 读写流程",
+            "score": 0.46699874393242236
+          },
+          {
+            "id": "6ac79342cff907988e8e8d1e",
+            "title": "恢复 EverOS Bridge 在 Codex 和本机宿主的接线并完成可复现的读写验收",
+            "score": 0.45481284417265355
+          },
+          {
+            "id": "6ac79b888d7837face223219",
+            "title": "诊断并解决Stop hook报错因0.3.0版本路径缺失问题",
+            "score": 0.37667759462673256
+          }
+        ],
+        "agent_skills": [
+          {
+            "id": "6ac76ec3075ce2959596e8ac",
+            "title": "两阶段隔离验证确保系统可重建性",
+            "score": 0.4073646664619446
+          },
+          {
+            "id": "6ac7c752075ce2959596ef9e",
+            "title": "隔离副作用探查CLI工具真实能力",
+            "score": 0.018891597166657448
+          },
+          {
+            "id": "6ac88651633c7f992a458048",
+            "title": "基于运行时事实源的PPE部署方法沉淀",
+            "score": 0.0012578669702634215
+          },
+          {
+            "id": "6ac89bd47dd8f2cb5ab0c564",
+            "title": "处理环境变量空值触发校验失败问题",
+            "score": 9.502838111075107e-06
+          },
+          {
+            "id": "6ac76202075ce2959596e602",
+            "title": "构建双写兼容层实现系统平滑迁移",
+            "score": 8.211124622903299e-06
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "A02",
+      "track": "agent",
+      "arm": "hybrid",
+      "repeat": 2,
+      "ok": true,
+      "elapsed_s": 4.329,
+      "request_id": "02179153645376900000000000000000000ffff0a24719a291ee5",
+      "target_rank": 1,
+      "hits": {
+        "episodes": [],
+        "agent_cases": [
+          {
+            "id": "6ac8621f313b3bcc29e0eb6c",
+            "title": "使用签到评测case测试专用KBase空间的查询功能与来源隔离效果",
+            "score": 0.5969882760734571
+          },
+          {
+            "id": "6ac85bb7d2f4d8af7e59fcb1",
+            "title": "验证kbase_with_novel_ug_knowledge空间的CLI查询方式并确认评测接线可用性",
+            "score": 0.5584883830143356
+          },
+          {
+            "id": "6ac76ea7ad2d7bdce54730ce",
+            "title": "验证新 agent 仅凭 AGENTS.md 能在新设备重建 EverOS 读写流程",
+            "score": 0.4664213883928289
+          },
+          {
+            "id": "6ac79342cff907988e8e8d1e",
+            "title": "恢复 EverOS Bridge 在 Codex 和本机宿主的接线并完成可复现的读写验收",
+            "score": 0.453706902111251
+          },
+          {
+            "id": "6ac79b888d7837face223219",
+            "title": "诊断并解决Stop hook报错因0.3.0版本路径缺失问题",
+            "score": 0.37612322034533685
+          }
+        ],
+        "agent_skills": [
+          {
+            "id": "6ac76ec3075ce2959596e8ac",
+            "title": "两阶段隔离验证确保系统可重建性",
+            "score": 0.4073646664619446
+          },
+          {
+            "id": "6ac7c752075ce2959596ef9e",
+            "title": "隔离副作用探查CLI工具真实能力",
+            "score": 0.018891597166657448
+          },
+          {
+            "id": "6ac88651633c7f992a458048",
+            "title": "基于运行时事实源的PPE部署方法沉淀",
+            "score": 0.0012578669702634215
+          },
+          {
+            "id": "6ac89bd47dd8f2cb5ab0c564",
+            "title": "处理环境变量空值触发校验失败问题",
+            "score": 9.502838111075107e-06
+          },
+          {
+            "id": "6ac76202075ce2959596e602",
+            "title": "构建双写兼容层实现系统平滑迁移",
+            "score": 8.211124622903299e-06
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "A02",
+      "track": "agent",
+      "arm": "hybrid_rerank",
+      "repeat": 1,
+      "ok": true,
+      "elapsed_s": 4.355,
+      "request_id": "02179153644846800000000000000000000ffff0a24576cbf6ddd",
+      "target_rank": 1,
+      "hits": {
+        "episodes": [],
+        "agent_cases": [
+          {
+            "id": "6ac8621f313b3bcc29e0eb6c",
+            "title": "使用签到评测case测试专用KBase空间的查询功能与来源隔离效果",
+            "score": 0.95
+          },
+          {
+            "id": "6ac85bb7d2f4d8af7e59fcb1",
+            "title": "验证kbase_with_novel_ug_knowledge空间的CLI查询方式并确认评测接线可用性",
+            "score": 0.85
+          },
+          {
+            "id": "6ac76ea7ad2d7bdce54730ce",
+            "title": "验证新 agent 仅凭 AGENTS.md 能在新设备重建 EverOS 读写流程",
+            "score": 0.7
+          },
+          {
+            "id": "6ac79342cff907988e8e8d1e",
+            "title": "恢复 EverOS Bridge 在 Codex 和本机宿主的接线并完成可复现的读写验收",
+            "score": 0.6
+          },
+          {
+            "id": "6ac79b888d7837face223219",
+            "title": "诊断并解决Stop hook报错因0.3.0版本路径缺失问题",
+            "score": 0.4
+          }
+        ],
+        "agent_skills": []
+      }
+    },
+    {
+      "case_id": "A02",
+      "track": "agent",
+      "arm": "hybrid_rerank",
+      "repeat": 2,
+      "ok": true,
+      "elapsed_s": 5.613,
+      "request_id": "02179153641111300000000000000000000ffff0a24719a6ba967",
+      "target_rank": 1,
+      "hits": {
+        "episodes": [],
+        "agent_cases": [
+          {
+            "id": "6ac8621f313b3bcc29e0eb6c",
+            "title": "使用签到评测case测试专用KBase空间的查询功能与来源隔离效果",
+            "score": 0.5975478353003464
+          },
+          {
+            "id": "6ac85bb7d2f4d8af7e59fcb1",
+            "title": "验证kbase_with_novel_ug_knowledge空间的CLI查询方式并确认评测接线可用性",
+            "score": 0.5588044793716445
+          },
+          {
+            "id": "6ac76ea7ad2d7bdce54730ce",
+            "title": "验证新 agent 仅凭 AGENTS.md 能在新设备重建 EverOS 读写流程",
+            "score": 0.46683387652663394
+          },
+          {
+            "id": "6ac79342cff907988e8e8d1e",
+            "title": "恢复 EverOS Bridge 在 Codex 和本机宿主的接线并完成可复现的读写验收",
+            "score": 0.454365694016271
+          },
+          {
+            "id": "6ac79b888d7837face223219",
+            "title": "诊断并解决Stop hook报错因0.3.0版本路径缺失问题",
+            "score": 0.3764219026244422
+          }
+        ],
+        "agent_skills": []
+      }
+    },
+    {
+      "case_id": "A03",
+      "track": "agent",
+      "arm": "agentic",
+      "repeat": 1,
+      "ok": true,
+      "elapsed_s": 9.274,
+      "request_id": "02179153644374700000000000000000000ffff0a24576cbe180f",
+      "target_rank": 1,
+      "hits": {
+        "episodes": [],
+        "agent_cases": [
+          {
+            "id": "6ac761f1cff907988e8e82e5",
+            "title": "将 EverOS 接线从 v1 切换到 v2 并保持 v1 旧数据可读性",
+            "score": 0.9651470184326172
+          },
+          {
+            "id": "6ac7c734cff907988e8e9813",
+            "title": "熟悉bytedcli命令行工具能力并建立跨Agent可复用的记忆记录",
+            "score": 0.004271690733730793
+          },
+          {
+            "id": "6ac795d9ad2d7bdce5473673",
+            "title": "导入本地ClaudeCode遗留的全局记忆文件至EverOS v2，补全缺失项并修复同步账本状态",
+            "score": 0.003530132817104459
+          },
+          {
+            "id": "6ac79342cff907988e8e8d1e",
+            "title": "恢复 EverOS Bridge 在 Codex 和本机宿主的接线并完成可复现的读写验收",
+            "score": 0.0026424555107951164
+          },
+          {
+            "id": "6ac89bbcff6f847d05cffac3",
+            "title": "重启本机 Botmux daemon 并解决因空环境变量导致的启动失败问题",
+            "score": 0.0017293337732553482
+          }
+        ],
+        "agent_skills": [
+          {
+            "id": "6ac76202075ce2959596e602",
+            "title": "构建双写兼容层实现系统平滑迁移",
+            "score": 0.4459828734397888
+          },
+          {
+            "id": "6ac88651633c7f992a458048",
+            "title": "基于运行时事实源的PPE部署方法沉淀",
+            "score": 9.530225361231714e-05
+          },
+          {
+            "id": "6ac7c752075ce2959596ef9e",
+            "title": "隔离副作用探查CLI工具真实能力",
+            "score": 6.727490108460188e-05
+          },
+          {
+            "id": "6ac76ec3075ce2959596e8ac",
+            "title": "两阶段隔离验证确保系统可重建性",
+            "score": 5.214838165557012e-05
+          },
+          {
+            "id": "6ac89bd47dd8f2cb5ab0c564",
+            "title": "处理环境变量空值触发校验失败问题",
+            "score": 9.843356565397698e-07
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "A03",
+      "track": "agent",
+      "arm": "agentic",
+      "repeat": 2,
+      "ok": true,
+      "elapsed_s": 12.057,
+      "request_id": "02179153649891700000000000000000000ffff0a24576c3c23cd",
+      "target_rank": 1,
+      "hits": {
+        "episodes": [],
+        "agent_cases": [
+          {
+            "id": "6ac761f1cff907988e8e82e5",
+            "title": "将 EverOS 接线从 v1 切换到 v2 并保持 v1 旧数据可读性",
+            "score": 0.9622023701667786
+          },
+          {
+            "id": "6ac7c734cff907988e8e9813",
+            "title": "熟悉bytedcli命令行工具能力并建立跨Agent可复用的记忆记录",
+            "score": 0.0040414659306406975
+          },
+          {
+            "id": "6ac795d9ad2d7bdce5473673",
+            "title": "导入本地ClaudeCode遗留的全局记忆文件至EverOS v2，补全缺失项并修复同步账本状态",
+            "score": 0.003226746805012226
+          },
+          {
+            "id": "6ac79342cff907988e8e8d1e",
+            "title": "恢复 EverOS Bridge 在 Codex 和本机宿主的接线并完成可复现的读写验收",
+            "score": 0.0025809237267822027
+          },
+          {
+            "id": "6ac89bbcff6f847d05cffac3",
+            "title": "重启本机 Botmux daemon 并解决因空环境变量导致的启动失败问题",
+            "score": 0.0017698135925456882
+          }
+        ],
+        "agent_skills": [
+          {
+            "id": "6ac76202075ce2959596e602",
+            "title": "构建双写兼容层实现系统平滑迁移",
+            "score": 0.4494425654411316
+          },
+          {
+            "id": "6ac88651633c7f992a458048",
+            "title": "基于运行时事实源的PPE部署方法沉淀",
+            "score": 0.00010467006359249353
+          },
+          {
+            "id": "6ac7c752075ce2959596ef9e",
+            "title": "隔离副作用探查CLI工具真实能力",
+            "score": 7.040523632895201e-05
+          },
+          {
+            "id": "6ac76ec3075ce2959596e8ac",
+            "title": "两阶段隔离验证确保系统可重建性",
+            "score": 5.4257794545264915e-05
+          },
+          {
+            "id": "6ac89bd47dd8f2cb5ab0c564",
+            "title": "处理环境变量空值触发校验失败问题",
+            "score": 9.91235992842121e-07
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "A03",
+      "track": "agent",
+      "arm": "hybrid",
+      "repeat": 1,
+      "ok": true,
+      "elapsed_s": 1.714,
+      "request_id": "02179153639853500000000000000000000ffff0a24719ab693c7",
+      "target_rank": 1,
+      "hits": {
+        "episodes": [],
+        "agent_cases": [
+          {
+            "id": "6ac761f1cff907988e8e82e5",
+            "title": "将 EverOS 接线从 v1 切换到 v2 并保持 v1 旧数据可读性",
+            "score": 0.5676369063024899
+          },
+          {
+            "id": "6ac795d9ad2d7bdce5473673",
+            "title": "导入本地ClaudeCode遗留的全局记忆文件至EverOS v2，补全缺失项并修复同步账本状态",
+            "score": 0.5233266831701244
+          },
+          {
+            "id": "6ac7c734cff907988e8e9813",
+            "title": "熟悉bytedcli命令行工具能力并建立跨Agent可复用的记忆记录",
+            "score": 0.5044355928286313
+          },
+          {
+            "id": "6ac88630520f7e8f58b1a1f8",
+            "title": "记录并沉淀2026-10-09在novel_ug中完成畅听双端PPE部署的完整方法，供后续按实时参数复用",
+            "score": 0.4156979491086528
+          },
+          {
+            "id": "6ac76ea7ad2d7bdce54730ce",
+            "title": "验证新 agent 仅凭 AGENTS.md 能在新设备重建 EverOS 读写流程",
+            "score": 0.39746853993002484
+          }
+        ],
+        "agent_skills": [
+          {
+            "id": "6ac76202075ce2959596e602",
+            "title": "构建双写兼容层实现系统平滑迁移",
+            "score": 0.9905374646186829
+          },
+          {
+            "id": "6ac88651633c7f992a458048",
+            "title": "基于运行时事实源的PPE部署方法沉淀",
+            "score": 0.000458661001175642
+          },
+          {
+            "id": "6ac76ec3075ce2959596e8ac",
+            "title": "两阶段隔离验证确保系统可重建性",
+            "score": 2.8658838346018456e-05
+          },
+          {
+            "id": "6ac7c752075ce2959596ef9e",
+            "title": "隔离副作用探查CLI工具真实能力",
+            "score": 2.417270115984138e-05
+          },
+          {
+            "id": "6ac89bd47dd8f2cb5ab0c564",
+            "title": "处理环境变量空值触发校验失败问题",
+            "score": 4.009948042948963e-06
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "A03",
+      "track": "agent",
+      "arm": "hybrid",
+      "repeat": 2,
+      "ok": true,
+      "elapsed_s": 1.139,
+      "request_id": "02179153647064800000000000000000000ffff0a24576c504eec",
+      "target_rank": 1,
+      "hits": {
+        "episodes": [],
+        "agent_cases": [
+          {
+            "id": "6ac761f1cff907988e8e82e5",
+            "title": "将 EverOS 接线从 v1 切换到 v2 并保持 v1 旧数据可读性",
+            "score": 0.5683307012428345
+          },
+          {
+            "id": "6ac795d9ad2d7bdce5473673",
+            "title": "导入本地ClaudeCode遗留的全局记忆文件至EverOS v2，补全缺失项并修复同步账本状态",
+            "score": 0.523309083893226
+          },
+          {
+            "id": "6ac7c734cff907988e8e9813",
+            "title": "熟悉bytedcli命令行工具能力并建立跨Agent可复用的记忆记录",
+            "score": 0.5048712493312818
+          },
+          {
+            "id": "6ac88630520f7e8f58b1a1f8",
+            "title": "记录并沉淀2026-10-09在novel_ug中完成畅听双端PPE部署的完整方法，供后续按实时参数复用",
+            "score": 0.41674588149383734
+          },
+          {
+            "id": "6ac76ea7ad2d7bdce54730ce",
+            "title": "验证新 agent 仅凭 AGENTS.md 能在新设备重建 EverOS 读写流程",
+            "score": 0.3980506734103291
+          }
+        ],
+        "agent_skills": [
+          {
+            "id": "6ac76202075ce2959596e602",
+            "title": "构建双写兼容层实现系统平滑迁移",
+            "score": 0.9916083216667175
+          },
+          {
+            "id": "6ac88651633c7f992a458048",
+            "title": "基于运行时事实源的PPE部署方法沉淀",
+            "score": 0.0004583072441164404
+          },
+          {
+            "id": "6ac76ec3075ce2959596e8ac",
+            "title": "两阶段隔离验证确保系统可重建性",
+            "score": 2.8928259780514054e-05
+          },
+          {
+            "id": "6ac7c752075ce2959596ef9e",
+            "title": "隔离副作用探查CLI工具真实能力",
+            "score": 2.2575391994905658e-05
+          },
+          {
+            "id": "6ac89bd47dd8f2cb5ab0c564",
+            "title": "处理环境变量空值触发校验失败问题",
+            "score": 3.7987927044014214e-06
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "A03",
+      "track": "agent",
+      "arm": "hybrid_rerank",
+      "repeat": 1,
+      "ok": true,
+      "elapsed_s": 6.661,
+      "request_id": "02179153640452400000000000000000000ffff0a24719ad3c264",
+      "target_rank": 1,
+      "hits": {
+        "episodes": [],
+        "agent_cases": [
+          {
+            "id": "6ac761f1cff907988e8e82e5",
+            "title": "将 EverOS 接线从 v1 切换到 v2 并保持 v1 旧数据可读性",
+            "score": 0.5672364673977276
+          },
+          {
+            "id": "6ac795d9ad2d7bdce5473673",
+            "title": "导入本地ClaudeCode遗留的全局记忆文件至EverOS v2，补全缺失项并修复同步账本状态",
+            "score": 0.5226484299962962
+          },
+          {
+            "id": "6ac7c734cff907988e8e9813",
+            "title": "熟悉bytedcli命令行工具能力并建立跨Agent可复用的记忆记录",
+            "score": 0.5037672906502484
+          },
+          {
+            "id": "6ac88630520f7e8f58b1a1f8",
+            "title": "记录并沉淀2026-10-09在novel_ug中完成畅听双端PPE部署的完整方法，供后续按实时参数复用",
+            "score": 0.414901598271899
+          },
+          {
+            "id": "6ac76ea7ad2d7bdce54730ce",
+            "title": "验证新 agent 仅凭 AGENTS.md 能在新设备重建 EverOS 读写流程",
+            "score": 0.39683593199316575
+          }
+        ],
+        "agent_skills": []
+      }
+    },
+    {
+      "case_id": "A03",
+      "track": "agent",
+      "arm": "hybrid_rerank",
+      "repeat": 2,
+      "ok": true,
+      "elapsed_s": 6.373,
+      "request_id": "02179153648972100000000000000000000ffff0a24719a95bd09",
+      "target_rank": 1,
+      "hits": {
+        "episodes": [],
+        "agent_cases": [
+          {
+            "id": "6ac761f1cff907988e8e82e5",
+            "title": "将 EverOS 接线从 v1 切换到 v2 并保持 v1 旧数据可读性",
+            "score": 0.5683307012428345
+          },
+          {
+            "id": "6ac795d9ad2d7bdce5473673",
+            "title": "导入本地ClaudeCode遗留的全局记忆文件至EverOS v2，补全缺失项并修复同步账本状态",
+            "score": 0.523309083893226
+          },
+          {
+            "id": "6ac7c734cff907988e8e9813",
+            "title": "熟悉bytedcli命令行工具能力并建立跨Agent可复用的记忆记录",
+            "score": 0.5048712493312818
+          },
+          {
+            "id": "6ac88630520f7e8f58b1a1f8",
+            "title": "记录并沉淀2026-10-09在novel_ug中完成畅听双端PPE部署的完整方法，供后续按实时参数复用",
+            "score": 0.41674588149383734
+          },
+          {
+            "id": "6ac76ea7ad2d7bdce54730ce",
+            "title": "验证新 agent 仅凭 AGENTS.md 能在新设备重建 EverOS 读写流程",
+            "score": 0.3980506734103291
+          }
+        ],
+        "agent_skills": []
+      }
+    },
+    {
+      "case_id": "U01",
+      "track": "user",
+      "arm": "agentic",
+      "repeat": 1,
+      "ok": true,
+      "elapsed_s": 11.8,
+      "request_id": "02179153645195700000000000000000000ffff0a24576c45dd67",
+      "target_rank": 1,
+      "hits": {
+        "episodes": [
+          {
+            "id": "6ac77a80d439dd01518321e0",
+            "title": "EverOS v1 add 后立即 flush 导致 no_extraction 的抽取故障",
+            "score": 0.9994414448738098
+          },
+          {
+            "id": "6ac77a78dbbd99eb0229d600",
+            "title": "EverOS 旧时间戳静默丢弃与补录写入阈值测试",
+            "score": 0.9898924827575684
+          },
+          {
+            "id": "6ac7ca10d439dd015183385b",
+            "title": "everos-bridge 接入排障、修复并合并 MR #2",
+            "score": 0.9208726286888123
+          },
+          {
+            "id": "6ac88f8f75ab71645658af80",
+            "title": "为 Libra5489580 创建反转子实验并补齐指标与父关系",
+            "score": 0.7291510701179504
+          },
+          {
+            "id": "6ac79ad74962e1b444f34402",
+            "title": "luyue核对feat/eval-case-builder签到评测进展与EverOS钩子故障",
+            "score": 0.6648312211036682
+          }
+        ],
+        "agent_cases": [],
+        "agent_skills": []
+      }
+    },
+    {
+      "case_id": "U01",
+      "track": "user",
+      "arm": "agentic",
+      "repeat": 2,
+      "ok": true,
+      "elapsed_s": 16.695,
+      "request_id": "02179153641936800000000000000000000ffff0a24576c69cca9",
+      "target_rank": 1,
+      "hits": {
+        "episodes": [
+          {
+            "id": "6ac77a80d439dd01518321e0",
+            "title": "EverOS v1 add 后立即 flush 导致 no_extraction 的抽取故障",
+            "score": 0.9994326233863831
+          },
+          {
+            "id": "6ac77a78dbbd99eb0229d600",
+            "title": "EverOS 旧时间戳静默丢弃与补录写入阈值测试",
+            "score": 0.9908179044723511
+          },
+          {
+            "id": "6ac7ca10d439dd015183385b",
+            "title": "everos-bridge 接入排障、修复并合并 MR #2",
+            "score": 0.9182201027870178
+          },
+          {
+            "id": "6ac88f8f75ab71645658af80",
+            "title": "为 Libra5489580 创建反转子实验并补齐指标与父关系",
+            "score": 0.7405944466590881
+          },
+          {
+            "id": "6ac79ad74962e1b444f34402",
+            "title": "luyue核对feat/eval-case-builder签到评测进展与EverOS钩子故障",
+            "score": 0.6586636900901794
+          }
+        ],
+        "agent_cases": [],
+        "agent_skills": []
+      }
+    },
+    {
+      "case_id": "U01",
+      "track": "user",
+      "arm": "hybrid",
+      "repeat": 1,
+      "ok": true,
+      "elapsed_s": 1.521,
+      "request_id": "02179153639853400000000000000000000ffff0a24576c632521",
+      "target_rank": null,
+      "hits": {
+        "episodes": [
+          {
+            "id": "6ac799196353418c2723a152",
+            "title": "EverOS Bridge 修复缺陷并提交 GitHub MR",
+            "score": 0.7539096393301264
+          },
+          {
+            "id": "6ac7ca10d439dd015183385b",
+            "title": "everos-bridge 接入排障、修复并合并 MR #2",
+            "score": 0.7472998393527367
+          },
+          {
+            "id": "6ac795f1f87526ba5e8c07f1",
+            "title": "导入本地 Claude Code 全局记忆到 EverOS",
+            "score": 0.7279166959112674
+          },
+          {
+            "id": "6ac79caf7ca5d666d82a5931",
+            "title": "EverOS 记忆技能只读测试通过",
+            "score": 0.6526933486392696
+          },
+          {
+            "id": "6ac77a78dbbd99eb0229d600",
+            "title": "EverOS 旧时间戳静默丢弃与补录写入阈值测试",
+            "score": 0.6200334517623407
+          }
+        ],
+        "agent_cases": [],
+        "agent_skills": []
+      }
+    },
+    {
+      "case_id": "U01",
+      "track": "user",
+      "arm": "hybrid",
+      "repeat": 2,
+      "ok": true,
+      "elapsed_s": 0.811,
+      "request_id": "02179153650175500000000000000000000ffff0a24719ac4bc0e",
+      "target_rank": null,
+      "hits": {
+        "episodes": [
+          {
+            "id": "6ac799196353418c2723a152",
+            "title": "EverOS Bridge 修复缺陷并提交 GitHub MR",
+            "score": 0.752465837857086
+          },
+          {
+            "id": "6ac7ca10d439dd015183385b",
+            "title": "everos-bridge 接入排障、修复并合并 MR #2",
+            "score": 0.7451591623418793
+          },
+          {
+            "id": "6ac795f1f87526ba5e8c07f1",
+            "title": "导入本地 Claude Code 全局记忆到 EverOS",
+            "score": 0.7263303988039572
+          },
+          {
+            "id": "6ac79caf7ca5d666d82a5931",
+            "title": "EverOS 记忆技能只读测试通过",
+            "score": 0.6498214160403442
+          },
+          {
+            "id": "6ac77a78dbbd99eb0229d600",
+            "title": "EverOS 旧时间戳静默丢弃与补录写入阈值测试",
+            "score": 0.6182858660351571
+          }
+        ],
+        "agent_cases": [],
+        "agent_skills": []
+      }
+    },
+    {
+      "case_id": "U02",
+      "track": "user",
+      "arm": "agentic",
+      "repeat": 1,
+      "ok": true,
+      "elapsed_s": 16.243,
+      "request_id": "02179153643579400000000000000000000ffff0a24576cf94161",
+      "target_rank": 1,
+      "hits": {
+        "episodes": [
+          {
+            "id": "6ac7ceb65d325a40ac36ce76",
+            "title": "luyue 说明组内知识仓与长期记忆机器人落地现状",
+            "score": 0.9956554174423218
+          },
+          {
+            "id": "6ac7cf024962e1b444f35cad",
+            "title": "调整组内知识仓、QA排查机器人与长期记忆目标",
+            "score": 0.9906806349754333
+          },
+          {
+            "id": "6ac7cb8ad439dd0151833865",
+            "title": "luyue 讨论 2026 Q4 AI OKR 草案",
+            "score": 0.43983781337738037
+          },
+          {
+            "id": "6ac7cb496353418c2723c994",
+            "title": "Q4 OKR 讨论：AI 指标待定，业务 O 留空待对齐",
+            "score": 0.06483712792396545
+          },
+          {
+            "id": "6ac77a876353418c27239255",
+            "title": "签到 v4 评测材料齐备，金币寻宝延后",
+            "score": 0.031868357211351395
+          }
+        ],
+        "agent_cases": [],
+        "agent_skills": []
+      }
+    },
+    {
+      "case_id": "U02",
+      "track": "user",
+      "arm": "agentic",
+      "repeat": 2,
+      "ok": true,
+      "elapsed_s": 19.348,
+      "request_id": "02179153640077300000000000000000000ffff0a24576c17b151",
+      "target_rank": 1,
+      "hits": {
+        "episodes": [
+          {
+            "id": "6ac7ceb65d325a40ac36ce76",
+            "title": "luyue 说明组内知识仓与长期记忆机器人落地现状",
+            "score": 0.9956554174423218
+          },
+          {
+            "id": "6ac7cf024962e1b444f35cad",
+            "title": "调整组内知识仓、QA排查机器人与长期记忆目标",
+            "score": 0.9906806349754333
+          },
+          {
+            "id": "6ac7cb8ad439dd0151833865",
+            "title": "luyue 讨论 2026 Q4 AI OKR 草案",
+            "score": 0.43983781337738037
+          },
+          {
+            "id": "6ac7cb496353418c2723c994",
+            "title": "Q4 OKR 讨论：AI 指标待定，业务 O 留空待对齐",
+            "score": 0.06483712792396545
+          },
+          {
+            "id": "6ac77a876353418c27239255",
+            "title": "签到 v4 评测材料齐备，金币寻宝延后",
+            "score": 0.030520863831043243
+          }
+        ],
+        "agent_cases": [],
+        "agent_skills": []
+      }
+    },
+    {
+      "case_id": "U02",
+      "track": "user",
+      "arm": "hybrid",
+      "repeat": 1,
+      "ok": true,
+      "elapsed_s": 0.872,
+      "request_id": "02179153639988900000000000000000000ffff0a24719afd498c",
+      "target_rank": 1,
+      "hits": {
+        "episodes": [
+          {
+            "id": "6ac7ceb65d325a40ac36ce76",
+            "title": "luyue 说明组内知识仓与长期记忆机器人落地现状",
+            "score": 0.988891847780429
+          },
+          {
+            "id": "6ac7cf024962e1b444f35cad",
+            "title": "调整组内知识仓、QA排查机器人与长期记忆目标",
+            "score": 0.9810637096560053
+          },
+          {
+            "id": "6ac7cb8ad439dd0151833865",
+            "title": "luyue 讨论 2026 Q4 AI OKR 草案",
+            "score": 0.8086128723206288
+          },
+          {
+            "id": "6ac79559f87526ba5e8c07e0",
+            "title": "导入本地 Claude Code 全局记忆并整理评测设计",
+            "score": 0.3302219529993234
+          }
+        ],
+        "agent_cases": [],
+        "agent_skills": []
+      }
+    },
+    {
+      "case_id": "U02",
+      "track": "user",
+      "arm": "hybrid",
+      "repeat": 2,
+      "ok": true,
+      "elapsed_s": 0.84,
+      "request_id": "02179153641823600000000000000000000ffff0a24719a17589e",
+      "target_rank": 1,
+      "hits": {
+        "episodes": [
+          {
+            "id": "6ac7ceb65d325a40ac36ce76",
+            "title": "luyue 说明组内知识仓与长期记忆机器人落地现状",
+            "score": 0.9889074760423173
+          },
+          {
+            "id": "6ac7cf024962e1b444f35cad",
+            "title": "调整组内知识仓、QA排查机器人与长期记忆目标",
+            "score": 0.9810457869735021
+          },
+          {
+            "id": "6ac7cb8ad439dd0151833865",
+            "title": "luyue 讨论 2026 Q4 AI OKR 草案",
+            "score": 0.8106551168359656
+          },
+          {
+            "id": "6ac79559f87526ba5e8c07e0",
+            "title": "导入本地 Claude Code 全局记忆并整理评测设计",
+            "score": 0.3301077538720199
+          }
+        ],
+        "agent_cases": [],
+        "agent_skills": []
+      }
+    },
+    {
+      "case_id": "U03",
+      "track": "user",
+      "arm": "agentic",
+      "repeat": 1,
+      "ok": true,
+      "elapsed_s": 18.96,
+      "request_id": "02179153650001900000000000000000000ffff0a24576c7a96f4",
+      "target_rank": 1,
+      "hits": {
+        "episodes": [
+          {
+            "id": "6ac8620498f58eb4500722d8",
+            "title": "先用签到评测 case 试跑查询并核查来源隔离",
+            "score": 0.9959397315979004
+          },
+          {
+            "id": "6ac8623d98f58eb4500722f9",
+            "title": "luyue 试测 signin203 查询并发现评测材料污染",
+            "score": 0.9954482913017273
+          },
+          {
+            "id": "6ac8620ba815721e4d47c506",
+            "title": "用现有签到评测 case 测试专用 KBase 空间与来源隔离",
+            "score": 0.993528425693512
+          },
+          {
+            "id": "6ac77a995d325a40ac36a921",
+            "title": "KBase 默认空间污染导致剥离功能评测失真",
+            "score": 0.9443303346633911
+          },
+          {
+            "id": "6ac85b8afacefcb11434aa71",
+            "title": "排查 kbase_with_novel_ug_knowledge 知识仓评测空间",
+            "score": 0.8218902349472046
+          }
+        ],
+        "agent_cases": [],
+        "agent_skills": []
+      }
+    },
+    {
+      "case_id": "U03",
+      "track": "user",
+      "arm": "agentic",
+      "repeat": 2,
+      "ok": true,
+      "elapsed_s": 24.939,
+      "request_id": "02179153646472600000000000000000000ffff0a24576c78e056",
+      "target_rank": 1,
+      "hits": {
+        "episodes": [
+          {
+            "id": "6ac8620498f58eb4500722d8",
+            "title": "先用签到评测 case 试跑查询并核查来源隔离",
+            "score": 0.9959397315979004
+          },
+          {
+            "id": "6ac8623d98f58eb4500722f9",
+            "title": "luyue 试测 signin203 查询并发现评测材料污染",
+            "score": 0.9954482913017273
+          },
+          {
+            "id": "6ac8620ba815721e4d47c506",
+            "title": "用现有签到评测 case 测试专用 KBase 空间与来源隔离",
+            "score": 0.993528425693512
+          },
+          {
+            "id": "6ac77a995d325a40ac36a921",
+            "title": "KBase 默认空间污染导致剥离功能评测失真",
+            "score": 0.9441462159156799
+          },
+          {
+            "id": "6ac85b8afacefcb11434aa71",
+            "title": "排查 kbase_with_novel_ug_knowledge 知识仓评测空间",
+            "score": 0.8218902349472046
+          }
+        ],
+        "agent_cases": [],
+        "agent_skills": []
+      }
+    },
+    {
+      "case_id": "U03",
+      "track": "user",
+      "arm": "hybrid",
+      "repeat": 1,
+      "ok": true,
+      "elapsed_s": 0.715,
+      "request_id": "02179153641668800000000000000000000ffff0a24576c340d58",
+      "target_rank": 1,
+      "hits": {
+        "episodes": [
+          {
+            "id": "6ac8620498f58eb4500722d8",
+            "title": "先用签到评测 case 试跑查询并核查来源隔离",
+            "score": 0.9780015965138635
+          },
+          {
+            "id": "6ac8623d98f58eb4500722f9",
+            "title": "luyue 试测 signin203 查询并发现评测材料污染",
+            "score": 0.9744913161040567
+          },
+          {
+            "id": "6ac7cc4c4962e1b444f35c9f",
+            "title": "知识仓签到评测 case 进度与待办梳理",
+            "score": 0.9376630181666191
+          },
+          {
+            "id": "6ac79ad74962e1b444f34402",
+            "title": "luyue核对feat/eval-case-builder签到评测进展与EverOS钩子故障",
+            "score": 0.9134268044812051
+          },
+          {
+            "id": "6ac79a0a5d325a40ac36ba96",
+            "title": "日常签到评测 case 进展复核与收口待办",
+            "score": 0.8885504270522293
+          }
+        ],
+        "agent_cases": [],
+        "agent_skills": []
+      }
+    },
+    {
+      "case_id": "U03",
+      "track": "user",
+      "arm": "hybrid",
+      "repeat": 2,
+      "ok": true,
+      "elapsed_s": 0.764,
+      "request_id": "02179153647184200000000000000000000ffff0a24576cd452f0",
+      "target_rank": 1,
+      "hits": {
+        "episodes": [
+          {
+            "id": "6ac8620498f58eb4500722d8",
+            "title": "先用签到评测 case 试跑查询并核查来源隔离",
+            "score": 0.9781078382828416
+          },
+          {
+            "id": "6ac8623d98f58eb4500722f9",
+            "title": "luyue 试测 signin203 查询并发现评测材料污染",
+            "score": 0.9747306020276658
+          },
+          {
+            "id": "6ac7cc4c4962e1b444f35c9f",
+            "title": "知识仓签到评测 case 进度与待办梳理",
+            "score": 0.9378912527996209
+          },
+          {
+            "id": "6ac79ad74962e1b444f34402",
+            "title": "luyue核对feat/eval-case-builder签到评测进展与EverOS钩子故障",
+            "score": 0.9139801858606179
+          },
+          {
+            "id": "6ac79a0a5d325a40ac36ba96",
+            "title": "日常签到评测 case 进展复核与收口待办",
+            "score": 0.889327362861392
+          }
+        ],
+        "agent_cases": [],
+        "agent_skills": []
+      }
+    },
+    {
+      "case_id": "U04",
+      "track": "user",
+      "arm": "agentic",
+      "repeat": 1,
+      "ok": true,
+      "elapsed_s": 14.305,
+      "request_id": "02179153643350300000000000000000000ffff0a24719a54d386",
+      "target_rank": 1,
+      "hits": {
+        "episodes": [
+          {
+            "id": "6ac88f8f75ab71645658af80",
+            "title": "为 Libra5489580 创建反转子实验并补齐指标与父关系",
+            "score": 0.997530996799469
+          },
+          {
+            "id": "6ac88f7a75ab71645658af71",
+            "title": "luyue确认双套方案并推进 novel_ug 反转创建",
+            "score": 0.9889208078384399
+          },
+          {
+            "id": "6ac88faec515d52a029047e4",
+            "title": "luyue 确认季度年度反转并批量创建实验",
+            "score": 0.9066411256790161
+          },
+          {
+            "id": "6ac89bcc91d5afef6c71c951",
+            "title": "luyue 通过 EverOS 汇总 10 月 9 日工作进展",
+            "score": 0.3748428523540497
+          },
+          {
+            "id": "6ac88d7bd14e08bec15ef82d",
+            "title": "为 5489580 开反转实验并核对父实验与旧参数",
+            "score": 0.2595852315425873
+          }
+        ],
+        "agent_cases": [],
+        "agent_skills": []
+      }
+    },
+    {
+      "case_id": "U04",
+      "track": "user",
+      "arm": "agentic",
+      "repeat": 2,
+      "ok": true,
+      "elapsed_s": 15.669,
+      "request_id": "02179153641741600000000000000000000ffff0a24576cfbf5b1",
+      "target_rank": 1,
+      "hits": {
+        "episodes": [
+          {
+            "id": "6ac88f8f75ab71645658af80",
+            "title": "为 Libra5489580 创建反转子实验并补齐指标与父关系",
+            "score": 0.9975321292877197
+          },
+          {
+            "id": "6ac88f7a75ab71645658af71",
+            "title": "luyue确认双套方案并推进 novel_ug 反转创建",
+            "score": 0.9894163012504578
+          },
+          {
+            "id": "6ac88faec515d52a029047e4",
+            "title": "luyue 确认季度年度反转并批量创建实验",
+            "score": 0.9169818758964539
+          },
+          {
+            "id": "6ac89bcc91d5afef6c71c951",
+            "title": "luyue 通过 EverOS 汇总 10 月 9 日工作进展",
+            "score": 0.3887866139411926
+          },
+          {
+            "id": "6ac88d7bd14e08bec15ef82d",
+            "title": "为 5489580 开反转实验并核对父实验与旧参数",
+            "score": 0.2947007417678833
+          }
+        ],
+        "agent_cases": [],
+        "agent_skills": []
+      }
+    },
+    {
+      "case_id": "U04",
+      "track": "user",
+      "arm": "hybrid",
+      "repeat": 1,
+      "ok": true,
+      "elapsed_s": 0.816,
+      "request_id": "02179153648624200000000000000000000ffff0a24576c55a7a9",
+      "target_rank": 1,
+      "hits": {
+        "episodes": [
+          {
+            "id": "6ac88f8f75ab71645658af80",
+            "title": "为 Libra5489580 创建反转子实验并补齐指标与父关系",
+            "score": 0.9958728439367601
+          },
+          {
+            "id": "6ac88faec515d52a029047e4",
+            "title": "luyue 确认季度年度反转并批量创建实验",
+            "score": 0.9686067433123747
+          },
+          {
+            "id": "6ac88f7a75ab71645658af71",
+            "title": "luyue确认双套方案并推进 novel_ug 反转创建",
+            "score": 0.9383221796551766
+          },
+          {
+            "id": "6ac88d7bd14e08bec15ef82d",
+            "title": "为 5489580 开反转实验并核对父实验与旧参数",
+            "score": 0.9301093010328737
+          },
+          {
+            "id": "6ac88d65e0d725a31a0a1141",
+            "title": "为音乐版 5489580 规划反转实验与父实验配置",
+            "score": 0.9074817517454198
+          }
+        ],
+        "agent_cases": [],
+        "agent_skills": []
+      }
+    },
+    {
+      "case_id": "U04",
+      "track": "user",
+      "arm": "hybrid",
+      "repeat": 2,
+      "ok": true,
+      "elapsed_s": 0.801,
+      "request_id": "02179153645295800000000000000000000ffff0a24576cbf6a6e",
+      "target_rank": 1,
+      "hits": {
+        "episodes": [
+          {
+            "id": "6ac88f8f75ab71645658af80",
+            "title": "为 Libra5489580 创建反转子实验并补齐指标与父关系",
+            "score": 0.9958602023460073
+          },
+          {
+            "id": "6ac88faec515d52a029047e4",
+            "title": "luyue 确认季度年度反转并批量创建实验",
+            "score": 0.9685045257528047
+          },
+          {
+            "id": "6ac88f7a75ab71645658af71",
+            "title": "luyue确认双套方案并推进 novel_ug 反转创建",
+            "score": 0.938089816883126
+          },
+          {
+            "id": "6ac88d7bd14e08bec15ef82d",
+            "title": "为 5489580 开反转实验并核对父实验与旧参数",
+            "score": 0.9300119000130652
+          },
+          {
+            "id": "6ac88d65e0d725a31a0a1141",
+            "title": "为音乐版 5489580 规划反转实验与父实验配置",
+            "score": 0.9073678002830844
+          }
+        ],
+        "agent_cases": [],
+        "agent_skills": []
+      }
+    },
+    {
+      "case_id": "U05",
+      "track": "user",
+      "arm": "agentic",
+      "repeat": 1,
+      "ok": true,
+      "elapsed_s": 12.995,
+      "request_id": "02179153645810100000000000000000000ffff0a24576caedea0",
+      "target_rank": 1,
+      "hits": {
+        "episodes": [
+          {
+            "id": "6ac88300a815721e4d47e055",
+            "title": "音乐版 PPE 部署完成并保存到本地记忆与 EverOS",
+            "score": 0.9897273182868958
+          },
+          {
+            "id": "6ac882cfa815721e4d47e044",
+            "title": "luyue 允许音乐版 ChinaSinf-North/Sinf/ppe 区划备选并保留未生产发布",
+            "score": 0.9871922731399536
+          },
+          {
+            "id": "6ac875f008f04b0d8e8fe825",
+            "title": "确认方案后推进代码修改、PPE 部署与双端实验",
+            "score": 0.9741867184638977
+          },
+          {
+            "id": "6ac875b898f58eb4500735eb",
+            "title": "fm_daily_challenge_v2 生产与PPE核对及剩余用户选择",
+            "score": 0.9644731879234314
+          },
+          {
+            "id": "6ac89bcc91d5afef6c71c951",
+            "title": "luyue 通过 EverOS 汇总 10 月 9 日工作进展",
+            "score": 0.8714903593063354
+          }
+        ],
+        "agent_cases": [],
+        "agent_skills": []
+      }
+    },
+    {
+      "case_id": "U05",
+      "track": "user",
+      "arm": "agentic",
+      "repeat": 2,
+      "ok": true,
+      "elapsed_s": 11.934,
+      "request_id": "02179153647118100000000000000000000ffff0a24576c52b806",
+      "target_rank": 1,
+      "hits": {
+        "episodes": [
+          {
+            "id": "6ac88300a815721e4d47e055",
+            "title": "音乐版 PPE 部署完成并保存到本地记忆与 EverOS",
+            "score": 0.9897273182868958
+          },
+          {
+            "id": "6ac882cfa815721e4d47e044",
+            "title": "luyue 允许音乐版 ChinaSinf-North/Sinf/ppe 区划备选并保留未生产发布",
+            "score": 0.987105131149292
+          },
+          {
+            "id": "6ac875f008f04b0d8e8fe825",
+            "title": "确认方案后推进代码修改、PPE 部署与双端实验",
+            "score": 0.9741867184638977
+          },
+          {
+            "id": "6ac875b898f58eb4500735eb",
+            "title": "fm_daily_challenge_v2 生产与PPE核对及剩余用户选择",
+            "score": 0.9644731879234314
+          },
+          {
+            "id": "6ac89bcc91d5afef6c71c951",
+            "title": "luyue 通过 EverOS 汇总 10 月 9 日工作进展",
+            "score": 0.8730919361114502
+          }
+        ],
+        "agent_cases": [],
+        "agent_skills": []
+      }
+    },
+    {
+      "case_id": "U05",
+      "track": "user",
+      "arm": "hybrid",
+      "repeat": 1,
+      "ok": true,
+      "elapsed_s": 1.073,
+      "request_id": "02179153650263800000000000000000000ffff0a24719a88f70c",
+      "target_rank": 1,
+      "hits": {
+        "episodes": [
+          {
+            "id": "6ac88300a815721e4d47e055",
+            "title": "音乐版 PPE 部署完成并保存到本地记忆与 EverOS",
+            "score": 0.9987231046182354
+          },
+          {
+            "id": "6ac875f008f04b0d8e8fe825",
+            "title": "确认方案后推进代码修改、PPE 部署与双端实验",
+            "score": 0.9982448081566586
+          },
+          {
+            "id": "6ac8860afe1c7f450883d437",
+            "title": "沉淀 novel_ug 畅听双端每日挑战 PPE 部署方法",
+            "score": 0.9853752411359796
+          },
+          {
+            "id": "6ac882cfa815721e4d47e044",
+            "title": "luyue 允许音乐版 ChinaSinf-North/Sinf/ppe 区划备选并保留未生产发布",
+            "score": 0.9823599828291696
+          },
+          {
+            "id": "6ac86e2b98f58eb450072edb",
+            "title": "fm_daily_challenge_v2 代码与双端 PPE 进展更新",
+            "score": 0.9657963535712104
+          }
+        ],
+        "agent_cases": [],
+        "agent_skills": []
+      }
+    },
+    {
+      "case_id": "U05",
+      "track": "user",
+      "arm": "hybrid",
+      "repeat": 2,
+      "ok": true,
+      "elapsed_s": 0.898,
+      "request_id": "02179153650369700000000000000000000ffff0a24719a6fbf06",
+      "target_rank": 1,
+      "hits": {
+        "episodes": [
+          {
+            "id": "6ac88300a815721e4d47e055",
+            "title": "音乐版 PPE 部署完成并保存到本地记忆与 EverOS",
+            "score": 0.9987322900129317
+          },
+          {
+            "id": "6ac875f008f04b0d8e8fe825",
+            "title": "确认方案后推进代码修改、PPE 部署与双端实验",
+            "score": 0.998249823825918
+          },
+          {
+            "id": "6ac8860afe1c7f450883d437",
+            "title": "沉淀 novel_ug 畅听双端每日挑战 PPE 部署方法",
+            "score": 0.9855327812492581
+          },
+          {
+            "id": "6ac86e2b98f58eb450072edb",
+            "title": "fm_daily_challenge_v2 代码与双端 PPE 进展更新",
+            "score": 0.966017404255263
+          },
+          {
+            "id": "6ac8864298f58eb450073b37",
+            "title": "记录 PPE 部署方式与验收要点",
+            "score": 0.9619777432881641
+          }
+        ],
+        "agent_cases": [],
+        "agent_skills": []
+      }
+    },
+    {
+      "case_id": "U06",
+      "track": "user",
+      "arm": "agentic",
+      "repeat": 1,
+      "ok": true,
+      "elapsed_s": 18.119,
+      "request_id": "02179153640014500000000000000000000ffff0a24719a4ddabf",
+      "target_rank": 1,
+      "hits": {
+        "episodes": [
+          {
+            "id": "6ac8abd5e0d725a31a0a27a7",
+            "title": "修复 EverOS 0.3.2 升级后旧 Codex Stop hook 路径失效",
+            "score": 0.9971785545349121
+          },
+          {
+            "id": "6ac8abf3d14e08bec15f0b0b",
+            "title": "luyue 询问 enable_llm_rerank 与 top_k 范围，codex 完成桥接修复",
+            "score": 0.9869865775108337
+          },
+          {
+            "id": "6ac79ad74962e1b444f34402",
+            "title": "luyue核对feat/eval-case-builder签到评测进展与EverOS钩子故障",
+            "score": 0.975671648979187
+          },
+          {
+            "id": "6ac79ac94962e1b444f343fb",
+            "title": "EverOS 升级后 old Codex 会话 Stop 错误兼容修复",
+            "score": 0.9414948225021362
+          },
+          {
+            "id": "6ac79b775d325a40ac36bb47",
+            "title": "排查 Stop hook 报错与旧缓存路径问题",
+            "score": 0.8411241173744202
+          }
+        ],
+        "agent_cases": [],
+        "agent_skills": []
+      }
+    },
+    {
+      "case_id": "U06",
+      "track": "user",
+      "arm": "agentic",
+      "repeat": 2,
+      "ok": true,
+      "elapsed_s": 23.593,
+      "request_id": "02179153642057800000000000000000000ffff0a24719af59711",
+      "target_rank": 1,
+      "hits": {
+        "episodes": [
+          {
+            "id": "6ac8abd5e0d725a31a0a27a7",
+            "title": "修复 EverOS 0.3.2 升级后旧 Codex Stop hook 路径失效",
+            "score": 0.9970899820327759
+          },
+          {
+            "id": "6ac8abf3d14e08bec15f0b0b",
+            "title": "luyue 询问 enable_llm_rerank 与 top_k 范围，codex 完成桥接修复",
+            "score": 0.9867674708366394
+          },
+          {
+            "id": "6ac79ad74962e1b444f34402",
+            "title": "luyue核对feat/eval-case-builder签到评测进展与EverOS钩子故障",
+            "score": 0.9751018285751343
+          },
+          {
+            "id": "6ac79ac94962e1b444f343fb",
+            "title": "EverOS 升级后 old Codex 会话 Stop 错误兼容修复",
+            "score": 0.9416081309318542
+          },
+          {
+            "id": "6ac79b775d325a40ac36bb47",
+            "title": "排查 Stop hook 报错与旧缓存路径问题",
+            "score": 0.8405097126960754
+          }
+        ],
+        "agent_cases": [],
+        "agent_skills": []
+      }
+    },
+    {
+      "case_id": "U06",
+      "track": "user",
+      "arm": "hybrid",
+      "repeat": 1,
+      "ok": true,
+      "elapsed_s": 0.899,
+      "request_id": "02179153646382300000000000000000000ffff0a24719a39b954",
+      "target_rank": 1,
+      "hits": {
+        "episodes": [
+          {
+            "id": "6ac8abd5e0d725a31a0a27a7",
+            "title": "修复 EverOS 0.3.2 升级后旧 Codex Stop hook 路径失效",
+            "score": 0.9960905802436211
+          },
+          {
+            "id": "6ac79ad74962e1b444f34402",
+            "title": "luyue核对feat/eval-case-builder签到评测进展与EverOS钩子故障",
+            "score": 0.9883935328121454
+          },
+          {
+            "id": "6ac79ac94962e1b444f343fb",
+            "title": "EverOS 升级后 old Codex 会话 Stop 错误兼容修复",
+            "score": 0.9774027691574618
+          },
+          {
+            "id": "6ac8abf3d14e08bec15f0b0b",
+            "title": "luyue 询问 enable_llm_rerank 与 top_k 范围，codex 完成桥接修复",
+            "score": 0.9437054282351903
+          },
+          {
+            "id": "6ac79b9f6353418c2723a270",
+            "title": "设计 GitHub 云端跨 Agent 记忆仓并修复 EverOS hook 路径",
+            "score": 0.8641723106406678
+          }
+        ],
+        "agent_cases": [],
+        "agent_skills": []
+      }
+    },
+    {
+      "case_id": "U06",
+      "track": "user",
+      "arm": "hybrid",
+      "repeat": 2,
+      "ok": true,
+      "elapsed_s": 1.03,
+      "request_id": "02179153648317700000000000000000000ffff0a24719a681232",
+      "target_rank": 1,
+      "hits": {
+        "episodes": [
+          {
+            "id": "6ac8abd5e0d725a31a0a27a7",
+            "title": "修复 EverOS 0.3.2 升级后旧 Codex Stop hook 路径失效",
+            "score": 0.9960905802436211
+          },
+          {
+            "id": "6ac79ad74962e1b444f34402",
+            "title": "luyue核对feat/eval-case-builder签到评测进展与EverOS钩子故障",
+            "score": 0.9883935328121454
+          },
+          {
+            "id": "6ac79ac94962e1b444f343fb",
+            "title": "EverOS 升级后 old Codex 会话 Stop 错误兼容修复",
+            "score": 0.9774027691574618
+          },
+          {
+            "id": "6ac8abf3d14e08bec15f0b0b",
+            "title": "luyue 询问 enable_llm_rerank 与 top_k 范围，codex 完成桥接修复",
+            "score": 0.9437054282351903
+          },
+          {
+            "id": "6ac79b9f6353418c2723a270",
+            "title": "设计 GitHub 云端跨 Agent 记忆仓并修复 EverOS hook 路径",
+            "score": 0.8641723106406678
+          }
+        ],
+        "agent_cases": [],
+        "agent_skills": []
+      }
+    }
+  ]
+}

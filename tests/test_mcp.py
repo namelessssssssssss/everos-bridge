@@ -119,12 +119,73 @@ class McpTests(unittest.TestCase):
     def test_search_and_recent_validate_types_bounds_and_enum(self):
         bad_search = [{}, {"query": 4}, {"query": " "}, {"query": "x", "kind": "profiles"},
                       {"query": "x", "top_k": True}, {"query": "x", "top_k": 0},
-                      {"query": "x", "top_k": 21}, {"query": "x", "top_k": 2.5}]
+                      {"query": "x", "top_k": -2}, {"query": "x", "top_k": 101},
+                      {"query": "x", "top_k": 2.5}, {"query": "x", "top_k": "100"},
+                      {"query": "x", "method": "vector"}, {"query": "x", "method": "keyword"},
+                      {"query": "x", "method": "Agentic"}, {"query": "x", "method": ""},
+                      {"query": "x", "method": None}, {"query": "x", "method": False}]
         bad_recent = [{"days": 0}, {"days": 91}, {"days": False}, {"limit": 101}, {"limit": "2"}]
         for name, cases in (("memory_search", bad_search), ("memory_recent", bad_recent)):
             for args in cases:
                 with self.subTest(name=name, args=args):
                     self.assert_invalid_params(self.call_tool(name, args))
+
+    def test_search_accepts_official_top_k_range_and_passes_it_unchanged(self):
+        for top_k in (-1, *range(1, 101)):
+            with self.subTest(top_k=top_k), \
+                    mock.patch.object(mcp_server.core, "search_text", return_value="search") as search:
+                response = self.call_tool("memory_search", {"query": "task", "top_k": top_k})
+                self.assertFalse(response["result"]["isError"])
+                search.assert_called_once_with("task", top_k, "all", method="hybrid")
+
+    def test_search_schema_advertises_opt_in_agentic_and_keeps_hybrid_default(self):
+        tools = self.server.respond(request("tools/list"))["result"]["tools"]
+        search = next(tool for tool in tools if tool["name"] == "memory_search")
+        schema = search["inputSchema"]
+        self.assertNotIn("method", schema["required"])
+        self.assertEqual(schema["properties"]["method"]["type"], "string")
+        self.assertEqual(set(schema["properties"]["method"]["enum"]), {"hybrid", "agentic"})
+        self.assertEqual(schema["properties"]["method"]["default"], "hybrid")
+
+    def test_search_methods_preserve_kind_and_server_sized_or_large_top_k(self):
+        for method in ("hybrid", "agentic"):
+            for kind in ("all", "episodes", "practices"):
+                for top_k in (-1, 21, 100):
+                    with self.subTest(method=method, kind=kind, top_k=top_k), \
+                            mock.patch.object(mcp_server.core, "search_text", return_value="found") as search:
+                        response = self.call_tool("memory_search", {
+                            "query": "implicit historical question", "top_k": top_k,
+                            "kind": kind, "method": method})
+                        self.assertFalse(response["result"]["isError"])
+                        search.assert_called_once_with("implicit historical question", top_k, kind, method=method)
+
+    def test_invalid_method_is_rejected_before_dispatch(self):
+        with mock.patch.object(mcp_server.core, "search_text") as search:
+            self.assert_invalid_params(self.call_tool("memory_search", {"query": "task", "method": "unknown"}))
+            search.assert_not_called()
+
+    def test_blank_agent_entries_fall_back_and_never_render_as_arrow_or_colon(self):
+        def fake_api(path, body, timeout):
+            blank_case = {"task_intent": " \n", "key_insight": "\t", "score": .9}
+            blank_skill = {"name": " ", "description": "\n", "score": .9}
+            cases, skills = [{}, blank_case], [{}, blank_skill]
+            if body["method"] == "hybrid":
+                cases.append({"id": "case", "task_intent": "real task", "key_insight": "real insight", "score": .9})
+                skills.append({"id": "skill", "name": "real skill", "description": "real description", "score": .9})
+            return {"data": {"agent_cases": cases, "agent_skills": skills}}
+        with mock.patch.object(mcp_server.core, "api", side_effect=fake_api) as api:
+            result = self.call_tool("memory_search", {
+                "query": "historical practice", "kind": "practices", "method": "agentic"})["result"]
+        self.assertFalse(result["isError"])
+        text = result["content"][0]["text"]
+        self.assertIn("agentic", text)
+        self.assertIn("hybrid", text)
+        lines = [line for line in text.splitlines() if line.startswith("- ")]
+        self.assertEqual(len(lines), 2)
+        self.assertTrue(any("real task" in line and "real insight" in line for line in lines))
+        self.assertTrue(any("real skill" in line and "real description" in line for line in lines))
+        self.assertEqual(api.call_count, 2)
+        self.assertEqual([call.args[1]["method"] for call in api.call_args_list], ["agentic", "hybrid"])
 
     def test_read_tools_pass_valid_defaults(self):
         with mock.patch.object(mcp_server.core, "profile_text", return_value="profile") as profile:
@@ -132,7 +193,7 @@ class McpTests(unittest.TestCase):
             profile.assert_called_once_with(limit=8000, with_ids=True)
         with mock.patch.object(mcp_server.core, "search_text", return_value="search") as search:
             self.assertFalse(self.call_tool("memory_search", {"query": "task"})["result"]["isError"])
-            search.assert_called_once_with("task", 5, "all")
+            search.assert_called_once_with("task", 5, "all", method="hybrid")
         with mock.patch.object(mcp_server.core, "recent_text", return_value="recent") as recent:
             self.assertFalse(self.call_tool("memory_recent", {})["result"]["isError"])
             recent.assert_called_once_with(7, 20)
