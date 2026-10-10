@@ -291,6 +291,81 @@ class Installer:
         text = pattern.sub(lambda _: block, old) if pattern.search(old) else (old.rstrip() + "\n\n" + block + "\n").lstrip()
         self.edit(path, text)
 
+    @staticmethod
+    def strip_jsonc(text):
+        out, i, n = [], 0, len(text)
+        while i < n:
+            ch = text[i]
+            if ch == '"':
+                out.append(ch)
+                i += 1
+                while i < n:
+                    out.append(text[i])
+                    if text[i] == "\\" and i + 1 < n:
+                        out.append(text[i + 1])
+                        i += 2
+                        continue
+                    if text[i] == '"':
+                        i += 1
+                        break
+                    i += 1
+                continue
+            if ch == "/" and i + 1 < n and text[i + 1] == "/":
+                while i < n and text[i] != "\n":
+                    i += 1
+                continue
+            if ch == "/" and i + 1 < n and text[i + 1] == "*":
+                i += 2
+                while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
+                    i += 1
+                i += 2
+                continue
+            out.append(ch)
+            i += 1
+        return "".join(out)
+
+    def mimocode(self):
+        """MiMo Desktop / MiMoCode：MCP + L3/L4 插件 + 指令，写 ~/.config/mimocode/mimocode.jsonc。"""
+        print("== MiMoCode / MiMo Desktop")
+        config_dir = Path(self.environment.get("XDG_CONFIG_HOME") or (self.home / ".config")) / "mimocode"
+        path = config_dir / "mimocode.jsonc"
+        plugin = self.repo / "plugin/mimo/everos.mjs"
+        plugin_url = "file://" + str(plugin).replace(" ", "%20")
+        try:
+            data = json.loads(self.strip_jsonc(path.read_text())) if path.exists() else {}
+        except ValueError:
+            raise ValueError(f"无法解析 {path}；请手工合并 EverOS 的 mcp/plugin/instructions")
+        if not isinstance(data, dict):
+            raise ValueError(f"{path} 顶层必须是对象")
+        data.setdefault("mcp", {})
+        if not isinstance(data["mcp"], dict):
+            raise ValueError(f"{path} 的 mcp 必须是对象")
+        data["mcp"]["everos"] = {
+            "type": "local",
+            "command": ["python3", str(self.mcp)],
+            "timeout": 50000,
+        }
+        rules = str(self.repo / "plugin/rules/everos-rules.md")
+        instructions = data.get("instructions")
+        if not isinstance(instructions, list):
+            instructions = []
+        if rules not in instructions:
+            instructions.append(rules)
+        data["instructions"] = instructions
+        plugins = data.get("plugin")
+        if not isinstance(plugins, list):
+            plugins = []
+        entry = [plugin_url, {"hook": str(self.hook)}]
+        plugins = [p for p in plugins
+                   if not (isinstance(p, str) and "everos.mjs" in p)
+                   and not (isinstance(p, list) and p and "everos.mjs" in str(p[0]))]
+        plugins.append(entry)
+        data["plugin"] = plugins
+        if not self.dry:
+            config_dir.mkdir(parents=True, exist_ok=True)
+        self.edit(path, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+        print("  L3/L4 插件 " + str(plugin) + "；新会话生效。")
+
     def marketplace(self, cli):
         if self.dry:
             print("  [dry-run] 检查并迁移 {} 的 everos-bridge 市场到 {}".format(cli, self.repo))
@@ -407,6 +482,10 @@ class Installer:
             desktop_home = Path(os.environ.get("EVEROS_KIMI_DESKTOP_HOME", str(desktop.parent / "home")))
             self.mcp_json(desktop_home / "mcp.json", create=True)
             self.edit(desktop, kimi_hooks(desktop.read_text(), self.hook, desktop=True))
+        mimo_cfg = Path(self.environment.get("XDG_CONFIG_HOME") or (self.home / ".config")) / "mimocode" / "mimocode.jsonc"
+        mimo_home = self.home / "Library/Application Support/Xiaomi MiMo"
+        if shutil.which("mimo") or mimo_cfg.exists() or mimo_home.exists():
+            self.mimocode()
         print("== 自检")
         self.run([sys.executable, self.hook, "--doctor"])
         if self.dry:
