@@ -15,7 +15,8 @@
 | Codex CLI / App | 插件（hook）+ MCP | ✅ | ✅ | ✅ | ✅ |
 | Kimi Code | config.toml hook + MCP | ✅（首条提问时注入） | ✅ | ✅ | ✅ |
 | Kimi Work 桌面端（Kimi.app） | runtime config.toml hook + MCP | ✅（首条提问时注入） | ✅ | ✅ | ✅ |
-| TraeCode CLI（coco）、Gemini CLI | MCP + 全局规则文件 | 规则要求模型自己调用（coco 已实测） | 同左 | — | ✅ |
+| TraeX ≥ 0.209.1（traecli / traex / coco 别名） | 用户级 hook + MCP + 全局规则 | ✅ | ✅ | ✅ | ✅ |
+| 旧 Coco、Gemini CLI | MCP + 全局规则文件 | 规则要求模型自己调用 | 同左 | — | ✅ |
 | Claude Desktop（含 Cowork）、Cursor | MCP | 由模型按说明调用 | 由模型按说明调用 | — | ✅ |
 | Claude Code on the web（云端） | setup script + 仓库级 hook + 网络密钥 | ✅ | ✅ | ✅ | ✅ |
 
@@ -52,6 +53,12 @@ python3 ~/.everos-bridge/plugin/everos/hook.py --doctor
 
 Codex 插件安装或更新后，还需在新会话中审阅并信任 hook 的当前定义，自动注入和采集才会执行。启用插件与 MCP 可连接本身不能证明 hook 已生效。
 
+TraeX 可只刷新当前宿主：`./install.sh --only trae`（也支持 `--dry-run`）。配置和规则写到
+`$TRAE_HOME`（默认 `~/.trae`），六个 hook 写到 `$TRAECLI_HOME/hooks.json`（默认
+`~/.trae/cli/hooks.json`）。新会话在 `/hooks` 审阅并信任 EverOS 的当前定义；安装器不自动信任。
+自动采集保存用户和助手的文本，排除环境提示、注入记忆、工具镜像及 reasoning；不上传图片二进制。
+压缩后在下一条提问补读画像。实现与验证细节见 [TraeX 接入](docs/traex-integration.md)。
+
 `install.sh --dry-run` 只展示接线动作，不改配置、不执行联网自检。正常安装先备份配置再修改；子命令或自检失败会返回非零。需要暂停所有入库时设置 `EVEROS_WRITE=0`，它同时约束自动采集、MCP 写工具、画像编辑与 flush。
 
 ## 本地回归验证
@@ -59,6 +66,8 @@ Codex 插件安装或更新后，还需在新会话中审阅并信任 hook 的�
 ```bash
 python3 -m unittest discover -s tests -v
 bash -n install.sh
+# 可选：真实 TraeX 进程 + 本地固定模型/记忆 API，不读取真实凭据
+python3 scripts/validate_trae.py --out /tmp/everos-traex-validation
 ```
 
 测试使用临时配置、模拟 API 和宿主 CLI，不读取真实凭据，不修改本机 agent 配置，也不写入远端记忆。真实接入仍按 [Agent 接入清单](docs/agent-onboarding.md) 核验新会话注入、MCP 调用和写入回读；账号或 provider 缺少凭据时只说明限制，不能算通过。
@@ -90,6 +99,7 @@ plugin/                           Claude Code 与 Codex 共用的插件目录
   skills/everos-memory/SKILL.md   通用 skill（Agent Skills 格式）
   rules/everos-rules.md           写进只有 MCP 的 agent 全局指令文件的规则块
   everos/core.py                  核心：v2 读写（含 v1 过渡）、各宿主会话记录解析、补落盘、本地记忆同步
+  everos/trae.py                  TraeX 会话定位、history_mutation / response_item 文本投影
   everos/hook.py                  hook 入口与命令行：--doctor / --dry-run / --sweep / --sync-localmem
   everos/mcp_server.py            stdio MCP 服务：6 个 memory_* 工具
 .claude-plugin/marketplace.json   Claude Code 插件市场

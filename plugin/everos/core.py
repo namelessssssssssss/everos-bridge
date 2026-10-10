@@ -29,6 +29,8 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import trae
+
 CST = timezone(timedelta(hours=8))
 MAX_MSG_CHARS = 20000          # 只截断超长粘贴
 MAX_BODY_BYTES = 250_000       # 单次 add 请求体上限（留余量）
@@ -602,6 +604,8 @@ def read_new_entries(path: Path, offset: int) -> tuple[list[dict], int]:
 
 
 def detect_host(entries: list[dict], transcript: str = "") -> str:
+    if trae.is_trae(entries, transcript):
+        return "trae"
     if "/.codex/" in transcript or any(o.get("type") in ("session_meta", "response_item") for o in entries[:50]):
         return "codex"
     # 桌面端（Kimi Work）与 Kimi Code CLI 的 wire.jsonl 同构，只能靠路径区分；必须先于 kimi 判断
@@ -794,6 +798,29 @@ def messages_codex(entries: list[dict], host: str = "codex") -> list[dict]:
     return _monotonic(msgs)
 
 
+def messages_trae(entries: list[dict], host: str = "trae") -> list[dict]:
+    """TraeX original dialogue, from modern mutations or legacy response items."""
+    msgs = []
+    for entry in trae.message_entries(entries):
+        item = entry["payload"]
+        text = "\n".join(part.get("text", "") for part in item.get("content", [])
+                         if isinstance(part, dict) and part.get("type") in ("input_text", "output_text")).strip()
+        if not text:
+            continue
+        if item["role"] == "user":
+            kinds = (item.get("internal_chat_message_metadata_passthrough") or {}).get("content_item_kinds")
+            # Explicit user.text wins over a prefix that merely resembles scaffolding.
+            if kinds is None and text.startswith(_CODEX_SCAFFOLD + _SKIP_PREFIX + (
+                    "<system-reminder>", "<skills_instructions>", "<plugins_instructions>", "<collaboration_mode>",
+                    "<multi_agent_mode>", "# Environment")):
+                continue
+            text, sender = split_botmux(text)
+        else:
+            sender = {"sender_id": host}
+        msgs.append({"role": item["role"], **sender, "timestamp": ts_ms(entry.get("timestamp")), "content": clip(text)})
+    return _monotonic(msgs)
+
+
 def messages_kimi(entries: list[dict], host: str = "kimi") -> list[dict]:
     """Kimi Code / Kimi Work 桌面端 wire.jsonl：用户原话在 context.append_message（origin=user），回复在 content.part（text）。"""
     msgs: list[dict] = []
@@ -838,7 +865,7 @@ def session_name(entries: list[dict], host: str, cwd: str, sid: str, title: str 
             first_ts = o["timestamp"]
     day = (datetime.fromisoformat(first_ts.replace("Z", "+00:00")).astimezone(CST) if first_ts
            else datetime.now(CST))
-    prefix = {"claude_code": "cc", "codex": "cx", "kimi": "km", "kimi_desktop": "kw"}.get(host, slug(host, 12) or "agent")
+    prefix = {"claude_code": "cc", "codex": "cx", "trae": "tx", "kimi": "km", "kimi_desktop": "kw"}.get(host, slug(host, 12) or "agent")
     return f"{prefix}_{day:%Y%m%d}_{slug(title or Path(cwd or 'x').name) or 'session'}_{sid[:8]}"
 
 
@@ -849,7 +876,11 @@ def write_turns(payload: dict) -> None:
     event = str(payload.get("hook_event_name") or "")
     host_hint = os.environ.get("EVEROS_HOST", "")
     if not tpath.is_file() and sid:
-        if host_hint == "kimi_desktop" or sid.startswith(("conv-", "ctitle-")):
+        if host_hint == "trae":
+            tpath = trae.transcript(sid) or tpath
+            if not tpath.is_file():
+                raise FileNotFoundError(f"TraeX rollout not found for session {sid}")
+        elif host_hint == "kimi_desktop" or sid.startswith(("conv-", "ctitle-")):
             tpath = desktop_transcript(sid) or tpath
         elif host_hint == "kimi" or str(payload.get("client_type", "")).startswith("kimi"):
             tpath = kimi_transcript(sid) or tpath
@@ -864,10 +895,11 @@ def write_turns(payload: dict) -> None:
         entries, new_offset = read_new_entries(tpath, offset)
         if not st.get("everos_session_id"):
             head, _ = read_new_entries(tpath, 0) if offset else (entries, 0)
-            host = detect_host(head, str(tpath))
+            host = "trae" if host_hint == "trae" else detect_host(head, str(tpath))
             st.update(claude_session_id=sid, host=host, cwd=str(payload.get("cwd") or ""), transcript_path=str(tpath),
                       everos_session_id=session_name(head, host, str(payload.get("cwd") or ""),
-                                                     sid.removeprefix("session_"), str(payload.get("session_title") or "")))
+                                                     sid.removeprefix("session_"), str(payload.get("session_title") or
+                                                     payload.get("thread_name") or payload.get("session_name") or "")))
         host = st.get("host") or "claude_code"
         if st.get("api", "v1") != version() and st.get("pending"):  # 换库前把旧库里的缓冲落盘
             try:
@@ -878,7 +910,8 @@ def write_turns(payload: dict) -> None:
             except Exception as exc:
                 log(f"switch flush failed {st['everos_session_id']}: {exc!r}")
                 raise  # 旧库仍 pending，不能换 api 后把旧缓冲的重试路径丢掉
-        parse = {"codex": messages_codex, "kimi": messages_kimi, "kimi_desktop": messages_kimi}.get(host, messages_claude)
+        parse = {"codex": messages_codex, "trae": messages_trae,
+                 "kimi": messages_kimi, "kimi_desktop": messages_kimi}.get(host, messages_claude)
         msgs = parse(entries, host)
         if msgs:
             res = post_messages(st["everos_session_id"], msgs)

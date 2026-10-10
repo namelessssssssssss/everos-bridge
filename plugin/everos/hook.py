@@ -17,6 +17,8 @@ fail-open：生命周期事件的异常只记日志并 exit 0，绝不阻塞会�
 from __future__ import annotations
 
 import json
+import fcntl
+import hashlib
 import os
 import subprocess
 import sys
@@ -57,10 +59,13 @@ def on_prompt(payload: dict, kimi: bool = False) -> None:
     deadline = time.monotonic() + max(0.0, budget)
     chars = int(core._num("EVEROS_RECALL_CHARS", 2000))
     blocks = []
-    if kimi and first:  # Kimi 的 SessionStart 只通知不注入，画像放到首条提问一起给
+    need_profile = ((kimi and first) or (HOST_OVERRIDE == "trae" and
+                    (st.get("needs_profile") or not st.get("profile_injected"))))
+    if need_profile:  # Kimi 首轮；TraeX 压缩后或 SessionStart 未成功时，沿用同一总预算
         profile = core.profile_text(budget=max(0.0, deadline - time.monotonic()))
         if profile:
             blocks.append(f"【EverOS 用户画像】{HEADER}\n{profile}")
+            st.update(profile_injected=True, needs_profile=False)
     items = core.search_items(prompt, top_k=5, budget=max(0.0, deadline - time.monotonic()),
                               v1_episodes=3 if core.substantial(prompt) else 0)
     seen = set(st.get("ids") or [])
@@ -89,7 +94,7 @@ def main() -> int:
         if args[:1] == ["--dry-run"]:
             entries, _ = core.read_new_entries(Path(args[1]), 0)
             host = core.detect_host(entries, args[1])
-            parse = {"codex": core.messages_codex, "kimi": core.messages_kimi,
+            parse = {"codex": core.messages_codex, "trae": core.messages_trae, "kimi": core.messages_kimi,
                      "kimi_desktop": core.messages_kimi}.get(host, core.messages_claude)
             msgs = parse(entries, host)
             print(core.session_name(entries, host, "", Path(args[1]).stem))
@@ -116,8 +121,46 @@ def main() -> int:
         if not core.ready():
             return 0
         kimi = is_kimi_like(payload)
+        if event == "PostCompact" and HOST_OVERRIDE == "trae":
+            # TraeX cannot inject from PostCompact; restore profile on the next prompt.
+            state_p = core.RECALL_DIR / f"{sid0 or 'nosession'}.json"
+            st = core.load_state(state_p)
+            st.update(needs_profile=True, ids=[])
+            core.save_state(state_p, st)
+            return 0
         if event in ("SessionStart", "UserPromptSubmit"):
             if c.get("EVEROS_INJECT") == "0":
+                return 0
+            if HOST_OVERRIDE == "trae":
+                # A home-directory workspace can discover the same hooks.json
+                # as both user and project source. Serialize read-side state as
+                # well, so duplicate handlers neither call APIs nor inject twice.
+                core.RECALL_DIR.mkdir(parents=True, exist_ok=True)
+                state_p = core.RECALL_DIR / f"{sid0 or 'nosession'}.json"
+                with open(state_p.with_suffix(".lock"), "w") as lock:
+                    fcntl.flock(lock, fcntl.LOCK_EX)
+                    st = core.load_state(state_p)
+                    if event == "UserPromptSubmit":
+                        turn = payload.get("turn_id")
+                        key = str(turn) + ":" + hashlib.sha256(str(payload.get("prompt", "")).encode()).hexdigest()
+                        if turn and st.get("last_prompt_key") == key:
+                            return 0
+                        on_prompt(payload)
+                        if turn:
+                            st = core.load_state(state_p)
+                            st["last_prompt_key"] = key
+                            core.save_state(state_p, st)
+                    else:
+                        source = payload.get("source") or "startup"
+                        if (st.get("last_profile_source") == source and
+                                time.time() - st.get("last_profile_at", 0) < 2):
+                            return 0
+                        text = core.profile_text(budget=min(core.READ_TIMEOUT, core._num("EVEROS_RECALL_TIMEOUT", 18)))
+                        if text:
+                            emit("SessionStart", f"【EverOS 用户画像】{HEADER}\n{text}")
+                            st.update(profile_injected=True, needs_profile=False,
+                                      last_profile_source=source, last_profile_at=time.time())
+                            core.save_state(state_p, st)
                 return 0
             if event == "SessionStart" and not kimi:
                 text = core.profile_text(budget=min(core.READ_TIMEOUT, core._num("EVEROS_RECALL_TIMEOUT", 18)))

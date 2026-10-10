@@ -40,7 +40,9 @@ if name == "codex" and args[:2] == ["plugin", "add"] and os.environ.get("FAKECLI
 if os.environ.get("FAIL_ACTION") and action.startswith(os.environ["FAIL_ACTION"]):
     print("simulated host CLI failure", file=sys.stderr)
     sys.exit(9)
-if name == "ps":
+if args == ["--version"]:
+    print(os.environ.get("FAKE_TRAE_VERSION", "traecli 0.209.1"))
+elif name == "ps":
     print("/Applications/Claude.app/Contents/MacOS/Claude" if os.environ.get("CLAUDE_RUNNING") else "")
 elif args[:2] == ["plugin", "marketplace"]:
     path = home / ("." + name + "-marketplaces.json")
@@ -329,6 +331,52 @@ class InstallerTests(unittest.TestCase):
         previous = rules.read_text()
         self.run_install()
         self.assertEqual(rules.read_text(), previous)
+
+    def test_trae_installs_runtime_hooks_idempotently_and_preserves_other_handlers(self):
+        self.cli("traecli")
+        shared, runtime = self.home / "custom-shared", self.home / "custom-runtime"
+        self.env.update(TRAE_HOME=str(shared), TRAECLI_HOME=str(runtime))
+        original = {"version": "1", "custom": "keep", "hooks": {"stop": [{"matcher": "*", "hooks": [
+            {"type": "command", "command": "unrelated", "timeout": 8},
+            {"type": "command", "command": "python3 /old/everos/hook.py"}]}],
+            "Notification": [{"hooks": [{"type": "command", "command": "notify"}]}]}}
+        path = self.put("custom-runtime/hooks.json", json.dumps(original))
+        self.put("custom-shared/traecli.toml", '[hooks.state."unrelated"]\ntrusted_hash="keep"\n')
+        self.run_install("--only", "trae")
+        first = path.read_text()
+        data = json.loads(first)
+        self.assertEqual(data["custom"], "keep")
+        self.assertEqual(data["hooks"]["Stop"][0]["hooks"], [{"type": "command", "command": "unrelated", "timeout": 8}])
+        self.assertNotIn("stop", data["hooks"])
+        for event in ["SessionStart", "UserPromptSubmit", "Stop", "PreCompact", "PostCompact", "SessionEnd"]:
+            owned = [h for g in data["hooks"][event] for h in g["hooks"] if install.is_everos_hook(h["command"])]
+            self.assertEqual(len(owned), 1)
+            self.assertIn("EVEROS_HOST=trae", owned[0]["command"])
+            self.assertIn(str(runtime), owned[0]["command"])
+        self.assertTrue((shared / "AGENTS.md").exists())
+        self.assertIn('trusted_hash="keep"', (shared / "traecli.toml").read_text())
+        self.assertFalse((runtime / "traecli.toml").exists())
+        self.run_install("--only", "trae")
+        self.assertEqual(path.read_text(), first)
+        self.assertEqual(len(list(path.parent.glob("hooks.json.bak-everos-*"))), 1)
+
+    def test_trae_only_skips_other_hosts_and_prefers_modern_cli(self):
+        for name in ["traecli", "coco", "claude", "codex", "kimi"]:
+            self.cli(name)
+        self.run_install("--only", "trae")
+        self.assertTrue((self.home / ".trae/cli/hooks.json").exists())
+        self.assertFalse(any(call[0] in ["coco", "claude", "codex", "kimi"] for call in self.calls()))
+
+    def test_legacy_coco_does_not_claim_hook_support(self):
+        self.cli("coco")
+        self.env["FAKE_TRAE_VERSION"] = "coco 0.1.0"
+        result = self.run_install("--only", "trae")
+        self.assertIn("L3/L4 需要 TraeX", result.stdout)
+        self.assertFalse((self.home / ".trae/cli/hooks.json").exists())
+
+    def test_trae_only_without_host_fails(self):
+        result = self.run_install("--only", "trae", expect=1)
+        self.assertIn("未找到", result.stderr)
 
     def test_kimi_partial_old_hooks_migrate_preserving_other_hooks(self):
         self.cli("kimi")

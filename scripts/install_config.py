@@ -170,9 +170,33 @@ def kimi_hooks(text, hook, desktop=False):
     return existing + ("\n\n" if existing else "") + "\n\n".join(blocks) + "\n"
 
 
+def trae_hooks(text, hook, runtime):
+    """Merge only EverOS handlers; preserve unrelated hooks and top-level fields."""
+    data = json.loads(text or "{}")
+    events = (("SessionStart", 10), ("UserPromptSubmit", 20), ("Stop", 10),
+              ("PreCompact", 10), ("PostCompact", 5), ("SessionEnd", 5))
+    canonical = {event.lower(): event for event, _ in events}
+    merged = {}
+    for event, groups in data.get("hooks", {}).items():
+        event = canonical.get(re.sub(r"[_-]", "", event).lower(), event)
+        retained = merged.setdefault(event, [])
+        for group in groups:
+            hooks = [h for h in group.get("hooks", []) if not is_everos_hook(h.get("command", ""))]
+            if hooks or not group.get("hooks"):
+                retained.append(dict(group, hooks=hooks))
+    command = "EVEROS_HOST=trae TRAECLI_HOME={} python3 {}".format(
+        shlex.quote(str(runtime)), shlex.quote(str(hook)))
+    for event, timeout in events:
+        merged.setdefault(event, []).append({"hooks": [{"type": "command", "command": command,
+                                                       "timeout": timeout}]})
+    data["hooks"] = merged
+    return json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+
+
 class Installer:
-    def __init__(self, repo, dry=False):
+    def __init__(self, repo, dry=False, only=None):
         self.repo, self.dry = Path(repo).resolve(), dry
+        self.only = only
         # Explicit test/alternate host root: do not overwrite the system HOME.
         self.home = Path(os.environ.get("EVEROS_INSTALL_HOME", str(Path.home())))
         self.everos = Path(os.environ.get("EVEROS_HOME", str(self.home / ".everos")))
@@ -181,7 +205,8 @@ class Installer:
         self.environment = dict(os.environ, EVEROS_HOME=str(self.everos))
         if "EVEROS_INSTALL_HOME" in os.environ:
             for key, suffix in (("CODEX_HOME", ".codex"), ("CLAUDE_CONFIG_DIR", ".claude"),
-                                ("TRAECLI_HOME", ".trae"), ("KIMI_CODE_HOME", ".kimi-code")):
+                                ("TRAE_HOME", ".trae"), ("TRAECLI_HOME", ".trae/cli"),
+                                ("KIMI_CODE_HOME", ".kimi-code")):
                 self.environment.setdefault(key, str(self.home / suffix))
 
     def run(self, args, capture=False):
@@ -331,7 +356,7 @@ class Installer:
     def install(self):
         self.config()
         claude_home = Path(self.environment.get("CLAUDE_CONFIG_DIR", str(self.home / ".claude")))
-        if shutil.which("claude"):
+        if self.only is None and shutil.which("claude"):
             print("== Claude Code")
             settings = claude_home / "settings.json"
             self.before_cli(settings, claude_home / "plugins/known_marketplaces.json", claude_home / "plugins/installed_plugins.json")
@@ -352,7 +377,7 @@ class Installer:
                             retained.append(group)
                     data["hooks"][event] = retained
                 self.edit(settings, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
-        if shutil.which("codex"):
+        if self.only is None and shutil.which("codex"):
             print("== Codex")
             config = Path(self.environment.get("CODEX_HOME", str(self.home / ".codex"))) / "config.toml"
             self.before_cli(config)
@@ -364,14 +389,31 @@ class Installer:
             self.mcp_cli("codex")
             self.edit(config, enable_codex_hooks(config.read_text() if config.exists() else ""))
             print("  新或更新的 hook 定义需在新会话中按 Codex 提示审阅并信任，之后自动读写才生效。")
-        for cli in ("coco", "traecli"):
+        for cli in ("traecli", "traex", "coco"):
             if shutil.which(cli):
                 print("== " + cli)
-                trae = Path(self.environment.get("TRAECLI_HOME", self.environment.get("TRAE_HOME", str(self.home / ".trae"))))
-                self.before_cli(trae / "traecli.toml")
+                shared = Path(self.environment.get("TRAE_HOME", str(self.home / ".trae"))).expanduser()
+                runtime = Path(self.environment.get("TRAECLI_HOME", str(shared / "cli"))).expanduser()
+                self.before_cli(shared / "traecli.toml")
                 self.mcp_cli(cli)
-                self.rules(trae / "AGENTS.md")
+                self.rules(shared / "AGENTS.md")
+                # Old Coco has different hook/storage contracts. Do not silently
+                # claim L3/L4 support there; keep its existing MCP + rules path.
+                version = self.run([cli, "--version"], capture=True)
+                match = re.search(r"(?:traecli|traex)\s+(\d+)\.(\d+)\.(\d+)", version, re.I)
+                if self.dry or (match and tuple(map(int, match.groups())) >= (0, 209, 1)):
+                    path = runtime / "hooks.json"
+                    self.edit(path, trae_hooks(path.read_text() if path.exists() else "", self.hook, runtime))
+                    print("  TraeX L3/L4 已配置；新会话在 /hooks 审阅并信任 EverOS 当前定义后生效。")
+                else:
+                    print("  此宿主仅配置 MCP + 规则；L3/L4 需要 TraeX >= 0.209.1。")
                 break
+        else:
+            if self.only == "trae":
+                raise ValueError("未找到 traecli、traex 或 coco")
+        if self.only == "trae":
+            self.finish()
+            return
         print("== 其他 MCP 客户端")
         process = subprocess.run(["ps", "-axo", "command"], text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         if "Claude.app/Contents/MacOS/Claude" in process.stdout:
@@ -397,22 +439,26 @@ class Installer:
             desktop_home = Path(os.environ.get("EVEROS_KIMI_DESKTOP_HOME", str(desktop.parent / "home")))
             self.mcp_json(desktop_home / "mcp.json", create=True)
             self.edit(desktop, kimi_hooks(desktop.read_text(), self.hook, desktop=True))
+        self.finish()
+
+    def finish(self):
         print("== 自检")
         self.run([sys.executable, self.hook, "--doctor"])
         if self.dry:
             print("预览完成；未写配置、安装插件或执行 doctor。")
         else:
-            print("接线与自检完成。请在新会话验证；Codex hook 仍需按宿主提示审阅并信任。")
+            print("接线与自检完成。请在新会话验证；新或更新的 hook 需按宿主提示审阅并信任。")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--only", choices=["trae"], help="只刷新 TraeX，不改其他宿主")
     args = parser.parse_args()
     if sys.version_info < (3, 9):
         parser.error("需要 python3 >= 3.9")
     try:
-        Installer(Path(__file__).resolve().parents[1], args.dry_run).install()
+        Installer(Path(__file__).resolve().parents[1], args.dry_run, args.only).install()
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         print("安装未完成：{}".format(error), file=sys.stderr)
         return 1
