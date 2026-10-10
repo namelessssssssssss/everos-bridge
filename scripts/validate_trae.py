@@ -71,6 +71,7 @@ def validate(cli, root, home_workspace=False):
         path.mkdir(parents=True, exist_ok=True)
     calls, model_requests, collected = [], [], []
     condition = threading.Condition()
+    flushed = threading.Event()
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
@@ -114,6 +115,9 @@ def validate(cli, root, home_workspace=False):
             self.send_header("Content-Length", str(len(raw)))
             self.end_headers()
             self.wfile.write(raw)
+            self.wfile.flush()
+            if self.path.endswith("/memory/flush"):
+                flushed.set()
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -189,13 +193,16 @@ trust_level = "trusted"
             proc = subprocess.run(command, env=env, stdout=out, stderr=err, timeout=60)
         assert proc.returncode == 0, f"TraeX exited {proc.returncode}; see {root / 'exec.log'}"
         assert model_requests, "Local model endpoint was not called"
-        prompt = json.dumps(model_requests[0], ensure_ascii=False)
-        assert "TRAEX_PROFILE_PROBE" in prompt, "SessionStart profile did not reach model"
+        # TraeX may race an auxiliary title request ahead of the dialogue call.
+        prompts = [json.dumps(request, ensure_ascii=False) for request in model_requests]
+        prompt = next((p for p in prompts if "TRAEX_PROFILE_PROBE" in p and "TRAEX_SMOKE_QUESTION" in p), "")
+        assert prompt, "SessionStart profile did not reach model"
         assert "TRAEX_RECALL_PROBE" in prompt, "UserPromptSubmit recall did not reach model"
         assert prompt.count("TRAEX_PROFILE_PROBE") == 1, "Profile injected more than once"
         assert prompt.count("TRAEX_RECALL_PROBE") == 1, "Recall injected more than once"
         with condition:
             condition.wait_for(lambda: any("TRAEX_SMOKE_REPLY" in m["content"] for m in collected), timeout=20)
+        assert flushed.wait(timeout=10), "SessionEnd did not flush the saved turn"
         assert [m["role"] for m in collected] == ["user", "assistant"], collected
         assert collected[0]["content"].startswith("TRAEX_SMOKE_QUESTION"), collected
         assert collected[1]["content"] == "TRAEX_SMOKE_REPLY", collected

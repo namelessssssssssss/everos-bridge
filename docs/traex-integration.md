@@ -1,6 +1,6 @@
 # TraeX L3 / L4 接入与验证
 
-Bridge 0.4.0 支持 TraeX 0.209.1 及兼容版本。2026-10-10 在 macOS arm64 上验证，
+Bridge 0.5.0 支持 TraeX 0.209.1 及兼容版本。2026-10-10 在 macOS arm64 上验证，
 同时保留主干已有的 MiMoCode 和 Kimi 接入能力。
 
 ## 接入契约
@@ -60,10 +60,15 @@ python3 scripts/validate_trae.py --home-workspace --out /tmp/everos-traex-home-v
 
 2026-10-10 已验证：
 
+- 离线回归：135 项通过，包含主干 MiMoCode、Kimi 和其他宿主的既有用例。
 - 普通工作区：SessionStart / UserPromptSubmit / Stop / SessionEnd 均触发；模型收到画像与召回，自动采集 user + assistant。
 - 主目录工作区：四类事件各触发两次；模型仍只收到一份画像和召回，只有一次 add、一次 flush。
 - 本机已安装 hook：六个定义 enabled + trusted；保留其他信任记录，doctor 各项 OK。
 - 真实 Cloud 初次验收：Stop 写入 2 条消息并返回 extracted；SessionEnd 返回 no_extraction，pending=false。回读 episode `6aca30c10d4f95c677fed139`，主题「TraeX L3/L4 自动采集验收与 hook 链路验证」。
+- 整合主干后的 0.5.0 再验收：episode `6aca337488b86894f92bddb0`，session `tx_20261010_workspace_01a125d8-e610-7ea2-a052-776210eeb8c1`，同样自动写入 user/assistant 两条并成功回读；使用完整 UUID 隔离会话。
+
+本机 TraeX 的 MCP / hooks 当前指向独立检出目录 `~/.everos-bridge-traex`，六个定义均已信任；
+此路径避免其他宿主更新 `~/.everos-bridge` 时切换掉待合并实现。MR 合并后可从主干重新运行安装器迁回。
 
 Cloud 验收单独运行，沿用本机已安装且信任的 hook，用环境变量隔离账本，以本地固定模型
 避免依赖远端模型服务。它是真实写入，与仓库提供的离线验证脚本分开。
