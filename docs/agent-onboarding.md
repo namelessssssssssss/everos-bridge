@@ -61,6 +61,7 @@
 | Codex | `codex mcp add`（绝对路径） | `~/.codex/AGENTS.md` | 同 Claude Code（Codex 也会设置 `CLAUDE_PLUGIN_ROOT`） | Stop，读 rollout JSONL（`response_item`） | 插件是拷贝安装；hooks.json 必须放在 `hooks/` 下；需要 `[features] hooks = true`，并审阅、信任当前 hook 定义 |
 | Kimi Code | `~/.kimi-code/mcp.json` | — （没有 config.toml 时安装脚本会新建） | 只有 UserPromptSubmit 能注入，输出纯文本；画像放到首条提问 | Stop，按 session_id 找 `wire.jsonl` | `[[hooks]]` 只允许 event / matcher / command / timeout 四个字段 |
 | Kimi Work 桌面端（Kimi.app） | 内嵌 home 的 `mcp.json` | —（指令层由桌面端 skill 承担） | 同 Kimi Code（输出纯文本，画像放首条提问） | Stop，按 session_id 先查 `session_index.jsonl` 再找 `wire.jsonl` | 内嵌 kimi-code 0.15.7；`config.toml` 随 App 升级重写，丢了重跑 install.sh；hook 在会话启动时加载，改配置要新开会话；`ctitle-*` 标题侧会话要排除；用户消息带 `<meta>` 前导脚手架要剥掉；hook 命令经 shell 执行，用 `EVEROS_HOST=kimi_desktop` 指定宿主 |
+| MiMoCode / MiMo Desktop | `~/.config/mimocode/mimocode.jsonc` 的 `mcp.everos` | 同文件 `instructions` → `everos-rules.md` | Plugin `chat.message` + `experimental.chat.system.transform`（画像）→ synthetic text part | Plugin `session.post`，trajectory 内存直传 `hook.py --mimo-write` | 无 hooks.json；L3/L4 走 `@mimo-ai/plugin` 的 `session.*` / `chat.message`；MCP timeout 需 ≥50s；配置变更新会话生效；session 前缀 `mc_` |
 | TraeCode CLI（coco） | `coco mcp add` | `~/.trae/AGENTS.md`（安装脚本写入规则块） | 未接（有 hook，待按清单评估） | 未接 | 和 Codex 同源；2026-10-08 实测只靠规则加 MCP，就能在每条提问前自己检索 |
 | Claude Desktop / Cowork | `claude_desktop_config.json`（App 退出时写，或在 App 设置里加） | claude.ai 上的 skill | — | — | App 运行时会覆盖外部改动；Cowork 靠 skill |
 | Cursor、Gemini CLI | `mcp.json` / `settings.json` | `~/.gemini/GEMINI.md` | — | — | 只有 MCP |

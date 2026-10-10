@@ -15,6 +15,7 @@
 | Codex CLI / App | 插件（hook）+ MCP | ✅ | ✅ | ✅ | ✅ |
 | Kimi Code | config.toml hook + MCP | ✅（首条提问时注入） | ✅ | ✅ | ✅ |
 | Kimi Work 桌面端（Kimi.app） | runtime config.toml hook + MCP | ✅（首条提问时注入） | ✅ | ✅ | ✅ |
+| MiMoCode / MiMo Desktop | Plugin API（L3/L4）+ MCP + instructions | ✅（首条提问注入画像） | ✅ | ✅ | ✅ |
 | TraeCode CLI（coco）、Gemini CLI | MCP + 全局规则文件 | 规则要求模型自己调用（coco 已实测） | 同左 | — | ✅ |
 | Claude Desktop（含 Cowork）、Cursor | MCP | 由模型按说明调用 | 由模型按说明调用 | — | ✅ |
 | Claude Code on the web（云端） | setup script + 仓库级 hook + 网络密钥 | ✅ | ✅ | ✅ | ✅ |
@@ -94,12 +95,17 @@ plugin/                           Claude Code 与 Codex 共用的插件目录
   skills/everos-memory/SKILL.md   通用 skill（Agent Skills 格式）
   rules/everos-rules.md           写进只有 MCP 的 agent 全局指令文件的规则块
   everos/core.py                  核心：v2 读写（含 v1 过渡）、各宿主会话记录解析、补落盘、本地记忆同步
-  everos/hook.py                  hook 入口与命令行：--doctor / --dry-run / --sweep / --sync-localmem
+  everos/hook.py                  hook 入口与命令行：--doctor / --dry-run / --mimo-recall / --mimo-write / --sweep / --sync-localmem
   everos/mcp_server.py            stdio MCP 服务：6 个 memory_* 工具
+  mimo/everos.mjs                 MiMoCode Plugin API：L3 注入 + L4 trajectory 入库
 .claude-plugin/marketplace.json   Claude Code 插件市场
 .agents/plugins/marketplace.json  Codex 插件市场
 cloud/                            云端 setup script 与仓库级配置片段
 ```
+
+## MiMoCode / MiMo Desktop
+
+不走 hooks.json，用 `@mimo-ai/plugin` 的生命周期钩子：`chat.message` / `experimental.chat.system.transform` 做 L3 注入，`session.post` 把 `trajectory` 交给 `hook.py --mimo-write` 做 L4。安装器会合并 `~/.config/mimocode/mimocode.jsonc` 的 `mcp` / `instructions` / `plugin`。MCP 的 `timeout` 需 ≥ 50000，否则深检索会被默认 5 秒截断。配置与插件变更在新会话生效。
 
 ## 配置
 
