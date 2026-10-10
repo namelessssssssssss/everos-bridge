@@ -383,13 +383,23 @@ class Installer:
         self.mcp_json(self.home / ".gemini/settings.json")
         if shutil.which("gemini"):
             self.rules(self.home / ".gemini/GEMINI.md")
-        if shutil.which("kimi"):
+        kimi_home = Path(self.environment.get("KIMI_CODE_HOME", str(self.home / ".kimi-code")))
+        kimi_cli = shutil.which("kimi")
+        if not kimi_cli:
+            # kimi 官方安装器把 CLI 放在 ~/.kimi-code/bin，不一定加过 PATH；
+            # 只按 PATH 探测会把已安装的宿主静默漏掉。
+            fallback = kimi_home / "bin" / "kimi"
+            if fallback.is_file() and os.access(fallback, os.X_OK):
+                kimi_cli = str(fallback)
+        if kimi_cli:
             print("== Kimi Code")
-            kimi = Path(self.environment.get("KIMI_CODE_HOME", str(self.home / ".kimi-code")))
-            self.mcp_json(kimi / "mcp.json", create=True)
-            config = kimi / "config.toml"
+            self.mcp_json(kimi_home / "mcp.json", create=True)
+            config = kimi_home / "config.toml"
             self.edit(config, kimi_hooks(config.read_text() if config.exists() else "", self.hook))
-            self.run(["kimi", "doctor"])
+            self.run([kimi_cli, "doctor"])
+        elif kimi_home.is_dir():
+            print("== Kimi Code（跳过：{} 已存在但找不到可执行的 kimi 命令；".format(kimi_home))
+            print("  请修复安装或把 {} 加入 PATH 后重跑 install.sh）".format(kimi_home / "bin"))
         default_runtime = self.home / "Library/Application Support/kimi-desktop/daimon-share/daimon/runtime/kimi-code"
         desktop = Path(os.environ.get("EVEROS_KIMI_DESKTOP_CONFIG", str(default_runtime / "config.toml")))
         if desktop.exists():
