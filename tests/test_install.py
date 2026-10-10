@@ -85,6 +85,9 @@ class InstallerTests(unittest.TestCase):
         shutil.copy2(ROOT / "install.sh", self.repo / "install.sh")
         shutil.copy2(ROOT / "scripts/install_config.py", self.repo / "scripts/install_config.py")
         (self.repo / "plugin/rules/everos-rules.md").write_text("每条提问检索；每轮对话入库。\n")
+        (self.repo / "plugin/skills/everos-memory").mkdir(parents=True)
+        (self.repo / "plugin/skills/everos-memory/SKILL.md").write_text("repo skill v1\n")
+        (self.repo / "PROTOCOL.md").write_text("# 协议\n")
         (self.repo / "plugin/everos/mcp_server.py").write_text("")
         (self.repo / "plugin/everos/hook.py").write_text(
             "import os, sys\n"
@@ -452,6 +455,63 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(before, after)
         self.assertEqual(self.calls(), [["ps", "-axo", "command"]])
         self.assertIn("未写配置、安装插件或执行 doctor", result.stdout)
+
+    DESKTOP_CONFIG = "Library/Application Support/kimi-desktop/daimon-share/daimon/runtime/kimi-code/config.toml"
+    DAIMON_SKILL = "Library/Application Support/kimi-desktop/daimon-share/daimon/skills/everos-memory/SKILL.md"
+
+    def desktop_fixture(self):
+        config = self.put(self.DESKTOP_CONFIG, 'model = "keep"\n')
+        (self.home / "Library/Application Support/kimi-desktop/daimon-share/daimon/skills").mkdir(parents=True)
+        return config
+
+    def test_daimon_skill_installed_then_rerun_is_noop(self):
+        self.desktop_fixture()
+        result = self.run_install()
+        target = self.home / self.DAIMON_SKILL
+        self.assertEqual(target.read_text(), "repo skill v1\n")
+        self.assertIn("已安装 everos-memory skill", result.stdout)
+        result = self.run_install()
+        self.assertIn("daimon skill everos-memory 已是最新", result.stdout)
+        self.assertEqual(list(target.parent.glob("SKILL.md.bak-everos-*")), [])
+
+    def test_daimon_skill_repo_upgrade_fast_forwards_with_backup(self):
+        self.desktop_fixture()
+        self.run_install()
+        (self.repo / "plugin/skills/everos-memory/SKILL.md").write_text("repo skill v2\n")
+        result = self.run_install()
+        target = self.home / self.DAIMON_SKILL
+        self.assertEqual(target.read_text(), "repo skill v2\n")
+        self.assertIn("仓库版 skill 有更新", result.stdout)
+        backups = list(target.parent.glob("SKILL.md.bak-everos-*"))
+        self.assertEqual([path.read_text() for path in backups], ["repo skill v1\n"])
+
+    def test_daimon_skill_manual_edit_is_reported_and_replaced(self):
+        self.desktop_fixture()
+        self.run_install()
+        target = self.home / self.DAIMON_SKILL
+        target.write_text("hand edited\n")
+        result = self.run_install()
+        self.assertIn("被手改过", result.stdout)
+        self.assertEqual(target.read_text(), "repo skill v1\n")
+        backups = list(target.parent.glob("SKILL.md.bak-everos-*"))
+        self.assertEqual([path.read_text() for path in backups], ["hand edited\n"])
+
+    def test_protocol_symlink_created_healed_and_regular_file_backed_up(self):
+        link = self.home / ".everos/PROTOCOL.md"
+        self.run_install()
+        self.assertEqual(link.read_text(), "# 协议\n")
+        # 死链或指向别处：重跑自愈
+        link.unlink()
+        link.symlink_to("/nonexistent/PROTOCOL.md")
+        self.run_install()
+        self.assertEqual(link.read_text(), "# 协议\n")
+        # 普通文件：备份后替换为软链
+        link.unlink()
+        link.write_text("stale copy\n")
+        self.run_install()
+        self.assertEqual(link.read_text(), "# 协议\n")
+        backups = [path for path in link.parent.glob("PROTOCOL.md.bak-everos-*")]
+        self.assertEqual([path.read_text() for path in backups], ["stale copy\n"])
 
 
 def shlex_split(command):
