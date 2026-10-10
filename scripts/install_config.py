@@ -4,6 +4,7 @@
 import argparse
 from contextlib import contextmanager
 import getpass
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -291,6 +292,63 @@ class Installer:
         text = pattern.sub(lambda _: block, old) if pattern.search(old) else (old.rstrip() + "\n\n" + block + "\n").lstrip()
         self.edit(path, text)
 
+    def protocol_link(self):
+        """~/.everos/PROTOCOL.md always points at the repo's PROTOCOL.md, wherever the clone lives."""
+        link = self.everos / "PROTOCOL.md"
+        target = self.repo / "PROTOCOL.md"
+        if link.is_symlink():
+            try:
+                if link.resolve() == target:
+                    return
+            except OSError:
+                pass
+        if self.dry:
+            print("  [dry-run] 把 {} 指向 {}".format(link, target))
+            return
+        self.everos.mkdir(parents=True, exist_ok=True)
+        if link.is_symlink() or link.exists():
+            backup(link)
+            link.unlink()
+        link.symlink_to(target)
+        print("  已把 {} 指向仓库副本（{}）".format(link, target))
+
+    def sync_daimon_skill(self, desktop):
+        """Keep the daimon-managed everos-memory skill identical to the repo version.
+
+        Three-way check against the hash recorded at the last sync: identical is a
+        no-op, repo upgrade is a fast-forward, anything else means the daimon copy
+        was edited out-of-band and is overwritten loudly (with backup).
+        """
+        skills_root = desktop.parents[2] / "skills"
+        if not skills_root.is_dir():
+            return
+        source = self.repo / "plugin/skills/everos-memory/SKILL.md"
+        target = skills_root / "everos-memory/SKILL.md"
+        marker = self.everos / "state/install/everos-memory-daimon.sha256"
+        text = source.read_text()
+        digest = hashlib.sha256(text.encode()).hexdigest()
+        old = target.read_text() if target.exists() else None
+        old_digest = hashlib.sha256(old.encode()).hexdigest() if old is not None else None
+        last = marker.read_text().strip() if marker.exists() else None
+        if old_digest == digest:
+            print("  daimon skill everos-memory 已是最新")
+        elif old is None:
+            self.edit(target, text)
+            if not self.dry:
+                print("  已安装 everos-memory skill 到 " + str(target))
+        elif last == old_digest:
+            self.edit(target, text)
+            if not self.dry:
+                print("  仓库版 skill 有更新，已同步到 " + str(target))
+        else:
+            note = "daimon 副本与仓库版不一致且不是上次同步的内容（被手改过或为历史旧版）"
+            print(("  [dry-run] 注意：" + note + "，将备份并覆盖：" if self.dry
+                   else "  注意：" + note + "，已备份并覆盖：") + str(target))
+            self.edit(target, text)
+        if not self.dry:
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text(digest + "\n")
+
     def marketplace(self, cli):
         if self.dry:
             print("  [dry-run] 检查并迁移 {} 的 everos-bridge 市场到 {}".format(cli, self.repo))
@@ -330,6 +388,7 @@ class Installer:
 
     def install(self):
         self.config()
+        self.protocol_link()
         claude_home = Path(self.environment.get("CLAUDE_CONFIG_DIR", str(self.home / ".claude")))
         if shutil.which("claude"):
             print("== Claude Code")
@@ -397,6 +456,7 @@ class Installer:
             desktop_home = Path(os.environ.get("EVEROS_KIMI_DESKTOP_HOME", str(desktop.parent / "home")))
             self.mcp_json(desktop_home / "mcp.json", create=True)
             self.edit(desktop, kimi_hooks(desktop.read_text(), self.hook, desktop=True))
+            self.sync_daimon_skill(desktop)
         print("== 自检")
         self.run([sys.executable, self.hook, "--doctor"])
         if self.dry:
