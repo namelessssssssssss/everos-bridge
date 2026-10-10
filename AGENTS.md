@@ -19,6 +19,7 @@
    - 仓库是私有的，网页链接和 raw 链接都读不到，直接用 gh 拉取：`gh repo clone namelessssssssssss/everos-bridge ~/.everos-bridge`；
    - `gh auth status` 显示未登录时，请用户先执行 `gh auth login`；
    - 已经拉过的，执行 `git -C ~/.everos-bridge pull`；如果报 `could not read Username`，先执行 `gh auth setup-git`。
+   - 仓库不在默认路径也可以（例如 `~/.everos/source`）：`install.sh` 以自身所在路径为准，直接在原地 pull 后重跑即可，不必搬家。
 2. **配置**：检查环境变量或 `~/.everos/config.env` 里是否有 `EVEROS_USER_ID` 和 `EVEROS_API_KEY`。
    - 没有就停下来问用户，不要猜，也不要去别处搜。
    - 推荐让用户自己写这个文件（权限 0600），key 就不会出现在聊天记录里。模板如下：
