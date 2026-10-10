@@ -38,6 +38,8 @@ python3 ~/.everos-bridge/plugin/everos/hook.py --doctor
 
 更新时：先 `git -C ~/.everos-bridge pull`，再重跑 `install.sh`。Claude Code 直接从本地 clone 加载插件；Codex 是拷贝安装，所以要重跑。Kimi Work 桌面端的 `config.toml` 会被 App 升级重写，升级后同样重跑 `install.sh` 恢复。
 
+仓库不强制放在 `~/.everos-bridge`：`install.sh` 以自身所在路径为准，从任何 clone 位置运行都可以；它会把 `PROTOCOL.md` 软链到 `~/.everos/PROTOCOL.md` 作为稳定入口，并同步 Kimi Work 桌面端的 daimon skill（`skills/everos-memory`）。
+
 ## 云端（Claude Code on the web）
 
 云端会话不装插件，也不读 `~/.claude`，要单独接：
@@ -55,7 +57,7 @@ AGENTS.md / CLAUDE.md             Agent 入口（CLAUDE.md 引用 AGENTS.md）
 PROTOCOL.md                       读写规则（唯一依据）
 docs/methodology.md               方法论：原则、决策记录、已知坑、演进路线
 docs/agent-onboarding.md          新 Agent 接入：自查清单、实现步骤、验证清单、已接入宿主速查
-install.sh                        检测本机 agent 并逐个接线（改动前备份，幂等；支持非交互）
+install.sh                        检测本机 agent 并逐个接线（改动前备份，幂等；支持非交互）；同步 Kimi Work 桌面端 daimon skill，并把 PROTOCOL.md 软链进 ~/.everos/
 plugin/                           Claude Code 与 Codex 共用的插件目录
   .claude-plugin/plugin.json      Claude Code 清单（MCP 声明在 claude-mcp.json）
   .codex-plugin/plugin.json       Codex 清单（Codex 的 MCP 由 install.sh 用绝对路径写进 config.toml）

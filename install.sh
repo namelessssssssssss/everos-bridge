@@ -51,6 +51,13 @@ else
   say "  已写入 ${HOME_DIR}/config.env"
 fi
 
+# 1b. PROTOCOL.md 稳定入口：无论仓库 clone 在哪个路径，$EVEROS_HOME/PROTOCOL.md 都指向仓库里的唯一依据
+if [ "$(readlink "${HOME_DIR}/PROTOCOL.md" 2>/dev/null || true)" != "$REPO/PROTOCOL.md" ]; then
+  run mkdir -p "${HOME_DIR}"
+  run ln -sfn "$REPO/PROTOCOL.md" "${HOME_DIR}/PROTOCOL.md"
+  say "  已把 ${HOME_DIR}/PROTOCOL.md 指向仓库副本（$REPO/PROTOCOL.md）"
+fi
+
 # JSON 配置合并：mcpServers.everos（Claude Desktop / Cursor / Gemini 通用格式）
 merge_mcp_json() {
   f="$1"
@@ -197,6 +204,19 @@ if [ -f "$DKC" ]; then
       say "  已在 $DKC 追加 4 条 [[hooks]]（EVEROS_HOST=kimi_desktop）"
     else
       say "  [dry-run] 在 $DKC 追加 UserPromptSubmit / Stop / PreCompact / SessionEnd 的 [[hooks]]"
+    fi
+  fi
+  # 同步 daimon 全局 skill：Kimi Work 加载的 everos-memory 必须与仓库版一致，内容相同则跳过
+  DAIMON_DIR="$(dirname "$DKC")/../.."
+  DSKILL="$DAIMON_DIR/skills/everos-memory/SKILL.md"
+  if [ -d "$DAIMON_DIR/skills" ]; then
+    if [ -f "$DSKILL" ] && cmp -s "$REPO/plugin/skills/everos-memory/SKILL.md" "$DSKILL"; then
+      say "  daimon skill everos-memory 已是最新"
+    else
+      if [ -f "$DSKILL" ]; then run cp -p "$DSKILL" "$DSKILL.bak-everos-$STAMP"; fi
+      run mkdir -p "$DAIMON_DIR/skills/everos-memory"
+      run cp "$REPO/plugin/skills/everos-memory/SKILL.md" "$DSKILL"
+      say "  已同步 everos-memory skill 到 $DSKILL"
     fi
   fi
 fi
