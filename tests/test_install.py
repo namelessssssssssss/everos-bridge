@@ -417,6 +417,33 @@ class InstallerTests(unittest.TestCase):
         self.run_install(expect=1)
         self.assertNotIn(["hook-doctor"], self.calls())
 
+    def test_kimi_cli_falls_back_to_kimi_code_home_bin(self):
+        # kimi 不在 PATH，但官方默认位置 ~/.kimi-code/bin/kimi 存在且可执行：
+        # 安装不应静默跳过，doctor 用绝对路径调用。
+        fallback = self.put(".kimi-code/bin/kimi", "#!" + sys.executable + "\n" + FAKE_CLI)
+        fallback.chmod(0o755)
+        result = self.run_install()
+        self.assertIn("== Kimi Code", result.stdout)
+        self.assertIn(["kimi", "doctor"], self.calls())
+        config = (self.home / ".kimi-code/config.toml").read_text()
+        self.assertIn("everos/hook.py", config)
+        mcp = json.loads((self.home / ".kimi-code/mcp.json").read_text())
+        self.assertEqual(mcp["mcpServers"]["everos"]["args"], [str(self.repo / "plugin/everos/mcp_server.py")])
+
+    def test_kimi_home_without_executable_cli_warns_and_skips(self):
+        # ~/.kimi-code 存在但没有任何可执行的 kimi：给出明确提示而不是静默跳过。
+        original = 'model = "keep"\n'
+        path = self.put(".kimi-code/config.toml", original)
+        result = self.run_install()
+        self.assertIn("跳过", result.stdout)
+        self.assertEqual(path.read_text(), original)
+        self.assertFalse((self.home / ".kimi-code/mcp.json").exists())
+
+    def test_kimi_absent_host_stays_silent(self):
+        # 完全没装 kimi 的机器与其他未装宿主一致：安静跳过，不刷警告。
+        result = self.run_install()
+        self.assertNotIn("Kimi Code", result.stdout)
+
     def test_dry_run_has_no_writes_cli_installs_or_doctor_calls(self):
         for name in ("codex", "claude", "coco", "kimi", "gemini"):
             self.cli(name)

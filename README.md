@@ -52,6 +52,8 @@ python3 ~/.everos-bridge/plugin/everos/hook.py --doctor
 
 仓库不强制放在 `~/.everos-bridge`：`install.sh` 以自身所在路径为准，从任何 clone 位置运行都可以；它会把 `PROTOCOL.md` 软链到 `~/.everos/PROTOCOL.md` 作为稳定入口，并同步 Kimi Work 桌面端的 daimon skill（`skills/everos-memory`）。
 
+`kimi` 不在 PATH 时，安装脚本会自动探测默认安装位置 `~/.kimi-code/bin/kimi`；`~/.kimi-code` 存在但找不到可执行的 kimi 时会打印明确的跳过提示，不再静默漏装。
+
 Codex 插件安装或更新后，还需在新会话中审阅并信任 hook 的当前定义，自动注入和采集才会执行。启用插件与 MCP 可连接本身不能证明 hook 已生效。
 
 `install.sh --dry-run` 只展示接线动作，不改配置、不执行联网自检。正常安装先备份配置再修改；子命令或自检失败会返回非零。需要暂停所有入库时设置 `EVEROS_WRITE=0`，它同时约束自动采集、MCP 写工具、画像编辑与 flush。
