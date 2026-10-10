@@ -19,7 +19,19 @@
 | Claude Desktop（含 Cowork）、Cursor | MCP | 由模型按说明调用 | 由模型按说明调用 | — | ✅ |
 | Claude Code on the web（云端） | setup script + 仓库级 hook + 网络密钥 | ✅ | ✅ | ✅ | ✅ |
 
-所有代码都是纯 Python 标准库，不用装任何依赖；任何异常都放行，不会卡住 agent。接口用 EverOS v2，v1 旧库在过渡期只读（`EVEROS_READ_V1=1`）。
+Python 代码只用标准库，不用安装依赖；运行期 hook 失败放行，MCP 和安装器会明确报告失败。接口用 EverOS v2，v1 旧库在过渡期合并读取（`EVEROS_READ_V1=1`），做法轨迹仍按协议双写。
+
+## 按次深检索
+
+`memory_search` 默认 `method="hybrid"`。隐含描述或复杂历史问题未被普通召回覆盖时，可显式选择 `agentic`：
+
+```json
+{"query":"写入成功后紧接着抽取却说没有内容，那次问题的根因是什么？","kind":"episodes","top_k":5,"method":"agentic"}
+```
+
+`kind` 仍支持 `all` / `episodes` / `practices`，`top_k` 支持 `-1` 或 `1–100`。agentic 的共同预算为 45 秒，包含按轨道 hybrid 回退；输出会说明失败、超时或空结果时的回退。全部轨道技术失败时工具报错，不伪装成没有记忆。v1 兼容请求始终用 hybrid，v1-only 会提示降级。
+
+agentic 不套用 hybrid 的得分门槛，回退结果恢复对应门槛。每次输出仍限制在 4000 字内；它是按次补查选项，hook 仍用 hybrid 和原预算。插件更新后需重连 MCP 或新开聊天加载新 schema。质量对比见 [调研报告](docs/retrieval-study-2026-10-09.md)。
 
 ## 新设备 / 新工作区
 
@@ -40,6 +52,19 @@ python3 ~/.everos-bridge/plugin/everos/hook.py --doctor
 
 仓库不强制放在 `~/.everos-bridge`：`install.sh` 以自身所在路径为准，从任何 clone 位置运行都可以；它会把 `PROTOCOL.md` 软链到 `~/.everos/PROTOCOL.md` 作为稳定入口，并同步 Kimi Work 桌面端的 daimon skill（`skills/everos-memory`）。
 
+Codex 插件安装或更新后，还需在新会话中审阅并信任 hook 的当前定义，自动注入和采集才会执行。启用插件与 MCP 可连接本身不能证明 hook 已生效。
+
+`install.sh --dry-run` 只展示接线动作，不改配置、不执行联网自检。正常安装先备份配置再修改；子命令或自检失败会返回非零。需要暂停所有入库时设置 `EVEROS_WRITE=0`，它同时约束自动采集、MCP 写工具、画像编辑与 flush。
+
+## 本地回归验证
+
+```bash
+python3 -m unittest discover -s tests -v
+bash -n install.sh
+```
+
+测试使用临时配置、模拟 API 和宿主 CLI，不读取真实凭据，不修改本机 agent 配置，也不写入远端记忆。真实接入仍按 [Agent 接入清单](docs/agent-onboarding.md) 核验新会话注入、MCP 调用和写入回读；账号或 provider 缺少凭据时只说明限制，不能算通过。
+
 ## 云端（Claude Code on the web）
 
 云端会话不装插件，也不读 `~/.claude`，要单独接：
@@ -58,6 +83,8 @@ PROTOCOL.md                       读写规则（唯一依据）
 docs/methodology.md               方法论：原则、决策记录、已知坑、演进路线
 docs/agent-onboarding.md          新 Agent 接入：自查清单、实现步骤、验证清单、已接入宿主速查
 install.sh                        检测本机 agent 并逐个接线（改动前备份，幂等；支持非交互）；同步 Kimi Work 桌面端 daimon skill，并把 PROTOCOL.md 软链进 ~/.everos/
+scripts/install_config.py          安装配置的备份、校验与局部迁移
+tests/                            离线回归测试
 plugin/                           Claude Code 与 Codex 共用的插件目录
   .claude-plugin/plugin.json      Claude Code 清单（MCP 声明在 claude-mcp.json）
   .codex-plugin/plugin.json       Codex 清单（Codex 的 MCP 由 install.sh 用绝对路径写进 config.toml）
