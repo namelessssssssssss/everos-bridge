@@ -14,18 +14,19 @@
 
 ## 1. 接线：谁负责什么
 
-| 能力 | Claude Code / Codex / TraeX | Kimi Code / Kimi Work 桌面端 | 其他 MCP 客户端 |
-| --- | --- | --- | --- |
-| 会话开始读画像 | SessionStart hook 自动注入（压缩后会再注入一次） | 首条提问时一起注入 | 调 `memory_profile` |
-| 每条提问检索 | UserPromptSubmit hook 自动注入 | 同左 | 每条提问先调 `memory_search` |
-| 对话原文入库 | Stop hook 每轮自动写入 | 同左 | 不自动；靠 3.2 的结构化记录 |
-| 结构化记录、做法、改画像 | MCP：`memory_remember` / `memory_record_practice` / `memory_fix_profile` | 同左 | 同左 |
+| 能力 | Claude Code / Codex / TraeX | Kimi Code / Kimi Work 桌面端 | MiMoCode / MiMo Desktop | 其他 MCP 客户端 |
+| --- | --- | --- | --- | --- |
+| 会话开始读画像 | SessionStart hook 自动注入（压缩后会再注入一次） | 首条提问时一起注入 | Plugin `system.transform` / 首条提问注入 | 调 `memory_profile` |
+| 每条提问检索 | UserPromptSubmit hook 自动注入 | 同左 | Plugin `chat.message` 注入 synthetic part | 每条提问先调 `memory_search` |
+| 对话原文入库 | Stop hook 每轮自动写入 | 同左 | Plugin `session.post` → `--mimo-write` | 不自动；靠 3.2 的结构化记录 |
+| 结构化记录、做法、改画像 | MCP：`memory_remember` / `memory_record_practice` / `memory_fix_profile` | 同左 | 同左 | 同左 |
 
-- 代码都在 `plugin/everos/`，纯 Python 标准库：`core.py` 是读写核心，`hook.py` 是 hook 入口和命令行，`mcp_server.py` 是 MCP 服务。
-- session_id：一个 agent 会话对应一个，跨天沿用。Claude Code 用 `cc_<首日>_<标题>_<会话id前8位>`，Codex 用 `cx_…`，TraeX 用 `tx_…`，Kimi Code 用 `km_…`，Kimi Work 桌面端用 `kw_…`。
+- 代码都在 `plugin/everos/`，纯 Python 标准库：`core.py` 是读写核心，`hook.py` 是 hook 入口和命令行，`mcp_server.py` 是 MCP 服务。MiMoCode 的 L3/L4 入口是 `plugin/mimo/everos.mjs`，经 `hook.py --mimo-recall/--mimo-write` 复用同一套读写。
+- session_id：一个 agent 会话对应一个，跨天沿用。Claude Code 用 `cc_<首日>_<标题>_<会话id前8位>`，Codex 用 `cx_…`，Kimi Code 用 `km_…`，Kimi Work 桌面端用 `kw_…`，MiMoCode 用 `mc_…`。TraeX 用 `tx_<首日>_<标题>_<完整会话id>`，避免 UUIDv7 时间前缀相同导致跨会话混写。
 - TraeX ≥ 0.209.1：`SessionStart` / `UserPromptSubmit` 注入，`Stop` 增量采集，`SessionEnd` / `PreCompact` 补写与落盘；`PostCompact` 只标记下轮补读画像。当前注入已存在时，规则不再重复调用 MCP。hook 必须启用且被信任。
 - TraeX 读取原始 rollout 的 `history_mutation` v1 append（兼容旧 `response_item`），只保存用户与助手的文本；用 `content_item_kinds` 区分用户输入与环境/规则/注入，不采集工具镜像或 reasoning。替换/压缩快照不作为新对话重新入库。`transcript_path` 为空时按精确 session_id 只读查索引或匹配 rollout 文件，找不到会记录错误且不推进采集进度。
 - Kimi Work 桌面端：hook 挂在 App 内嵌 runtime 的 `config.toml`（daimon 托管，App 升级会重写，丢了重跑 `install.sh`）；hook 命令带 `EVEROS_HOST=kimi_desktop` 显式指定宿主；`ctitle-*` 标题侧会话不采集。
+- MiMoCode：无 hooks.json，L3/L4 走 Plugin API；轨迹在 `session.post` 内存直传，每轮写完即 flush；配置写 `~/.config/mimocode/mimocode.jsonc`，新会话生效。
 - botmux 转来的飞书消息按 `<sender>` 标注真实发送者：owner 本人（命中 `EVEROS_OWNER_ALIASES`）记为 owner，其他人记为 `feishu_<邮箱前缀>`。
 
 ## 2. 写什么

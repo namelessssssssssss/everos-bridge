@@ -89,6 +89,12 @@ class TraeTests(IsolatedCore):
             self.assertEqual(trae.runtime_home(), (self.root / "shared/cli").resolve())
         self.assertEqual(trae.runtime_home(), self.runtime)
 
+    def test_uuidv7_sessions_with_same_time_prefix_stay_separate(self):
+        first = core.session_name([], "trae", "/workspace", "01a125ce-1111-7000-8000-000000000001")
+        second = core.session_name([], "trae", "/workspace", "01a125ce-1111-7000-8000-000000000002")
+        self.assertNotEqual(first, second)
+        self.assertLess(len(first), 128)
+
     def test_null_transcript_path_resolves_session_and_writes_once(self):
         path = self.rollout([mutation(message("user", "question", ["user.text"]), message("assistant", "answer"))])
         core.write_turns(self.payload())

@@ -11,6 +11,8 @@ fail-open：生命周期事件的异常只记日志并 exit 0，绝不阻塞会�
 手工用法：
   hook.py --doctor                      检查配置、连通性、状态目录
   hook.py --dry-run <transcript.jsonl>  只打印将写入的消息（自动识别 Claude Code / Codex 格式）
+  hook.py --mimo-recall                 MiMoCode L3：stdin 收提问 JSON，stdout 输出注入文本
+  hook.py --mimo-write                  MiMoCode L4：stdin 收轨迹 JSON 并写入 EverOS
   hook.py --sweep                       补 flush 所有待抽取会话并全量同步本地记忆
   hook.py --sync-localmem               只同步 Claude Code 本地记忆
 """
@@ -45,23 +47,17 @@ def emit(event: str, text: str) -> None:
                      ensure_ascii=False))
 
 
-def on_prompt(payload: dict, kimi: bool = False) -> None:
-    """每条提问都检索：v2 用得分门槛过滤，同一会话已注入过的不再重复，总预算与字数有上限。"""
-    sid = str(payload.get("session_id") or "")
-    prompt = str(payload.get("prompt") or "").strip()
-    # 后台任务通知、系统提醒也会触发 UserPromptSubmit，不是用户提问，检索只会带来噪声
-    if not prompt or prompt.startswith(core._SKIP_PREFIX + ("<system-reminder>",)):
-        return
+def build_prompt_blocks(sid: str, prompt: str, *, need_profile: bool = False) -> list[str]:
+    """按提问检索并可选补画像；会话内去重。返回待注入文本块。"""
     state_p = core.RECALL_DIR / f"{sid or 'nosession'}.json"
     st = core.load_state(state_p)
-    first = not st.get("turns")
     budget = core._num("EVEROS_RECALL_TIMEOUT", 18)
     deadline = time.monotonic() + max(0.0, budget)
     chars = int(core._num("EVEROS_RECALL_CHARS", 2000))
     blocks = []
-    need_profile = ((kimi and first) or (HOST_OVERRIDE == "trae" and
-                    (st.get("needs_profile") or not st.get("profile_injected"))))
-    if need_profile:  # Kimi 首轮；TraeX 压缩后或 SessionStart 未成功时，沿用同一总预算
+    need_profile = need_profile or (HOST_OVERRIDE == "trae" and
+                    (st.get("needs_profile") or not st.get("profile_injected")))
+    if need_profile:
         profile = core.profile_text(budget=max(0.0, deadline - time.monotonic()))
         if profile:
             blocks.append(f"【EverOS 用户画像】{HEADER}\n{profile}")
@@ -76,6 +72,21 @@ def on_prompt(payload: dict, kimi: bool = False) -> None:
         seen.update(shown_ids)
     st.update(turns=st.get("turns", 0) + 1, ids=sorted(seen)[-500:])
     core.save_state(state_p, st)
+    return blocks
+
+
+def on_prompt(payload: dict, kimi: bool = False) -> None:
+    """每条提问都检索：v2 用得分门槛过滤，同一会话已注入过的不再重复，总预算与字数有上限。"""
+    sid = str(payload.get("session_id") or "")
+    prompt = str(payload.get("prompt") or "").strip()
+    # 后台任务通知、系统提醒也会触发 UserPromptSubmit，不是用户提问，检索只会带来噪声
+    if not prompt or prompt.startswith(core._SKIP_PREFIX + ("<system-reminder>",)):
+        return
+    state_p = core.RECALL_DIR / f"{sid or 'nosession'}.json"
+    st = core.load_state(state_p)
+    first = not st.get("turns")
+    need_profile = bool(kimi and first)  # Kimi 的 SessionStart 只通知不注入，画像放到首条提问一起给
+    blocks = build_prompt_blocks(sid, prompt, need_profile=need_profile)
     if not blocks:
         return
     if kimi:
@@ -109,6 +120,36 @@ def main() -> int:
             return 0
         if args[:1] == ["--worker"]:
             core.write_turns(json.loads(sys.stdin.read() or "{}"))
+            return 0
+        if args[:1] == ["--mimo-recall"]:
+            # MiMoCode Plugin L3：stdin {"session_id","query","first","profile_only"} → stdout 注入文本
+            data = json.loads(sys.stdin.read() or "{}")
+            if core.cfg().get("EVEROS_INJECT") == "0":
+                return 0
+            sid = str(data.get("session_id") or "")
+            if data.get("profile_only"):
+                state_p = core.RECALL_DIR / f"{sid or 'nosession'}.json"
+                st = core.load_state(state_p)
+                if st.get("profile_injected"):
+                    return 0
+                profile = core.profile_text(budget=core._num("EVEROS_RECALL_TIMEOUT", 18))
+                if profile:
+                    st.update(profile_injected=True, needs_profile=False)
+                    core.save_state(state_p, st)
+                    print(f"【EverOS 用户画像】{HEADER}\n{profile}")
+                return 0
+            prompt = str(data.get("query") or "").strip()
+            if not prompt or prompt.startswith(core._SKIP_PREFIX + ("<system-reminder>",)):
+                return 0
+            blocks = build_prompt_blocks(sid, prompt, need_profile=bool(data.get("first")))
+            if blocks:
+                print("\n\n".join(blocks))
+            return 0
+        if args[:1] == ["--mimo-write"]:
+            # MiMoCode Plugin L4：stdin {"session_id","cwd","title","trajectory"}
+            if core.cfg().get("EVEROS_WRITE") == "0":
+                return 0
+            core.write_mimo_turns(json.loads(sys.stdin.read() or "{}"))
             return 0
 
         raw = sys.stdin.read()

@@ -107,6 +107,8 @@ EverOS 是所有 agent、所有设备共用的记忆主库。
 | TraeX 新 rollout 不再写 response_item | 旧 Codex 解析器返回空消息，安装表面成功但无采集 | 读取 history_mutation v1 append 中的原始 items；不重放 display_completions、event_msg 和 compact 快照 |
 | TraeX 共享目录和运行目录不同 | 把 hook 写到 ~/.trae/hooks.json 可能只在该目录作为项目时生效 | 用户级 hook 写 `$TRAECLI_HOME/hooks.json`，默认 ~/.trae/cli/hooks.json；MCP/规则仍在 `$TRAE_HOME` |
 | TraeX config API 的 keyPath 按点分割 | hook 路径含点时，带引号的 keyPath 仍可能拆错 | 对 `hooks.state` 写完整键对象，并用 hooks/list 回读信任状态；安装器本身不自动信任 |
+| TraeX 主目录重复发现同一 hook | 同一路径同时显示为 user / project，事件触发两次 | 读侧按 session 加锁、按 turn + prompt 去重，SessionStart 同来源两秒内去重；写侧沿用文件锁与偏移 |
+| TraeX UUIDv7 前八位相同 | 一分钟内创建的两个同名工作区会话可能混写 | TraeX 的 EverOS session 保留完整 UUID，其他宿主命名保持兼容 |
 
 ## 演进路线
 

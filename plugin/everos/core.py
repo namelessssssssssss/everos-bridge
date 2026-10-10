@@ -856,6 +856,36 @@ def messages_kimi(entries: list[dict], host: str = "kimi") -> list[dict]:
     return _monotonic(msgs)
 
 
+def messages_mimo(rows: list[dict], host: str = "mimocode") -> list[dict]:
+    """MiMoCode Plugin session.post 的 TrajectoryMessage 切片：用户/助手可见文本，剔除 synthetic 与 reasoning。"""
+    msgs: list[dict] = []
+    for row in rows or []:
+        if not isinstance(row, dict) or row.get("role") not in ("user", "assistant"):
+            continue
+        texts = []
+        for part in row.get("parts") or []:
+            if not isinstance(part, dict) or part.get("type") != "text":
+                continue
+            if part.get("synthetic") or part.get("ignored"):
+                continue
+            text = str(part.get("text") or "").strip()
+            if text:
+                texts.append(text)
+        content = "\n".join(texts).strip()
+        if row.get("role") == "assistant":
+            content = str(row.get("finalText") or content).strip()
+        if not content:
+            continue
+        created = int(row.get("created") or 0) or int((row.get("time") or {}).get("created") or 0)
+        if 0 < created < 10**12:  # 秒级时间戳升到毫秒
+            created *= 1000
+        msgs.append({"role": row["role"],
+                     "sender_id": owner() if row["role"] == "user" else host,
+                     "timestamp": created or ts_ms(None),
+                     "content": clip(content)})
+    return _monotonic(msgs)
+
+
 def session_name(entries: list[dict], host: str, cwd: str, sid: str, title: str = "") -> str:
     first_ts = None
     for o in entries:
@@ -865,8 +895,12 @@ def session_name(entries: list[dict], host: str, cwd: str, sid: str, title: str 
             first_ts = o["timestamp"]
     day = (datetime.fromisoformat(first_ts.replace("Z", "+00:00")).astimezone(CST) if first_ts
            else datetime.now(CST))
-    prefix = {"claude_code": "cc", "codex": "cx", "trae": "tx", "kimi": "km", "kimi_desktop": "kw"}.get(host, slug(host, 12) or "agent")
-    return f"{prefix}_{day:%Y%m%d}_{slug(title or Path(cwd or 'x').name) or 'session'}_{sid[:8]}"
+    prefix = {"claude_code": "cc", "codex": "cx", "trae": "tx", "kimi": "km", "kimi_desktop": "kw",
+              "mimocode": "mc"}.get(host, slug(host, 12) or "agent")
+    # TraeX uses UUIDv7: the first eight characters are a coarse timestamp,
+    # shared by sessions started within about a minute. Keep the complete ID.
+    session_suffix = sid if host == "trae" else sid[:8]
+    return f"{prefix}_{day:%Y%m%d}_{slug(title or Path(cwd or 'x').name) or 'session'}_{session_suffix}"
 
 
 def write_turns(payload: dict) -> None:
@@ -928,6 +962,41 @@ def write_turns(payload: dict) -> None:
                 log(f"{event} flush {st['everos_session_id']} -> {res}")
             except Exception as exc:  # 留给 sweep 补
                 log(f"{event} flush failed {st['everos_session_id']}: {exc!r}")
+    sweep()
+
+
+def write_mimo_turns(payload: dict) -> None:
+    """MiMoCode Plugin session.post：轨迹已在内存，无需 transcript；每轮写完即 flush。"""
+    ensure_writable()
+    sid = str(payload.get("session_id") or "")
+    if not sid:
+        return
+    host = "mimocode"
+    cwd = str(payload.get("cwd") or "")
+    title = str(payload.get("title") or "")
+    msgs = messages_mimo(payload.get("trajectory") or [], host=host)
+    SESS_DIR.mkdir(parents=True, exist_ok=True)
+    sp = SESS_DIR / f"{sid}.json"
+    with open(sp.with_suffix(".lock"), "w") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        st = load_state(sp)
+        if not st.get("everos_session_id"):
+            st.update(claude_session_id=sid, host=host, cwd=cwd,
+                      everos_session_id=session_name([], host, cwd, sid.removeprefix("session_"), title))
+        if msgs:
+            res = post_messages(st["everos_session_id"], msgs)
+            st.update(pending=True, api=version(), last_write_ms=int(time.time() * 1000), last_write_status=res,
+                      writes=st.get("writes", 0) + 1, messages=st.get("messages", 0) + len(msgs))
+            log(f"mimocode add {st['everos_session_id']} +{len(msgs)} -> {res}")
+        save_state(sp, st)
+        if st.get("pending"):
+            try:
+                res = flush(st["everos_session_id"], ver=st.get("api"))
+                st.update(pending=False, last_flush_ms=int(time.time() * 1000), last_flush_status=res)
+                save_state(sp, st)
+                log(f"mimocode flush {st['everos_session_id']} -> {res}")
+            except Exception as exc:
+                log(f"mimocode flush failed {st['everos_session_id']}: {exc!r}")
     sweep()
 
 

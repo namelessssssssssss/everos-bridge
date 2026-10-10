@@ -4,6 +4,7 @@
 import argparse
 from contextlib import contextmanager
 import getpass
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -316,6 +317,138 @@ class Installer:
         text = pattern.sub(lambda _: block, old) if pattern.search(old) else (old.rstrip() + "\n\n" + block + "\n").lstrip()
         self.edit(path, text)
 
+    @staticmethod
+    def strip_jsonc(text):
+        out, i, n = [], 0, len(text)
+        while i < n:
+            ch = text[i]
+            if ch == '"':
+                out.append(ch)
+                i += 1
+                while i < n:
+                    out.append(text[i])
+                    if text[i] == "\\" and i + 1 < n:
+                        out.append(text[i + 1])
+                        i += 2
+                        continue
+                    if text[i] == '"':
+                        i += 1
+                        break
+                    i += 1
+                continue
+            if ch == "/" and i + 1 < n and text[i + 1] == "/":
+                while i < n and text[i] != "\n":
+                    i += 1
+                continue
+            if ch == "/" and i + 1 < n and text[i + 1] == "*":
+                i += 2
+                while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
+                    i += 1
+                i += 2
+                continue
+            out.append(ch)
+            i += 1
+        return "".join(out)
+
+    def mimocode(self):
+        """MiMo Desktop / MiMoCode：MCP + L3/L4 插件 + 指令，写 ~/.config/mimocode/mimocode.jsonc。"""
+        print("== MiMoCode / MiMo Desktop")
+        config_dir = Path(self.environment.get("XDG_CONFIG_HOME") or (self.home / ".config")) / "mimocode"
+        path = config_dir / "mimocode.jsonc"
+        plugin = self.repo / "plugin/mimo/everos.mjs"
+        plugin_url = "file://" + str(plugin).replace(" ", "%20")
+        try:
+            data = json.loads(self.strip_jsonc(path.read_text())) if path.exists() else {}
+        except ValueError:
+            raise ValueError(f"无法解析 {path}；请手工合并 EverOS 的 mcp/plugin/instructions")
+        if not isinstance(data, dict):
+            raise ValueError(f"{path} 顶层必须是对象")
+        data.setdefault("mcp", {})
+        if not isinstance(data["mcp"], dict):
+            raise ValueError(f"{path} 的 mcp 必须是对象")
+        data["mcp"]["everos"] = {
+            "type": "local",
+            "command": ["python3", str(self.mcp)],
+            "timeout": 50000,
+        }
+        rules = str(self.repo / "plugin/rules/everos-rules.md")
+        instructions = data.get("instructions")
+        if not isinstance(instructions, list):
+            instructions = []
+        if rules not in instructions:
+            instructions.append(rules)
+        data["instructions"] = instructions
+        plugins = data.get("plugin")
+        if not isinstance(plugins, list):
+            plugins = []
+        entry = [plugin_url, {"hook": str(self.hook)}]
+        plugins = [p for p in plugins
+                   if not (isinstance(p, str) and "everos.mjs" in p)
+                   and not (isinstance(p, list) and p and "everos.mjs" in str(p[0]))]
+        plugins.append(entry)
+        data["plugin"] = plugins
+        if not self.dry:
+            config_dir.mkdir(parents=True, exist_ok=True)
+        self.edit(path, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+        print("  L3/L4 插件 " + str(plugin) + "；新会话生效。")
+
+    def protocol_link(self):
+        """~/.everos/PROTOCOL.md always points at the repo's PROTOCOL.md, wherever the clone lives."""
+        link = self.everos / "PROTOCOL.md"
+        target = self.repo / "PROTOCOL.md"
+        if link.is_symlink():
+            try:
+                if link.resolve() == target:
+                    return
+            except OSError:
+                pass
+        if self.dry:
+            print("  [dry-run] 把 {} 指向 {}".format(link, target))
+            return
+        self.everos.mkdir(parents=True, exist_ok=True)
+        if link.is_symlink() or link.exists():
+            backup(link)
+            link.unlink()
+        link.symlink_to(target)
+        print("  已把 {} 指向仓库副本（{}）".format(link, target))
+
+    def sync_daimon_skill(self, desktop):
+        """Keep the daimon-managed everos-memory skill identical to the repo version.
+
+        Three-way check against the hash recorded at the last sync: identical is a
+        no-op, repo upgrade is a fast-forward, anything else means the daimon copy
+        was edited out-of-band and is overwritten loudly (with backup).
+        """
+        skills_root = desktop.parents[2] / "skills"
+        if not skills_root.is_dir():
+            return
+        source = self.repo / "plugin/skills/everos-memory/SKILL.md"
+        target = skills_root / "everos-memory/SKILL.md"
+        marker = self.everos / "state/install/everos-memory-daimon.sha256"
+        text = source.read_text()
+        digest = hashlib.sha256(text.encode()).hexdigest()
+        old = target.read_text() if target.exists() else None
+        old_digest = hashlib.sha256(old.encode()).hexdigest() if old is not None else None
+        last = marker.read_text().strip() if marker.exists() else None
+        if old_digest == digest:
+            print("  daimon skill everos-memory 已是最新")
+        elif old is None:
+            self.edit(target, text)
+            if not self.dry:
+                print("  已安装 everos-memory skill 到 " + str(target))
+        elif last == old_digest:
+            self.edit(target, text)
+            if not self.dry:
+                print("  仓库版 skill 有更新，已同步到 " + str(target))
+        else:
+            note = "daimon 副本与仓库版不一致且不是上次同步的内容（被手改过或为历史旧版）"
+            print(("  [dry-run] 注意：" + note + "，将备份并覆盖：" if self.dry
+                   else "  注意：" + note + "，已备份并覆盖：") + str(target))
+            self.edit(target, text)
+        if not self.dry:
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text(digest + "\n")
+
     def marketplace(self, cli):
         if self.dry:
             print("  [dry-run] 检查并迁移 {} 的 everos-bridge 市场到 {}".format(cli, self.repo))
@@ -355,6 +488,7 @@ class Installer:
 
     def install(self):
         self.config()
+        self.protocol_link()
         claude_home = Path(self.environment.get("CLAUDE_CONFIG_DIR", str(self.home / ".claude")))
         if self.only is None and shutil.which("claude"):
             print("== Claude Code")
@@ -425,13 +559,23 @@ class Installer:
         self.mcp_json(self.home / ".gemini/settings.json")
         if shutil.which("gemini"):
             self.rules(self.home / ".gemini/GEMINI.md")
-        if shutil.which("kimi"):
+        kimi_home = Path(self.environment.get("KIMI_CODE_HOME", str(self.home / ".kimi-code")))
+        kimi_cli = shutil.which("kimi")
+        if not kimi_cli:
+            # kimi 官方安装器把 CLI 放在 ~/.kimi-code/bin，不一定加过 PATH；
+            # 只按 PATH 探测会把已安装的宿主静默漏掉。
+            fallback = kimi_home / "bin" / "kimi"
+            if fallback.is_file() and os.access(fallback, os.X_OK):
+                kimi_cli = str(fallback)
+        if kimi_cli:
             print("== Kimi Code")
-            kimi = Path(self.environment.get("KIMI_CODE_HOME", str(self.home / ".kimi-code")))
-            self.mcp_json(kimi / "mcp.json", create=True)
-            config = kimi / "config.toml"
+            self.mcp_json(kimi_home / "mcp.json", create=True)
+            config = kimi_home / "config.toml"
             self.edit(config, kimi_hooks(config.read_text() if config.exists() else "", self.hook))
-            self.run(["kimi", "doctor"])
+            self.run([kimi_cli, "doctor"])
+        elif kimi_home.is_dir():
+            print("== Kimi Code（跳过：{} 已存在但找不到可执行的 kimi 命令；".format(kimi_home))
+            print("  请修复安装或把 {} 加入 PATH 后重跑 install.sh）".format(kimi_home / "bin"))
         default_runtime = self.home / "Library/Application Support/kimi-desktop/daimon-share/daimon/runtime/kimi-code"
         desktop = Path(os.environ.get("EVEROS_KIMI_DESKTOP_CONFIG", str(default_runtime / "config.toml")))
         if desktop.exists():
@@ -439,6 +583,11 @@ class Installer:
             desktop_home = Path(os.environ.get("EVEROS_KIMI_DESKTOP_HOME", str(desktop.parent / "home")))
             self.mcp_json(desktop_home / "mcp.json", create=True)
             self.edit(desktop, kimi_hooks(desktop.read_text(), self.hook, desktop=True))
+            self.sync_daimon_skill(desktop)
+        mimo_cfg = Path(self.environment.get("XDG_CONFIG_HOME") or (self.home / ".config")) / "mimocode" / "mimocode.jsonc"
+        mimo_home = self.home / "Library/Application Support/Xiaomi MiMo"
+        if shutil.which("mimo") or mimo_cfg.exists() or mimo_home.exists():
+            self.mimocode()
         self.finish()
 
     def finish(self):
