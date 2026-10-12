@@ -72,6 +72,7 @@ EverOS 是所有 agent、所有设备共用的记忆主库。
 | 2026-10-09 | 保留 hybrid 默认，不默认开启 LLM rerank 或 agentic | [4 问题、10 请求的小样本](retrieval-study-2026-10-09.md)：rerank 未改变两个做法问题的前 5 条排序；agentic 有根因排名收益，也有超过 18 秒预算和得分门槛不兼容的样本。尚不能证明默认切换更好 |
 | 2026-10-09 | 效果优先，若有显著质量收益可接受稍长检索时间 | owner 明确补充这一取舍；18 秒只作为当前运行值，不能一票否决更好的方法。先扩大固定目标问题的对比，再根据实际命中、噪声和回答质量决定是否放宽预算 |
 | 2026-10-09 | MCP 开放按次 method=agentic，默认保留 hybrid | 9题42次对比中，隐含历史描述出现两轮一致补漏；给深查45秒共同预算并按轨道回退。agentic低分正确结果不能套hybrid门槛，回退hybrid后恢复门槛；升级至0.3.3，旧会话仍保留原缓存 |
+| 2026-10-10 | TraeX 接入 L3/L4，沿用 stdio MCP + 用户级 hook | 0.209.1 已支持完整生命周期；独立适配 history_mutation 和运行目录，正常信任后实测注入/采集，规则只在缺注入时补读 |
 | 2026-10-12 | 提供只读的 `everos search` CLI，复用检索核心，启用严格读错误处理 | 手动检索无需打开 agent；通过复用 v1/v2 合并和 agentic 回退避免两套检索逻辑。成功空结果与断网区分，部分轨道失败明确提示；`install.sh --cli-only` 仅安装入口，不重接宿主 |
 | 2026-10-12 | agentic 默认总预算改为180秒，并开放配置和按次覆盖 | owner反馈45秒经常超时；用EVEROS_AGENTIC_TIMEOUT及MCP timeout / CLI --timeout调整，回退仍共享deadline。Codex/MiMo外层至少配置预算+10秒，避免宿主先截断；hook默认预算保持不变 |
 
@@ -105,6 +106,11 @@ EverOS 是所有 agent、所有设备共用的记忆主库。
 | 桌面端的 ctitle-* 侧会话 | 标题生成也会触发 UserPromptSubmit / Stop，把标题生成提示词当对话入库 | 按 session_id 前缀 `ctitle-` 整体跳过（不检索、不采集） |
 | 桌面端用户消息带 `<meta>` 前导 | 入库的用户原话开头带 `<meta awareness="low" .../>` | `messages_kimi` 解析时剥掉前导 `<meta .../>` |
 | 桌面端 hook payload 没有 client_type | 没法像 Kimi Code CLI 那样靠 `client_type` 识别宿主 | hook 命令带 `EVEROS_HOST=kimi_desktop`（引擎经 shell 执行，环境变量前缀有效）；stdin 字段是 snake_case（引擎自动从驼峰转换） |
+| TraeX 新 rollout 不再写 response_item | 旧 Codex 解析器返回空消息，安装表面成功但无采集 | 读取 history_mutation v1 append 中的原始 items；不重放 display_completions、event_msg 和 compact 快照 |
+| TraeX 共享目录和运行目录不同 | 把 hook 写到 ~/.trae/hooks.json 可能只在该目录作为项目时生效 | 用户级 hook 写 `$TRAECLI_HOME/hooks.json`，默认 ~/.trae/cli/hooks.json；MCP/规则仍在 `$TRAE_HOME` |
+| TraeX config API 的 keyPath 按点分割 | hook 路径含点时，带引号的 keyPath 仍可能拆错 | 对 `hooks.state` 写完整键对象，并用 hooks/list 回读信任状态；安装器本身不自动信任 |
+| TraeX 主目录重复发现同一 hook | 同一路径同时显示为 user / project，事件触发两次 | 读侧按 session 加锁、按 turn + prompt 去重，SessionStart 同来源两秒内去重；写侧沿用文件锁与偏移 |
+| TraeX UUIDv7 前八位相同 | 一分钟内创建的两个同名工作区会话可能混写 | TraeX 的 EverOS session 保留完整 UUID，其他宿主命名保持兼容 |
 
 ## 演进路线
 

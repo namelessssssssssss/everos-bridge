@@ -167,6 +167,7 @@ class MimocodeInstallerTests(IsolatedCore):
         (root / "repo/plugin/rules").mkdir(parents=True)
         (root / "repo/plugin/everos/mcp_server.py").write_text("")
         shutil.copy2(ROOT / "plugin/everos/core.py", root / "repo/plugin/everos/core.py")
+        shutil.copy2(ROOT / "plugin/everos/trae.py", root / "repo/plugin/everos/trae.py")
         (root / "repo/plugin/everos/hook.py").write_text("")
         (root / "repo/plugin/mimo/everos.mjs").write_text("export const server = async () => ({});\n")
         (root / "repo/plugin/rules/everos-rules.md").write_text("rules\n")
