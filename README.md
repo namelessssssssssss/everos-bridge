@@ -22,6 +22,28 @@
 
 Python 代码只用标准库，不用安装依赖；运行期 hook 失败放行，MCP 和安装器会明确报告失败。接口用 EverOS v2，v1 旧库在过渡期合并读取（`EVEROS_READ_V1=1`），做法轨迹仍按协议双写。
 
+## 手动检索 CLI
+
+不打开 agent 也能在终端检索。完整安装会创建 `~/.local/bin/everos`；只需要 CLI 时运行：
+
+```bash
+~/.everos-bridge/install.sh --cli-only
+everos search "之前遇到的记忆抽取问题怎么解决？"
+everos search "排障做法" --kind practices --top-k 10
+everos search "复杂的历史问题" --method agentic
+```
+
+`~/.local/bin` 需在 PATH 中；也可以直接运行 `~/.everos-bridge/bin/everos search "问题"`。入口跟随仓库，不依赖当前目录。`--cli-only --dry-run` 只预览安装；`--cli-only` 不修改凭据或宿主配置，也不调用 API。已有其他文件占用命令路径时会报错并保留原文件。
+
+配置仍从环境变量和 `$EVEROS_HOME/config.env`（默认 `~/.everos/config.env`）读取。检索命令不会写入记忆或更新会话去重账本。
+
+- `--kind all|episodes|practices`：默认 `all`，检索事件和做法。
+- `--top-k N`：默认 `5`；接受 `-1` 或 `1–100`，是每类记忆的上限，合并后可能超过 N。
+- `--method hybrid|agentic`：默认 `hybrid`；复用 MCP 的 v1/v2 合并、agentic 45 秒共同预算与回退。
+- 问题须为 1–500 字。结果采用 MCP 的文本摘要格式，单条最多 260 字、整体约 4000 字；回退或部分失败会明确提示。
+
+退出码：`0` 表示检索完成（包含未命中或部分轨道成功），`1` 表示配置缺失或检索全部失败，`2` 表示参数错误，`130` 表示用户取消。`everos --help` 和 `everos search --help` 无需配置，不调用 API。
+
 ## 按次深检索
 
 `memory_search` 默认 `method="hybrid"`。隐含描述或复杂历史问题未被普通召回覆盖时，可显式选择 `agentic`：
@@ -86,6 +108,7 @@ PROTOCOL.md                       读写规则（唯一依据）
 docs/methodology.md               方法论：原则、决策记录、已知坑、演进路线
 docs/agent-onboarding.md          新 Agent 接入：自查清单、实现步骤、验证清单、已接入宿主速查
 install.sh                        检测本机 agent 并逐个接线（改动前备份，幂等；支持非交互）；同步 Kimi Work 桌面端 daimon skill，并把 PROTOCOL.md 软链进 ~/.everos/
+bin/everos                        手动检索入口；安装到 ~/.local/bin/everos，支持 install.sh --cli-only
 scripts/install_config.py          安装配置的备份、校验与局部迁移
 tests/                            离线回归测试
 plugin/                           Claude Code 与 Codex 共用的插件目录
@@ -97,6 +120,7 @@ plugin/                           Claude Code 与 Codex 共用的插件目录
   everos/core.py                  核心：v2 读写（含 v1 过渡）、各宿主会话记录解析、补落盘、本地记忆同步
   everos/hook.py                  hook 入口与命令行：--doctor / --dry-run / --mimo-recall / --mimo-write / --sweep / --sync-localmem
   everos/mcp_server.py            stdio MCP 服务：6 个 memory_* 工具
+  everos/cli.py                   手动检索 CLI：search（与 MCP 共用配置和检索核心）
   mimo/everos.mjs                 MiMoCode Plugin API：L3 注入 + L4 trajectory 入库
 .claude-plugin/marketplace.json   Claude Code 插件市场
 .agents/plugins/marketplace.json  Codex 插件市场

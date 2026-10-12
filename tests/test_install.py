@@ -84,6 +84,8 @@ class InstallerTests(unittest.TestCase):
         (self.repo / "plugin/rules").mkdir(parents=True)
         shutil.copy2(ROOT / "install.sh", self.repo / "install.sh")
         shutil.copy2(ROOT / "scripts/install_config.py", self.repo / "scripts/install_config.py")
+        (self.repo / "bin").mkdir()
+        shutil.copy2(ROOT / "bin/everos", self.repo / "bin/everos")
         (self.repo / "plugin/rules/everos-rules.md").write_text("每条提问检索；每轮对话入库。\n")
         (self.repo / "plugin/skills/everos-memory").mkdir(parents=True)
         (self.repo / "plugin/skills/everos-memory/SKILL.md").write_text("repo skill v1\n")
@@ -138,6 +140,49 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("缺少 EVEROS_API_KEY", result.stderr)
         self.assertEqual(path.read_text(), "# Empty existing config\n")
         self.assertEqual(self.calls(), [])
+
+    def test_cli_only_installs_idempotently_without_credentials_or_host_calls(self):
+        self.cli("codex")
+        del self.env["EVEROS_USER_ID"]
+        del self.env["EVEROS_API_KEY"]
+        self.env["DOCTOR_EXIT"] = "1"
+        self.run_install("--cli-only")
+        link = self.home / ".local/bin/everos"
+        self.assertTrue(link.is_symlink())
+        self.assertEqual(link.resolve(), self.repo / "bin/everos")
+        before = link.lstat().st_mtime_ns
+        self.run_install("--cli-only")
+        self.assertEqual(link.lstat().st_mtime_ns, before)
+        self.assertFalse((self.home / ".everos").exists())
+        self.assertFalse((self.home / ".codex").exists())
+        self.assertEqual(self.calls(), [])
+
+    def test_cli_only_dry_run_does_not_create_directories(self):
+        result = self.run_install("--cli-only", "--dry-run")
+        self.assertIn("[dry-run]", result.stdout)
+        self.assertEqual(list(self.home.iterdir()), [])
+        self.assertEqual(self.calls(), [])
+
+    def test_cli_install_preserves_conflicting_file_and_broken_link(self):
+        link = self.put(".local/bin/everos", "another command\n")
+        result = self.run_install("--cli-only", expect=1)
+        self.assertIn("未覆盖", result.stderr)
+        self.assertEqual(link.read_text(), "another command\n")
+        link.unlink()
+        link.symlink_to("/nonexistent/another-command")
+        self.run_install("--cli-only", expect=1)
+        self.assertTrue(link.is_symlink())
+        self.assertEqual(os.readlink(link), "/nonexistent/another-command")
+        link.unlink()
+        link.symlink_to("everos")  # Self-loop must report a conflict without a traceback.
+        result = self.run_install("--cli-only", expect=1)
+        self.assertIn("未覆盖", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertEqual(os.readlink(link), "everos")
+
+    def test_full_install_also_installs_cli(self):
+        self.run_install()
+        self.assertEqual((self.home / ".local/bin/everos").resolve(), self.repo / "bin/everos")
 
     def test_config_is_completed_and_permissions_are_0600(self):
         path = self.put(".everos/config.env", "EVEROS_USER_ID=test-owner\nCUSTOM=keep\n")

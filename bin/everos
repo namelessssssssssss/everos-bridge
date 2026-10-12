@@ -1,0 +1,10 @@
+#!/usr/bin/env python3
+"""Run the EverOS CLI from any working directory, including via a symlink."""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "plugin" / "everos"))
+from cli import main
+
+if __name__ == "__main__":
+    sys.exit(main())

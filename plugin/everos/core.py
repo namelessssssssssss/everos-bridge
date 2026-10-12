@@ -296,7 +296,7 @@ def _has_search_hits(name: str, data: dict) -> bool:
 
 def search_items(query: str, top_k: int = 5, kind: str = "all", include_profile: bool = False,
                  budget: float | None = None, v1_episodes: int | None = None,
-                 method: str = "hybrid", notices: list[str] | None = None) -> list[dict]:
+                 method: str = "hybrid", notices: list[str] | None = None, strict: bool = False) -> list[dict]:
     """并行查 v2 用户轨道、v2 agent 轨道、v1 旧库（过渡期），按得分门槛过滤后合并去重。"""
     if type(top_k) is not int or (top_k != -1 and not 1 <= top_k <= 100):
         raise ValueError("top_k must be -1 or in 1..100")
@@ -355,8 +355,13 @@ def search_items(query: str, top_k: int = 5, kind: str = "all", include_profile:
                     notes.append(f"（{labels[name]}的 agentic {reason}，已回退 hybrid。）")
                 else:
                     notes.append(f"（{labels[name]}的 agentic {reason}，hybrid 回退也失败或超时。）")
-    if method == "agentic" and jobs and not results:
+    if (method == "agentic" or strict) and jobs and not results:
         raise APIResponseError("记忆检索失败或超时，未获得任何成功轨道；请重试。")
+    if strict and results:
+        labels = {"v2u": "用户记忆", "v2a": "做法记忆", "v1": "v1 旧库"}
+        missing = [labels[name] for name in jobs if name not in results]
+        if missing:
+            notes.append(f"（{'、'.join(missing)}检索失败或超时，以下仅展示成功轨道的结果。）")
     items = []
     v2u, v2a, v1 = results.get("v2u") or {}, results.get("v2a") or {}, results.get("v1") or {}
     for ep in v2u.get("episodes") or []:
@@ -413,9 +418,9 @@ def format_items(items: list[dict], limit: int = 4000) -> str:
     return format_items_with_ids(items, limit)[0]
 
 
-def search_text(query: str, top_k: int = 5, kind: str = "all", method: str = "hybrid") -> str:
+def search_text(query: str, top_k: int = 5, kind: str = "all", method: str = "hybrid", strict: bool = False) -> str:
     notices = []
-    items = search_items(query, top_k, kind, method=method, notices=notices)
+    items = search_items(query, top_k, kind, method=method, notices=notices, strict=strict)
     prefix = "\n".join(notices)
     text = format_items(items, limit=max(0, 4000 - len(prefix) - bool(prefix)))
     return prefix + "\n" + (text or "（没有相关记忆）") if prefix else text

@@ -387,6 +387,30 @@ class Installer:
         link.symlink_to(target)
         print("  已把 {} 指向仓库副本（{}）".format(link, target))
 
+    def install_cli(self):
+        """Install only the manual CLI; no credentials, host changes or API calls."""
+        target = self.repo / "bin/everos"
+        link = self.home / ".local/bin/everos"
+        if not target.is_file() or not os.access(target, os.X_OK):
+            raise ValueError("CLI 入口不存在或不可执行：{}".format(target))
+        if link.is_symlink():
+            try:
+                if link.resolve() == target:
+                    print("  CLI 已安装：{}".format(link))
+                    return
+            except (OSError, RuntimeError):
+                pass  # Broken/cyclic links are conflicts, never replace them.
+        if link.exists() or link.is_symlink():
+            raise ValueError("CLI 路径已被其他文件占用，未覆盖：{}".format(link))
+        if self.dry:
+            print("  [dry-run] 把 {} 指向 {}".format(link, target))
+            return
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.symlink_to(target)
+        print("  CLI 已安装：{}；终端可运行 everos search \"问题\"".format(link))
+        if str(link.parent) not in os.environ.get("PATH", "").split(os.pathsep):
+            print("  使用短命令前，请把 {} 加入 PATH。".format(link.parent))
+
     def sync_daimon_skill(self, desktop):
         """Keep the daimon-managed everos-memory skill identical to the repo version.
 
@@ -464,6 +488,7 @@ class Installer:
     def install(self):
         self.config()
         self.protocol_link()
+        self.install_cli()
         claude_home = Path(self.environment.get("CLAUDE_CONFIG_DIR", str(self.home / ".claude")))
         if shutil.which("claude"):
             print("== Claude Code")
@@ -557,11 +582,16 @@ class Installer:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--cli-only", action="store_true", help="只安装手动检索命令，不接线宿主或调用 API")
     args = parser.parse_args()
     if sys.version_info < (3, 9):
         parser.error("需要 python3 >= 3.9")
     try:
-        Installer(Path(__file__).resolve().parents[1], args.dry_run).install()
+        installer = Installer(Path(__file__).resolve().parents[1], args.dry_run)
+        if args.cli_only:
+            installer.install_cli()
+        else:
+            installer.install()
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         print("安装未完成：{}".format(error), file=sys.stderr)
         return 1
