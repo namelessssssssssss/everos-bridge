@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import sys
 from pathlib import Path
@@ -14,7 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import core  # noqa: E402
 
-VERSION = "0.4.0"
+VERSION = "0.4.1"
 INSTRUCTIONS = (
     "EverOS 是用户跨 agent、跨设备共用的长期记忆。会话开始调用 memory_profile 了解用户，"
     "每条提问前都按用户的提问调用 memory_search；"
@@ -29,7 +30,8 @@ TOOLS = [
      "inputSchema": {"type": "object", "properties": {}}},
     {"name": "memory_search",
      "description": "按语义检索用户的长期记忆。kind=episodes 只查事件，practices 只查做法/经验，all 两者都查。"
-                    "默认 hybrid；隐含描述或复杂历史问题可显式选 agentic 深查，总预算45秒，失败或未命中按轨道回退hybrid。",
+                    "默认 hybrid；隐含描述或复杂历史问题可显式选 agentic 深查，默认总预算180秒，可配置或按次修改，"
+                    "失败或未命中按轨道回退hybrid。",
      "inputSchema": {"type": "object", "required": ["query"], "properties": {
          "query": {"type": "string", "minLength": 1, "description": "检索语句，直接用用户的问题或主题"},
          "top_k": {"type": "integer", "default": 5,
@@ -37,7 +39,10 @@ TOOLS = [
                    "anyOf": [{"enum": [-1]}, {"type": "integer", "minimum": 1, "maximum": 100}]},
          "kind": {"type": "string", "enum": ["all", "episodes", "practices"], "default": "all"},
          "method": {"type": "string", "enum": ["hybrid", "agentic"], "default": "hybrid",
-                    "description": "agentic 为按次深检索，允许更长等待；不会改变每轮自动检索的默认方式。"}}}},
+                    "description": "agentic 为按次深检索，允许更长等待；不会改变每轮自动检索的默认方式。"},
+         "timeout": {"type": "number", "exclusiveMinimum": 0,
+                     "description": "本次检索总预算（秒，含回退），优先于 EVEROS_AGENTIC_TIMEOUT；"
+                                    "不填时 agentic 默认180秒或采用配置，hybrid 沿用原预算。"}}}},
     {"name": "memory_recent",
      "description": "列出最近几天的记忆标题，用来回顾近期在做什么。",
      "inputSchema": {"type": "object", "properties": {
@@ -83,11 +88,19 @@ class RpcError(Exception):
         self.code = code
 
 
+def _finite_number(value) -> bool:
+    try:
+        return type(value) in (int, float) and math.isfinite(value)
+    except OverflowError:
+        return False
+
+
 def _validate(value, schema: dict, path: str) -> None:
     """Validate the small set of JSON Schema keywords used by our six tools."""
     kind = schema.get("type")
     matches = {"object": isinstance(value, dict), "array": isinstance(value, list),
-               "string": isinstance(value, str), "integer": type(value) is int}
+               "string": isinstance(value, str), "integer": type(value) is int,
+               "number": _finite_number(value)}
     if kind in matches and not matches[kind]:
         raise RpcError(-32602, f"Invalid params: {path} must be {kind}")
     if "anyOf" in schema:
@@ -115,8 +128,10 @@ def _validate(value, schema: dict, path: str) -> None:
             _validate(item, schema.get("items", {}), f"{path}[{index}]")
     elif kind == "string" and schema.get("minLength") and not value.strip():
         raise RpcError(-32602, f"Invalid params: {path} must not be blank")
-    elif kind == "integer":
+    elif kind in ("integer", "number"):
         if value < schema.get("minimum", float("-inf")) or value > schema.get("maximum", float("inf")):
+            raise RpcError(-32602, f"Invalid params: {path} is out of range")
+        if "exclusiveMinimum" in schema and value <= schema["exclusiveMinimum"]:
             raise RpcError(-32602, f"Invalid params: {path} is out of range")
 
 
@@ -174,8 +189,11 @@ class Server:
         if name == "memory_profile":
             return core.profile_text(limit=8000, with_ids=True) or "（画像为空）"
         if name == "memory_search":
+            options = {"method": args.get("method", "hybrid")}
+            if "timeout" in args:
+                options["budget"] = args["timeout"]
             return core.search_text(args["query"], args.get("top_k", 5), args.get("kind", "all"),
-                                    method=args.get("method", "hybrid")) or "（没有相关记忆）"
+                                    **options) or "（没有相关记忆）"
         if name == "memory_recent":
             return core.recent_text(args.get("days", 7), args.get("limit", 20)) or "（这段时间没有记忆）"
         if name == "memory_remember":

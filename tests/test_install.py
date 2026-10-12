@@ -63,6 +63,9 @@ elif args[:2] == ["mcp", "get"]:
     if os.environ.get("FAKE_MCP_PRESENT", "1") != "1":
         print("Error: No MCP server named 'everos' found.", file=sys.stderr)
         sys.exit(1)
+elif name == "codex" and args[:2] == ["mcp", "add"] and os.environ.get("FAKECLI_MCP_REPLACE"):
+    path = Path(os.environ.get("CODEX_HOME", str(home / ".codex"))) / "config.toml"
+    path.write_text('[mcp_servers.everos]\ncommand = "python3"\n')
 elif name == "codex" and args[:2] == ["plugin", "add"] and os.environ.get("FAKECLI_MUTATE"):
     path = home / ".codex/config.toml"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -81,6 +84,7 @@ class InstallerTests(unittest.TestCase):
         self.repo = self.base / "bridge with spaces"
         (self.repo / "scripts").mkdir(parents=True)
         (self.repo / "plugin/everos").mkdir(parents=True)
+        shutil.copy2(ROOT / "plugin/everos/core.py", self.repo / "plugin/everos/core.py")
         (self.repo / "plugin/rules").mkdir(parents=True)
         shutil.copy2(ROOT / "install.sh", self.repo / "install.sh")
         shutil.copy2(ROOT / "scripts/install_config.py", self.repo / "scripts/install_config.py")
@@ -238,6 +242,66 @@ class InstallerTests(unittest.TestCase):
         text = install.enable_codex_hooks('[other]\nhooks = true\n')
         self.assertIn("[features]\nhooks = true", text)
         self.assert_toml(text)
+
+    def test_codex_timeout_defaults_to_agentic_budget_with_transport_headroom(self):
+        self.cli("codex")
+        path = self.put(".codex/config.toml", '[mcp_servers.other]\ntool_timeout_sec = 15\n')
+        self.run_install()
+        text = path.read_text()
+        self.assertIn("[mcp_servers.everos]\ntool_timeout_sec = 190", text)
+        self.assertIn("[mcp_servers.other]\ntool_timeout_sec = 15", text)
+        self.assert_toml(text)
+        self.run_install()
+        self.assertEqual(path.read_text(), text)
+
+    def test_codex_timeout_uses_config_environment_priority_and_keeps_larger_values(self):
+        self.cli("codex")
+        self.put(".everos/config.env", "EVEROS_USER_ID=test-owner\nEVEROS_API_KEY=not-a-real-key\nEVEROS_AGENTIC_TIMEOUT=240.1\n")
+        path = self.put(".codex/config.toml", '[mcp_servers.everos]\ntool_timeout_sec = 50\n')
+        self.run_install()
+        self.assertIn("tool_timeout_sec = 251", path.read_text())
+        self.env["EVEROS_AGENTIC_TIMEOUT"] = "300"
+        self.run_install()
+        self.assertIn("tool_timeout_sec = 310", path.read_text())
+        # The real host's remove/add discards this table: restore the previous
+        # timeout even when its value is above the current runtime default.
+        self.env["FAKECLI_MCP_REPLACE"] = "1"
+        path.write_text('[mcp_servers.everos]\ncommand = "old"\ntool_timeout_sec = 600\n')
+        self.run_install()
+        self.assertIn("tool_timeout_sec = 600", path.read_text())
+
+    def test_codex_timeout_updates_only_active_everos_table(self):
+        original = ('description = """\n[mcp_servers.everos]\ntool_timeout_sec = 999\n"""\n'
+                    '[mcp_servers.other]\ntool_timeout_sec = 900\n'
+                    '[ mcp_servers."everos" ]\n"tool_timeout_sec" = 50\ncommand = "keep"\n')
+        text = install.set_codex_tool_timeout(original, 190)
+        self.assertIn('description = """\n[mcp_servers.everos]\ntool_timeout_sec = 999\n"""', text)
+        self.assertIn('[mcp_servers.other]\ntool_timeout_sec = 900', text)
+        self.assertIn('[ mcp_servers."everos" ]\ntool_timeout_sec = 190\ncommand = "keep"', text)
+        self.assertEqual(install.set_codex_tool_timeout(text, 180), text)
+        self.assert_toml(text)
+        self.assertEqual(install.set_codex_tool_timeout('[mcp_servers.everos]', 190),
+                         '[mcp_servers.everos]\ntool_timeout_sec = 190\n')
+
+    def test_invalid_agentic_timeout_stops_before_host_calls_or_writes(self):
+        self.cli("codex")
+        self.cli("claude")
+        for value in ("0", "-1", "NaN", "Infinity", "bad"):
+            with self.subTest(value=value):
+                self.env["EVEROS_AGENTIC_TIMEOUT"] = value
+                result = self.run_install(expect=1)
+                self.assertIn("EVEROS_AGENTIC_TIMEOUT", result.stderr)
+                self.assertEqual(self.calls(), [])
+                self.assertFalse((self.home / ".everos").exists())
+
+    def test_unverified_mcp_hosts_do_not_receive_invented_timeout_fields(self):
+        gemini = self.put(".gemini/settings.json", '{"mcpServers":{"other":{"timeout":9000}}}')
+        cursor = self.put(".cursor/mcp.json", '{}')
+        self.run_install()
+        gemini_data = json.loads(gemini.read_text())
+        self.assertEqual(gemini_data["mcpServers"]["other"], {"timeout": 9000})
+        for path in (gemini, cursor):
+            self.assertEqual(set(json.loads(path.read_text())["mcpServers"]["everos"]), {"command", "args"})
 
     def test_codex_dotted_and_duplicate_hook_keys(self):
         self.assertEqual(install.enable_codex_hooks("features.hooks = false\n"), "features.hooks = true\n")

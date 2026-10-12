@@ -31,6 +31,7 @@ Python 代码只用标准库，不用安装依赖；运行期 hook 失败放行�
 everos search "之前遇到的记忆抽取问题怎么解决？"
 everos search "排障做法" --kind practices --top-k 10
 everos search "复杂的历史问题" --method agentic
+everos search "复杂的历史问题" --method agentic --timeout 240
 ```
 
 `~/.local/bin` 需在 PATH 中；也可以直接运行 `~/.everos-bridge/bin/everos search "问题"`。入口跟随仓库，不依赖当前目录。`--cli-only --dry-run` 只预览安装；`--cli-only` 不修改凭据或宿主配置，也不调用 API。已有其他文件占用命令路径时会报错并保留原文件。
@@ -39,7 +40,8 @@ everos search "复杂的历史问题" --method agentic
 
 - `--kind all|episodes|practices`：默认 `all`，检索事件和做法。
 - `--top-k N`：默认 `5`；接受 `-1` 或 `1–100`，是每类记忆的上限，合并后可能超过 N。
-- `--method hybrid|agentic`：默认 `hybrid`；复用 MCP 的 v1/v2 合并、agentic 45 秒共同预算与回退。
+- `--method hybrid|agentic`：默认 `hybrid`；复用 MCP 的 v1/v2 合并、agentic 默认 180 秒共同预算与回退。
+- `--timeout SECONDS`：按次设置总预算（正有限秒数，含回退），优先于配置。未设置时 agentic 采用 `EVEROS_AGENTIC_TIMEOUT`，hybrid 沿用原预算。
 - 问题须为 1–500 字。结果采用 MCP 的文本摘要格式，单条最多 260 字、整体约 4000 字；回退或部分失败会明确提示。
 
 退出码：`0` 表示检索完成（包含未命中或部分轨道成功），`1` 表示配置缺失或检索全部失败，`2` 表示参数错误，`130` 表示用户取消。`everos --help` 和 `everos search --help` 无需配置，不调用 API。
@@ -52,7 +54,17 @@ everos search "复杂的历史问题" --method agentic
 {"query":"写入成功后紧接着抽取却说没有内容，那次问题的根因是什么？","kind":"episodes","top_k":5,"method":"agentic"}
 ```
 
-`kind` 仍支持 `all` / `episodes` / `practices`，`top_k` 支持 `-1` 或 `1–100`。agentic 的共同预算为 45 秒，包含按轨道 hybrid 回退；输出会说明失败、超时或空结果时的回退。全部轨道技术失败时工具报错，不伪装成没有记忆。v1 兼容请求始终用 hybrid，v1-only 会提示降级。
+`kind` 仍支持 `all` / `episodes` / `practices`，`top_k` 支持 `-1` 或 `1–100`。agentic 的默认共同预算为 180 秒，包含按轨道 hybrid 回退；输出会说明失败、超时或空结果时的回退。全部轨道技术失败时工具报错，不伪装成没有记忆。v1 兼容请求始终用 hybrid，v1-only 会提示降级。
+
+长期调整可在 `~/.everos/config.env` 设置 `EVEROS_AGENTIC_TIMEOUT=240`，或用同名环境变量覆盖。MCP 也支持按次传 `timeout`（秒）：
+
+```json
+{"query":"复杂的历史问题","method":"agentic","timeout":240}
+```
+
+优先级是按次 `timeout` / CLI `--timeout` > 环境变量 > config.env > 默认 180 秒。必须为正有限数值；非法配置明确报错。默认先给 agentic 约 168 秒，给回退预留至多 12 秒，整次调用仍受同一个 deadline 约束。
+
+MCP 客户端的外层超时需大于实际总预算。安装器会为 Codex 设置 `tool_timeout_sec`，为 MiMo 设置毫秒 `timeout`，至少达到配置预算 + 10 秒（默认 190 秒），并保留更大的现值。提高长期配置后重跑 `install.sh` 同步外层限制；按次传更大的 timeout 时也需确保宿主允许等待。其他宿主需按各自配置设置外层超时。
 
 agentic 不套用 hybrid 的得分门槛，回退结果恢复对应门槛。每次输出仍限制在 4000 字内；它是按次补查选项，hook 仍用 hybrid 和原预算。插件更新后需重连 MCP 或新开聊天加载新 schema。质量对比见 [调研报告](docs/retrieval-study-2026-10-09.md)。
 
@@ -129,7 +141,7 @@ cloud/                            云端 setup script 与仓库级配置片段
 
 ## MiMoCode / MiMo Desktop
 
-不走 hooks.json，用 `@mimo-ai/plugin` 的生命周期钩子：`chat.message` / `experimental.chat.system.transform` 做 L3 注入，`session.post` 把 `trajectory` 交给 `hook.py --mimo-write` 做 L4。安装器会合并 `~/.config/mimocode/mimocode.jsonc` 的 `mcp` / `instructions` / `plugin`。MCP 的 `timeout` 需 ≥ 50000，否则深检索会被默认 5 秒截断。配置与插件变更在新会话生效。
+不走 hooks.json，用 `@mimo-ai/plugin` 的生命周期钩子：`chat.message` / `experimental.chat.system.transform` 做 L3 注入，`session.post` 把 `trajectory` 交给 `hook.py --mimo-write` 做 L4。安装器会合并 `~/.config/mimocode/mimocode.jsonc` 的 `mcp` / `instructions` / `plugin`。MCP 的毫秒 `timeout` 默认至少 190000，需大于实际 agentic 总预算，否则深检索会被宿主提前截断。配置与插件变更在新会话生效。
 
 ## 配置
 

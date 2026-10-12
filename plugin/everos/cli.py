@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 
 
@@ -22,6 +23,16 @@ def _top_k(value: str) -> int:
     return number
 
 
+def _timeout(value: str) -> float:
+    try:
+        seconds = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("timeout 须为正有限秒数") from None
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise argparse.ArgumentTypeError("timeout 须为正有限秒数")
+    return seconds
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="everos", description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -32,7 +43,9 @@ def main(argv: list[str] | None = None) -> int:
     search.add_argument("--top-k", type=_top_k, default=5, metavar="N",
                         help="每类记忆的召回上限：1–100；-1 由服务端决定（默认 5）")
     search.add_argument("--method", choices=("hybrid", "agentic"), default="hybrid",
-                        help="检索方法（默认 hybrid；agentic 深检索总预算 45 秒，含回退）")
+                        help="检索方法（默认 hybrid；agentic 默认总预算 180 秒，含回退）")
+    search.add_argument("--timeout", type=_timeout, metavar="SECONDS",
+                        help="本次检索总预算（秒，含回退），优先于 EVEROS_AGENTIC_TIMEOUT 配置")
     args = parser.parse_args(argv)
 
     # Help and argument validation work without credentials or API access.
@@ -42,7 +55,10 @@ def main(argv: list[str] | None = None) -> int:
         if not core.ready():
             raise RuntimeError("未配置：设置 EVEROS_USER_ID 与 EVEROS_API_KEY，"
                                "或写入 $EVEROS_HOME/config.env（默认 ~/.everos/config.env）")
-        text = core.search_text(args.query, args.top_k, args.kind, method=args.method, strict=True)
+        options = {"method": args.method, "strict": True}
+        if args.timeout is not None:
+            options["budget"] = args.timeout
+        text = core.search_text(args.query, args.top_k, args.kind, **options)
         print(text or "（没有相关记忆）")
     except KeyboardInterrupt:
         print("EverOS 检索已取消", file=sys.stderr)

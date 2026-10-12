@@ -153,6 +153,8 @@ class CliProcessTests(unittest.TestCase):
                    ("search", "garden notes", "--method", "vector")]
         invalid.extend(("search", "garden notes", "--top-k", value)
                        for value in ("-2", "0", "101", "abc"))
+        invalid.extend(("search", "garden notes", "--timeout", value)
+                       for value in ("0", "-1", "abc", "", "nan", "inf", "-inf"))
         for args in invalid:
             with self.subTest(args=args):
                 result = self.run_cli(*args)
@@ -308,6 +310,34 @@ class CliUnitTests(unittest.TestCase):
         self.assertEqual(forwarded["method"], "agentic")
         self.assertEqual(forwarded["top_k"], -1)
         self.assertIs(forwarded["strict"], True)
+        self.assertNotIn("budget", forwarded)
+
+    def test_cli_forwards_positive_finite_timeout_as_per_call_budget(self):
+        signature = inspect.signature(self.core.search_text)
+        for method in ("hybrid", "agentic"):
+            for value in (".25", "180", "300.5"):
+                with self.subTest(method=method, timeout=value), \
+                        mock.patch.object(self.core, "ready", return_value=True), \
+                        mock.patch.object(self.core, "search_text", return_value="fixture result") as search:
+                    code, output, errors = self.invoke([
+                        "search", "garden notes", "--method", method, "--timeout", value])
+                self.assertEqual(code, 0, errors)
+                forwarded = signature.bind(*search.call_args.args, **search.call_args.kwargs).arguments
+                self.assertEqual(forwarded["budget"], float(value))
+                self.assertEqual(forwarded["method"], method)
+                self.assertIs(forwarded["strict"], True)
+
+    def test_invalid_cli_timeout_is_rejected_before_configuration_and_dispatch(self):
+        for value in ("0", "-1", "abc", "nan", "inf", "-inf", ""):
+            with self.subTest(timeout=value), \
+                    mock.patch.object(self.core, "ready") as ready, \
+                    mock.patch.object(self.core, "search_text") as search:
+                code, output, errors = self.invoke([
+                    "search", "garden notes", "--method", "agentic", "--timeout", value])
+                self.assertEqual(code, 2)
+                self.assertTrue(errors)
+                ready.assert_not_called()
+                search.assert_not_called()
 
     def test_keyboard_interrupt_returns_130_without_traceback(self):
         with mock.patch.object(self.core, "ready", return_value=True), \
