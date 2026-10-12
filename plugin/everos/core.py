@@ -13,12 +13,14 @@
   EVEROS_AGENT_ID       v2 里助手消息的归属 agent，默认 <user_id>_agent；原 agent 名记在 sender_name
   EVEROS_MIN_SCORE      v2 检索的得分门槛，默认 0.3
   EVEROS_RECALL_TIMEOUT 每条提问检索的总预算（秒），默认 18；hook 超时 20 秒
+  EVEROS_AGENTIC_TIMEOUT 手动 agentic 检索的总预算（秒），默认 180，包含回退
   EVEROS_RECALL_CHARS   每轮注入上限（字），默认 2000
 """
 from __future__ import annotations
 
 import fcntl
 import json
+import math
 import os
 import queue
 import re
@@ -37,7 +39,7 @@ MAX_BODY_BYTES = 250_000       # 单次 add 请求体上限（留余量）
 IDLE_FLUSH_H = 2
 SWEEP_EVERY_MIN = 30
 READ_TIMEOUT = 6               # 读侧同步注入的网络超时，宁可不注入也不拖慢会话
-AGENTIC_TIMEOUT = 45           # MCP 显式深检索的共同预算，包含回退
+AGENTIC_TIMEOUT = 180          # 手动深检索的默认共同预算，包含回退
 AGENT_MIN_SCORE = 0.55         # 「做法」类召回的相关度门槛
 RECALL_WORDS = ("上次", "之前", "以前", "我说过", "记得", "按我习惯", "老规矩", "last time",
                 "remember", "previously", "as before")
@@ -94,7 +96,7 @@ def cfg() -> dict:
     for k in ("EVEROS_API_KEY", "EVEROS_USER_ID", "EVEROS_API_BASE", "EVEROS_BASE_URL",
               "EVEROS_OWNER_ALIASES", "EVEROS_INJECT", "EVEROS_WRITE", "EVEROS_API_VERSION",
               "EVEROS_READ_V1", "EVEROS_AGENT_ID", "EVEROS_MIN_SCORE", "EVEROS_RECALL_TIMEOUT",
-              "EVEROS_RECALL_CHARS"):
+              "EVEROS_RECALL_CHARS", "EVEROS_AGENTIC_TIMEOUT"):
         if os.environ.get(k):
             out[k] = os.environ[k]
     out.setdefault("EVEROS_API_BASE", out.get("EVEROS_BASE_URL", "https://api.evermind.ai"))
@@ -125,6 +127,18 @@ def _num(key: str, default: float) -> float:
         return float(cfg().get(key, default))
     except ValueError:
         return default
+
+
+def agentic_timeout(config: dict | None = None) -> float:
+    """Validate the shared deep-search budget without changing hook timeouts."""
+    value = (cfg() if config is None else config).get("EVEROS_AGENTIC_TIMEOUT", AGENTIC_TIMEOUT)
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError("EVEROS_AGENTIC_TIMEOUT 须为正有限秒数") from None
+    if isinstance(value, bool) or not math.isfinite(seconds) or seconds <= 0:
+        raise ValueError("EVEROS_AGENTIC_TIMEOUT 须为正有限秒数")
+    return seconds
 
 
 def network_secret_mode() -> bool:
@@ -298,14 +312,14 @@ def _has_search_hits(name: str, data: dict) -> bool:
 
 def search_items(query: str, top_k: int = 5, kind: str = "all", include_profile: bool = False,
                  budget: float | None = None, v1_episodes: int | None = None,
-                 method: str = "hybrid", notices: list[str] | None = None) -> list[dict]:
+                 method: str = "hybrid", notices: list[str] | None = None, strict: bool = False) -> list[dict]:
     """并行查 v2 用户轨道、v2 agent 轨道、v1 旧库（过渡期），按得分门槛过滤后合并去重。"""
     if type(top_k) is not int or (top_k != -1 and not 1 <= top_k <= 100):
         raise ValueError("top_k must be -1 or in 1..100")
     if method not in ("hybrid", "agentic"):
         raise ValueError("method must be hybrid or agentic")
     deep = method == "agentic" and version() == "v2"
-    total_budget = max(0.0, (AGENTIC_TIMEOUT if deep else READ_TIMEOUT * 2) if budget is None else budget)
+    total_budget = max(0.0, (agentic_timeout() if deep else READ_TIMEOUT * 2) if budget is None else budget)
     deadline = time.monotonic() + total_budget
     if total_budget <= 0:
         return []
@@ -357,8 +371,13 @@ def search_items(query: str, top_k: int = 5, kind: str = "all", include_profile:
                     notes.append(f"（{labels[name]}的 agentic {reason}，已回退 hybrid。）")
                 else:
                     notes.append(f"（{labels[name]}的 agentic {reason}，hybrid 回退也失败或超时。）")
-    if method == "agentic" and jobs and not results:
+    if (method == "agentic" or strict) and jobs and not results:
         raise APIResponseError("记忆检索失败或超时，未获得任何成功轨道；请重试。")
+    if strict and results:
+        labels = {"v2u": "用户记忆", "v2a": "做法记忆", "v1": "v1 旧库"}
+        missing = [labels[name] for name in jobs if name not in results]
+        if missing:
+            notes.append(f"（{'、'.join(missing)}检索失败或超时，以下仅展示成功轨道的结果。）")
     items = []
     v2u, v2a, v1 = results.get("v2u") or {}, results.get("v2a") or {}, results.get("v1") or {}
     for ep in v2u.get("episodes") or []:
@@ -415,9 +434,13 @@ def format_items(items: list[dict], limit: int = 4000) -> str:
     return format_items_with_ids(items, limit)[0]
 
 
-def search_text(query: str, top_k: int = 5, kind: str = "all", method: str = "hybrid") -> str:
+def search_text(query: str, top_k: int = 5, kind: str = "all", method: str = "hybrid", strict: bool = False,
+                budget: float | None = None) -> str:
     notices = []
-    items = search_items(query, top_k, kind, method=method, notices=notices)
+    options = {"method": method, "notices": notices, "strict": strict}
+    if budget is not None:
+        options["budget"] = budget
+    items = search_items(query, top_k, kind, **options)
     prefix = "\n".join(notices)
     text = format_items(items, limit=max(0, 4000 - len(prefix) - bool(prefix)))
     return prefix + "\n" + (text or "（没有相关记忆）") if prefix else text

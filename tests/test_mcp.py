@@ -147,6 +147,35 @@ class McpTests(unittest.TestCase):
         self.assertEqual(set(schema["properties"]["method"]["enum"]), {"hybrid", "agentic"})
         self.assertEqual(schema["properties"]["method"]["default"], "hybrid")
 
+    def test_search_timeout_schema_is_optional_positive_number_without_a_default(self):
+        tools = self.server.respond(request("tools/list"))["result"]["tools"]
+        schema = next(tool for tool in tools if tool["name"] == "memory_search")["inputSchema"]
+        self.assertNotIn("timeout", schema["required"])
+        self.assertEqual(schema["properties"]["timeout"]["type"], "number")
+        self.assertEqual(schema["properties"]["timeout"]["exclusiveMinimum"], 0)
+        self.assertNotIn("default", schema["properties"]["timeout"])
+
+    def test_search_timeout_passes_positive_integer_and_fractional_seconds_as_budget(self):
+        for method in ("hybrid", "agentic"):
+            for timeout in (.25, 180, 240.5):
+                with self.subTest(method=method, timeout=timeout), \
+                        mock.patch.object(mcp_server.core, "search_text", return_value="found") as search:
+                    response = self.call_tool("memory_search", {
+                        "query": "historical question", "kind": "practices", "top_k": 100,
+                        "method": method, "timeout": timeout})
+                self.assertFalse(response["result"]["isError"])
+                search.assert_called_once_with("historical question", 100, "practices",
+                                               method=method, budget=timeout)
+
+    def test_invalid_search_timeout_is_rejected_before_dispatch(self):
+        for timeout in (0, -1, 10 ** 400, "180", None, True, False, [], {},
+                        float("nan"), float("inf"), float("-inf")):
+            with self.subTest(timeout=timeout), \
+                    mock.patch.object(mcp_server.core, "search_text") as search:
+                self.assert_invalid_params(self.call_tool("memory_search", {
+                    "query": "historical question", "method": "agentic", "timeout": timeout}))
+                search.assert_not_called()
+
     def test_search_methods_preserve_kind_and_server_sized_or_large_top_k(self):
         for method in ("hybrid", "agentic"):
             for kind in ("all", "episodes", "practices"):

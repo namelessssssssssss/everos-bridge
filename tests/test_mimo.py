@@ -5,6 +5,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 from unittest.mock import patch
 
 from test_core_regressions import IsolatedCore, response, core, hook
@@ -152,7 +153,7 @@ class MimoWriteTests(IsolatedCore):
 
 
 class MimocodeInstallerTests(IsolatedCore):
-    def test_merges_mcp_plugin_and_instructions_without_clobbering(self):
+    def installer_fixture(self):
         root = self.root
         home = root / "home"
         (home / ".config/mimocode").mkdir(parents=True)
@@ -165,6 +166,8 @@ class MimocodeInstallerTests(IsolatedCore):
         (root / "repo/plugin/mimo").mkdir(parents=True)
         (root / "repo/plugin/rules").mkdir(parents=True)
         (root / "repo/plugin/everos/mcp_server.py").write_text("")
+        shutil.copy2(ROOT / "plugin/everos/core.py", root / "repo/plugin/everos/core.py")
+        shutil.copy2(ROOT / "plugin/everos/trae.py", root / "repo/plugin/everos/trae.py")
         (root / "repo/plugin/everos/hook.py").write_text("")
         (root / "repo/plugin/mimo/everos.mjs").write_text("export const server = async () => ({});\n")
         (root / "repo/plugin/rules/everos-rules.md").write_text("rules\n")
@@ -175,13 +178,44 @@ class MimocodeInstallerTests(IsolatedCore):
         inst.mcp = root / "repo/plugin/everos/mcp_server.py"
         inst.hook = root / "repo/plugin/everos/hook.py"
         inst.repo = root / "repo"
+        return inst, cfg
+
+    def test_merges_mcp_plugin_and_instructions_without_clobbering(self):
+        inst, cfg = self.installer_fixture()
+        root = self.root
         inst.mimocode()
         data = json.loads(install_config.Installer.strip_jsonc(cfg.read_text()))
         self.assertEqual(data["mcp"]["other"]["command"], ["x"])
         self.assertEqual(data["mcp"]["everos"]["type"], "local")
+        self.assertEqual(data["mcp"]["everos"]["timeout"], 190000)
         self.assertTrue(data["mcp"]["everos"]["command"][1].endswith("mcp_server.py"))
         self.assertEqual(data["instructions"], ["/keep.md", str(root / "repo/plugin/rules/everos-rules.md")])
         names = [p[0] if isinstance(p, list) else p for p in data["plugin"]]
         self.assertEqual(len(names), 2)
         self.assertTrue(any("keep.mjs" in n for n in names))
         self.assertTrue(any("everos.mjs" in n for n in names))
+
+    def test_timeout_follows_global_budget_and_preserves_larger_existing_value(self):
+        inst, cfg = self.installer_fixture()
+        (inst.everos / "config.env").write_text("EVEROS_AGENTIC_TIMEOUT=240.1\n")
+        inst.mimocode()
+        self.assertEqual(json.loads(cfg.read_text())["mcp"]["everos"]["timeout"], 251000)
+        inst.environment["EVEROS_AGENTIC_TIMEOUT"] = "300"
+        inst.mimocode()
+        self.assertEqual(json.loads(cfg.read_text())["mcp"]["everos"]["timeout"], 310000)
+        data = json.loads(cfg.read_text())
+        data["mcp"]["everos"]["timeout"] = 600000
+        cfg.write_text(json.dumps(data))
+        inst.mimocode()
+        self.assertEqual(json.loads(cfg.read_text())["mcp"]["everos"]["timeout"], 600000)
+        before = cfg.read_text()
+        inst.mimocode()
+        self.assertEqual(cfg.read_text(), before)
+
+    def test_invalid_timeout_does_not_write_host_config(self):
+        inst, cfg = self.installer_fixture()
+        before = cfg.read_bytes()
+        inst.environment["EVEROS_AGENTIC_TIMEOUT"] = "nan"
+        with self.assertRaisesRegex(ValueError, "EVEROS_AGENTIC_TIMEOUT"):
+            inst.mimocode()
+        self.assertEqual(cfg.read_bytes(), before)

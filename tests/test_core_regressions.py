@@ -39,6 +39,8 @@ class IsolatedCore(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.stack = contextlib.ExitStack()
         self.addCleanup(self.stack.close)
+        self.stack.enter_context(patch.dict(os.environ))
+        os.environ.pop("EVEROS_AGENTIC_TIMEOUT", None)
         self.stack.enter_context(patch.dict(os.environ, {
             "EVEROS_HOME": str(self.root), "EVEROS_USER_ID": "test_owner",
             "EVEROS_API_KEY": "test_key", "EVEROS_API_VERSION": "v2", "EVEROS_READ_V1": "0",
@@ -295,6 +297,97 @@ class AgenticRecallTests(IsolatedCore):
     def case(identifier="case", score=.02):
         return {"id": identifier, "task_intent": identifier, "key_insight": "a useful practice", "score": score}
 
+    def test_agentic_timeout_defaults_to_180_and_can_parse_without_loading_configuration(self):
+        with patch.object(core, "cfg", side_effect=AssertionError("Configuration read is forbidden")):
+            self.assertEqual(core.agentic_timeout({}), 180)
+            self.assertEqual(core.agentic_timeout({"EVEROS_AGENTIC_TIMEOUT": "240.5"}), 240.5)
+
+    def test_agentic_timeout_accepts_positive_finite_seconds(self):
+        for value in ("0.25", "180", "300.5", " 240 ", 180, 1.5):
+            with self.subTest(value=value):
+                self.assertEqual(core.agentic_timeout({"EVEROS_AGENTIC_TIMEOUT": value}), float(value))
+
+    def test_agentic_timeout_rejects_invalid_values(self):
+        for value in ("", " ", "abc", "0", "-1", "nan", "inf", "-inf",
+                      0, -1, 10 ** 400, float("nan"), float("inf"), None, True, False, [], {}):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "EVEROS_AGENTIC_TIMEOUT"):
+                core.agentic_timeout({"EVEROS_AGENTIC_TIMEOUT": value})
+
+    def test_agentic_timeout_reads_config_file_and_environment_takes_precedence(self):
+        (self.root / "config.env").write_text("EVEROS_AGENTIC_TIMEOUT=240.5\n", encoding="utf-8")
+        self.assertEqual(core.agentic_timeout(), 240.5)
+        with patch.dict(os.environ, {"EVEROS_AGENTIC_TIMEOUT": "300"}):
+            self.assertEqual(core.agentic_timeout(), 300)
+        with patch.dict(os.environ, {"EVEROS_AGENTIC_TIMEOUT": "invalid"}):
+            with self.assertRaisesRegex(ValueError, "EVEROS_AGENTIC_TIMEOUT"):
+                core.agentic_timeout()
+
+    def test_invalid_agentic_timeout_fails_before_starting_network_work(self):
+        (self.root / "config.env").write_text("EVEROS_AGENTIC_TIMEOUT=nan\n", encoding="utf-8")
+        with patch.object(core, "_read_jobs") as read:
+            with self.assertRaisesRegex(ValueError, "EVEROS_AGENTIC_TIMEOUT"):
+                core.search_items("history", method="agentic")
+            read.assert_not_called()
+        self.api.assert_not_called()
+
+    def test_explicit_budget_overrides_invalid_agentic_configuration(self):
+        budgets = []
+        clock = [100.0]
+
+        def consume_budget(jobs, budget):
+            budgets.append(budget)
+            clock[0] += budget
+            return {name: {} for name in jobs}
+
+        with patch.dict(os.environ, {"EVEROS_AGENTIC_TIMEOUT": "invalid"}), \
+                patch.object(core.time, "monotonic", side_effect=lambda: clock[0]), \
+                patch.object(core, "_read_jobs", side_effect=consume_budget):
+            core.search_items("history", method="agentic", budget=9)
+        self.assertEqual(budgets, [6, 3])
+        self.assertEqual(clock[0], 109)
+
+    def test_configured_agentic_budget_and_fallback_share_the_total_deadline(self):
+        (self.root / "config.env").write_text("EVEROS_AGENTIC_TIMEOUT=240\n", encoding="utf-8")
+        budgets = []
+        clock = [100.0]
+
+        def consume_budget(jobs, budget):
+            budgets.append(budget)
+            clock[0] += budget
+            return {name: {} for name in jobs}
+
+        with patch.object(core.time, "monotonic", side_effect=lambda: clock[0]), \
+                patch.object(core, "_read_jobs", side_effect=consume_budget):
+            core.search_items("history", method="agentic")
+        self.assertEqual(budgets, [228, 12])
+        self.assertEqual(clock[0], 340)
+
+    def test_hybrid_and_v1_deep_search_ignore_agentic_timeout_configuration(self):
+        with patch.dict(os.environ, {"EVEROS_AGENTIC_TIMEOUT": "invalid"}), \
+                patch.object(core.time, "monotonic", return_value=100), \
+                patch.object(core, "_read_jobs", side_effect=lambda jobs, budget: {name: {} for name in jobs}) as read:
+            core.search_items("history")
+            self.assertEqual(read.call_args.args[1], core.READ_TIMEOUT * 2)
+            with patch.dict(os.environ, {"EVEROS_API_VERSION": "v1"}):
+                core.search_items("history", method="agentic")
+            self.assertEqual(read.call_args.args[1], core.READ_TIMEOUT * 2)
+
+    def test_search_text_forwards_explicit_budget_unchanged(self):
+        with patch.object(core, "search_items", return_value=[]) as search:
+            core.search_text("history", 100, "practices", method="agentic", strict=True, budget=240.5)
+        self.assertEqual(search.call_args.args, ("history", 100, "practices"))
+        self.assertEqual(search.call_args.kwargs["budget"], 240.5)
+        self.assertEqual(search.call_args.kwargs["method"], "agentic")
+        self.assertIs(search.call_args.kwargs["strict"], True)
+
+    def test_search_text_omits_unspecified_budget_to_keep_configuration_default(self):
+        with patch.object(core, "search_items", return_value=[]) as search:
+            core.search_text("history", method="agentic")
+            self.assertNotIn("budget", search.call_args.kwargs)
+            search.reset_mock()
+            core.search_text("history", method="agentic", budget=None)
+            self.assertNotIn("budget", search.call_args.kwargs)
+
     def test_agentic_reaches_both_v2_tracks_without_hybrid_score_floor(self):
         self.api.side_effect = lambda path, body, timeout: {"data": (
             {"episodes": [self.episode()]} if body.get("user_id") else {
@@ -472,8 +565,8 @@ class AgenticRecallTests(IsolatedCore):
         with patch.object(core, "_read_jobs", side_effect=empty_tracks):
             core.search_items("history", method="agentic")
         self.assertEqual(len(budgets), 2)
-        self.assertGreater(budgets[0], 32)
-        self.assertLessEqual(budgets[0], 33)
+        self.assertGreater(budgets[0], 167)
+        self.assertLessEqual(budgets[0], 168)
         self.assertGreater(budgets[1], 11)
         self.assertLessEqual(budgets[1], 12)
 

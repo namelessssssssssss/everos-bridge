@@ -5,7 +5,9 @@ import argparse
 from contextlib import contextmanager
 import getpass
 import hashlib
+import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -146,6 +148,62 @@ def enable_codex_hooks(text):
     return text.rstrip() + ("\n\n" if text.strip() else "") + "[features]\nhooks = true\n"
 
 
+def _codex_everos_table(text):
+    lines = text.splitlines(keepends=True)
+    headers = table_headers(text)
+    table = re.compile(r"^\[(?:mcp_servers|\"mcp_servers\"|'mcp_servers')\s*\.\s*(?:everos|\"everos\"|'everos')\]$")
+    matches = [index for index, header in headers if table.match(header)]
+    if len(matches) > 1:
+        raise ValueError("Codex config has duplicate [mcp_servers.everos] tables")
+    if not matches:
+        return lines, None, None, []
+    start = matches[0]
+    end = next((index for index, _ in headers if index > start), len(lines))
+    active = {index for index, _ in active_toml_lines(text)}
+    key = re.compile(r"^\s*(?:tool_timeout_sec|\"tool_timeout_sec\"|'tool_timeout_sec')\s*=")
+    keys = [index for index in range(start + 1, end) if index in active and key.match(lines[index])]
+    if len(keys) > 1:
+        raise ValueError("Codex everos tool_timeout_sec is duplicated")
+    return lines, start, end, keys
+
+
+def _positive_timeout(value, label):
+    if isinstance(value, bool):
+        raise ValueError(label + " must be a positive finite number")
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError(label + " must be a positive finite number") from None
+    if not math.isfinite(number) or number <= 0:
+        raise ValueError(label + " must be a positive finite number")
+    return number
+
+
+def codex_tool_timeout(text):
+    lines, _, _, keys = _codex_everos_table(text)
+    if not keys:
+        return 0
+    value = lines[keys[0]].split("=", 1)[1].split("#", 1)[0].strip().replace("_", "")
+    return _positive_timeout(value, "Codex everos tool_timeout_sec")
+
+
+def set_codex_tool_timeout(text, minimum):
+    """Raise only EverOS's tool timeout, preserving larger user settings."""
+    lines, start, _, keys = _codex_everos_table(text)
+    if codex_tool_timeout(text) >= minimum:
+        return text
+    entry = "tool_timeout_sec = {:g}\n".format(minimum)
+    if start is None:
+        return text.rstrip() + ("\n\n" if text.strip() else "") + "[mcp_servers.everos]\n" + entry
+    if keys:
+        lines[keys[0]] = entry
+    else:
+        if not lines[start].endswith("\n"):
+            lines[start] += "\n"
+        lines.insert(start + 1, entry)
+    return "".join(lines)
+
+
 def is_everos_hook(command):
     return bool(re.search(r"(?:^|[/\\\s'\"])everos_hook\.py(?:$|[\s'\"])", command)
                 or re.search(r"(?:^|[/\\])everos[/\\]hook\.py(?:$|[\s'\"])", command))
@@ -230,6 +288,32 @@ class Installer:
                 print("  [dry-run] CLI 写入前备份 " + str(path))
             else:
                 backup(path)
+
+    def mcp_timeout_seconds(self):
+        """Use the runtime's global agentic budget plus host transport headroom."""
+        config = {}
+        path = self.everos / "config.env"
+        if path.exists():
+            for line in path.read_text().splitlines():
+                if "=" in line and not line.lstrip().startswith("#"):
+                    key, value = line.split("=", 1)
+                    if key.strip() == "EVEROS_AGENTIC_TIMEOUT":
+                        config[key.strip()] = value.strip()
+        if self.environment.get("EVEROS_AGENTIC_TIMEOUT"):
+            config["EVEROS_AGENTIC_TIMEOUT"] = self.environment["EVEROS_AGENTIC_TIMEOUT"]
+        spec = importlib.util.spec_from_file_location("everos_install_core", self.repo / "plugin/everos/core.py")
+        core = importlib.util.module_from_spec(spec)
+        previous_bytecode = sys.dont_write_bytecode
+        previous_path = sys.path[:]
+        try:
+            # Reading the shared validator must keep --dry-run free of cache writes.
+            sys.dont_write_bytecode = True
+            sys.path.insert(0, str(self.repo / "plugin/everos"))
+            spec.loader.exec_module(core)
+        finally:
+            sys.dont_write_bytecode = previous_bytecode
+            sys.path[:] = previous_path
+        return math.ceil(core.agentic_timeout(config) + 10)
 
     @contextmanager
     def preserve_codex_cache(self):
@@ -366,10 +450,14 @@ class Installer:
         data.setdefault("mcp", {})
         if not isinstance(data["mcp"], dict):
             raise ValueError(f"{path} 的 mcp 必须是对象")
+        previous = data["mcp"].get("everos", {})
+        minimum = self.mcp_timeout_seconds() * 1000
+        timeout = max(minimum, _positive_timeout(previous["timeout"], "MiMo everos timeout")
+                      if isinstance(previous, dict) and "timeout" in previous else 0)
         data["mcp"]["everos"] = {
             "type": "local",
             "command": ["python3", str(self.mcp)],
-            "timeout": 50000,
+            "timeout": timeout,
         }
         rules = str(self.repo / "plugin/rules/everos-rules.md")
         instructions = data.get("instructions")
@@ -411,6 +499,30 @@ class Installer:
             link.unlink()
         link.symlink_to(target)
         print("  已把 {} 指向仓库副本（{}）".format(link, target))
+
+    def install_cli(self):
+        """Install only the manual CLI; no credentials, host changes or API calls."""
+        target = self.repo / "bin/everos"
+        link = self.home / ".local/bin/everos"
+        if not target.is_file() or not os.access(target, os.X_OK):
+            raise ValueError("CLI 入口不存在或不可执行：{}".format(target))
+        if link.is_symlink():
+            try:
+                if link.resolve() == target:
+                    print("  CLI 已安装：{}".format(link))
+                    return
+            except (OSError, RuntimeError):
+                pass  # Broken/cyclic links are conflicts, never replace them.
+        if link.exists() or link.is_symlink():
+            raise ValueError("CLI 路径已被其他文件占用，未覆盖：{}".format(link))
+        if self.dry:
+            print("  [dry-run] 把 {} 指向 {}".format(link, target))
+            return
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.symlink_to(target)
+        print("  CLI 已安装：{}；终端可运行 everos search \"问题\"".format(link))
+        if str(link.parent) not in os.environ.get("PATH", "").split(os.pathsep):
+            print("  使用短命令前，请把 {} 加入 PATH。".format(link.parent))
 
     def sync_daimon_skill(self, desktop):
         """Keep the daimon-managed everos-memory skill identical to the repo version.
@@ -487,8 +599,10 @@ class Installer:
         self.run([cli, "mcp", "add", "everos", "--", "python3", self.mcp])
 
     def install(self):
+        self.mcp_timeout_seconds()
         self.config()
         self.protocol_link()
+        self.install_cli()
         claude_home = Path(self.environment.get("CLAUDE_CONFIG_DIR", str(self.home / ".claude")))
         if self.only is None and shutil.which("claude"):
             print("== Claude Code")
@@ -514,6 +628,7 @@ class Installer:
         if self.only is None and shutil.which("codex"):
             print("== Codex")
             config = Path(self.environment.get("CODEX_HOME", str(self.home / ".codex"))) / "config.toml"
+            timeout = max(self.mcp_timeout_seconds(), codex_tool_timeout(config.read_text() if config.exists() else ""))
             self.before_cli(config)
             if not self.dry:
                 config.parent.mkdir(parents=True, exist_ok=True)
@@ -521,7 +636,8 @@ class Installer:
                 self.marketplace("codex")
                 self.run(["codex", "plugin", "add", "everos@everos-bridge"])
             self.mcp_cli("codex")
-            self.edit(config, enable_codex_hooks(config.read_text() if config.exists() else ""))
+            self.edit(config, set_codex_tool_timeout(
+                enable_codex_hooks(config.read_text() if config.exists() else ""), timeout))
             print("  新或更新的 hook 定义需在新会话中按 Codex 提示审阅并信任，之后自动读写才生效。")
         for cli in ("traecli", "traex", "coco"):
             if shutil.which(cli):
@@ -602,12 +718,18 @@ class Installer:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--only", choices=["trae"], help="只刷新 TraeX，不改其他宿主")
+    scope = parser.add_mutually_exclusive_group()
+    scope.add_argument("--cli-only", action="store_true", help="只安装手动检索命令，不接线宿主或调用 API")
+    scope.add_argument("--only", choices=["trae"], help="只刷新 TraeX，不改其他宿主")
     args = parser.parse_args()
     if sys.version_info < (3, 9):
         parser.error("需要 python3 >= 3.9")
     try:
-        Installer(Path(__file__).resolve().parents[1], args.dry_run, args.only).install()
+        installer = Installer(Path(__file__).resolve().parents[1], args.dry_run, args.only)
+        if args.cli_only:
+            installer.install_cli()
+        else:
+            installer.install()
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         print("安装未完成：{}".format(error), file=sys.stderr)
         return 1

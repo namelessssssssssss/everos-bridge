@@ -82,8 +82,9 @@
 - **做法检索**：用 `memory_search` 的 `kind=practices`（v2 查 `agent_id`，v1 查 `agent_memory`）。
 - **召回数量**：`memory_search.top_k` 与官方范围一致：`-1` 或 `1–100`，默认仍为 `5`。`-1` 交给服务端决定；用户记忆、做法和 v1 兼容查询都传同一个值，不再截成 20 或把做法固定为 3。非法值直接报错。hook 仍传 `5`，旧库前 3 条门控、得分门槛和输出字数预算照常生效。
 - **检索方法**：`memory_search` 支持按次传 `method=hybrid|agentic`，默认 `hybrid`。当普通召回不足以回答隐含描述或复杂历史问题时可用 `agentic` 深查，不改变 hook 的默认 hybrid / 18 秒预算；不默认开启 `enable_llm_rerank`。评估及局限见 [检索调研](docs/retrieval-study-2026-10-09.md)。
-- **深检索预算与回退**：MCP agentic 的共同总预算为 45 秒，默认先给 agentic 约 33 秒、为 hybrid 回退保留至多 12 秒，不能在总预算之外再等待。v2 用户和做法轨道分别回退，成功轨道保持不变；失败、超时或空结果会按轨道尝试 hybrid，输出明确提示。全部轨道技术失败会报错，成功空结果正常返回无记忆。v1 兼容请求始终用 hybrid；v1-only 下显式选择 agentic 会提示降级，不向 v1 发送 agentic。
+- **深检索预算与回退**：MCP / CLI agentic 的默认共同总预算为 180 秒，可通过 `EVEROS_AGENTIC_TIMEOUT`（环境变量优先于 config.env）修改，也可用 MCP `timeout` / CLI `--timeout` 按次覆盖。值须为正有限秒数，非法配置明确报错。默认先给 agentic 约 168 秒、为 hybrid 回退保留至多 12 秒，不能在总预算之外再等待。v2 用户和做法轨道分别回退，成功轨道保持不变；失败、超时或空结果会按轨道尝试 hybrid，输出明确提示。全部轨道技术失败会报错，成功空结果正常返回无记忆。v1 兼容请求始终用 hybrid；v1-only 下显式选择 agentic 会提示降级，不向 v1 发送 agentic。hook 的默认 hybrid 与 18 秒预算不变。
 - **方法专属门槛**：agentic 的用户请求不发送 `min_score`，其做法结果不套用 hybrid 的 `0.55` 门槛；采用服务端排序并保留输出字数预算。回退到 hybrid 的用户请求恢复 `EVEROS_MIN_SCORE`，做法结果恢复 `0.55`；v1 沿用原门控。不同方法得分不可直接比较，召回内容仍需按当前问题判断相关性。
+- **手动检索**：`everos search "问题"` 与 MCP 共用检索核心和配置，支持同样的 `kind`、`top-k`、`method`，不写入记忆、不触发 hook、不更新会话去重账本。CLI 启用严格读错误处理：所有轨道失败或超时返回非零；成功空结果返回零；部分轨道失败提示结果不完整。hook 与 MCP 保留原有默认错误策略。文本仍采用单条 260 字、整体约 4000 字的摘要格式，问题超过 500 字时 CLI 拒绝而非静默截断。安装和示例见 README。
 - **质量与时间的取舍**：owner 于 2026-10-09 确认，若检索效果有较显著提升，稍长的检索时间可以接受。方法选择以目标记忆命中、无关结果和最终回答质量为主；18 秒是当前运行预算，不是永久否决更高质量方法的理由。收益确认后可合理放宽预算，并为新方法独立校准门槛、设计超时回退；不因这一偏好未经评测就切换默认方法。
 - 记忆是背景参考；和当前对话冲突时以当前对话为准。
 
@@ -98,12 +99,15 @@
 | `EVEROS_READ_V1` | `1` 表示读取时合并 v1 旧库。官方迁完数据后改成 `0` |
 | `EVEROS_AGENT_ID` | v2 助手消息的归属，默认 `<user_id>_agent` |
 | `EVEROS_MIN_SCORE` / `EVEROS_RECALL_TIMEOUT` / `EVEROS_RECALL_CHARS` | 检索门槛、预算、字数 |
+| `EVEROS_AGENTIC_TIMEOUT` | 手动 agentic 检索总预算（秒，含回退），默认 180；MCP `timeout` / CLI `--timeout` 可按次覆盖 |
 | `EVEROS_OWNER_ALIASES` | botmux 邮箱前缀别名 |
 | `EVEROS_INJECT=0` / `EVEROS_WRITE=0` | 关闭读侧自动注入 / 所有写侧入库（包括 MCP、flush、画像编辑、本地记忆同步） |
 | `EVEROS_HOST` | hook 命令里显式指定宿主（如 `kimi_desktop`），桌面端 payload 没有 `client_type`，靠它区分 |
 | `EVEROS_KIMI_DESKTOP_HOME` | Kimi Work 桌面端内嵌 home，默认 `~/Library/Application Support/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home` |
 
 状态在 `$EVEROS_HOME/state/`：`sessions/*.json` 是会话账本，`recall/*.json` 记录本会话已注入过的条目，`localmem.json` 是本地记忆同步账本，`hook.log` 是日志。
+
+MCP 客户端外层超时需大于实际检索预算。安装器为 Codex 的 `tool_timeout_sec` 和 MiMo 的毫秒 `timeout` 设置至少配置预算 + 10 秒，默认 190 秒，并保留更大的现值。调大配置后重跑 `install.sh`；按次增加预算时也需保证外层允许等待。其他宿主按自身协议配置，不猜测字段。
 
 Codex 升级前必须保存已有 EverOS 插件版本缓存，CLI 操作后恢复被移除的旧目录（操作失败时也恢复）。运行中的聊天仍可能持有旧版 hook 的绝对路径；不能仅安装新版本就删除旧入口，也不能把旧版本路径指向不同内容。新聊天加载新版本，旧缓存不自动清理。
 
