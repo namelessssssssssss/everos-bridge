@@ -15,6 +15,7 @@
   EVEROS_RECALL_TIMEOUT 每条提问检索的总预算（秒），默认 18；hook 超时 20 秒
   EVEROS_AGENTIC_TIMEOUT 手动 agentic 检索的总预算（秒），默认 180，包含回退
   EVEROS_RECALL_CHARS   每轮注入上限（字），默认 2000
+  EVEROS_CASE_WAIT      写做法后等待 v2 生成做法 case 的上限（秒），默认 30；0 关闭回读
 """
 from __future__ import annotations
 
@@ -41,6 +42,15 @@ SWEEP_EVERY_MIN = 30
 READ_TIMEOUT = 6               # 读侧同步注入的网络超时，宁可不注入也不拖慢会话
 AGENTIC_TIMEOUT = 180          # 手动深检索的默认共同预算，包含回退
 AGENT_MIN_SCORE = 0.55         # 「做法」类召回的相关度门槛
+PRACTICE_MIN_STEPS = 3         # v2 少于 3 轮工具调用不提炼做法 case
+CASE_WAIT = 30                 # 写做法后等待 v2 做法 case 的默认上限（秒）
+CASE_WAIT_MAX = 150            # 留在 Codex / MiMo 默认 190 秒外层超时之内
+CASE_POLL = 3
+# 步骤结果标记：(工具结果前缀, 复盘句开头)。v2 只提炼有试错、意外或用户纠正的轨迹。
+PRACTICE_OUTCOMES = {"ok": None, "failed": ("失败", "这一步没走通"),
+                     "unexpected": ("意外", "这一步的结果出乎意料")}
+PRACTICE_STEPS_HINT = ("做法轨迹至少需要 3 个真实步骤：EverOS v2 少于 3 轮工具调用不会提炼做法 case。"
+                       "只有一两步的结论改用 memory_remember；不要补写没有发生的步骤。")
 RECALL_WORDS = ("上次", "之前", "以前", "我说过", "记得", "按我习惯", "老规矩", "last time",
                 "remember", "previously", "as before")
 
@@ -96,7 +106,7 @@ def cfg() -> dict:
     for k in ("EVEROS_API_KEY", "EVEROS_USER_ID", "EVEROS_API_BASE", "EVEROS_BASE_URL",
               "EVEROS_OWNER_ALIASES", "EVEROS_INJECT", "EVEROS_WRITE", "EVEROS_API_VERSION",
               "EVEROS_READ_V1", "EVEROS_AGENT_ID", "EVEROS_MIN_SCORE", "EVEROS_RECALL_TIMEOUT",
-              "EVEROS_RECALL_CHARS", "EVEROS_AGENTIC_TIMEOUT"):
+              "EVEROS_RECALL_CHARS", "EVEROS_AGENTIC_TIMEOUT", "EVEROS_CASE_WAIT"):
         if os.environ.get(k):
             out[k] = os.environ[k]
     out.setdefault("EVEROS_API_BASE", out.get("EVEROS_BASE_URL", "https://api.evermind.ai"))
@@ -139,6 +149,18 @@ def agentic_timeout(config: dict | None = None) -> float:
     if isinstance(value, bool) or not math.isfinite(seconds) or seconds <= 0:
         raise ValueError("EVEROS_AGENTIC_TIMEOUT 须为正有限秒数")
     return seconds
+
+
+def case_wait() -> float:
+    """写做法后的回读上限；配置非法时退回默认值，不因此让写入失败。"""
+    value = cfg().get("EVEROS_CASE_WAIT", CASE_WAIT)
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return float(CASE_WAIT)
+    if not math.isfinite(seconds) or seconds < 0:
+        return float(CASE_WAIT)
+    return min(seconds, float(CASE_WAIT_MAX))
 
 
 def network_secret_mode() -> bool:
@@ -192,6 +214,27 @@ def ts_ms(iso: str | None) -> int:
     if not iso:
         return int(time.time() * 1000)
     return int(datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp() * 1000)
+
+
+def epoch_ms(value) -> int:
+    """接口时间戳统一成毫秒：兼容秒/毫秒数字和 ISO 字符串；无时区按 UTC，解析失败返回 0。"""
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, (int, float)):
+        if not math.isfinite(value):
+            return 0
+        return int(round(value if value > 1e11 else value * 1000))
+    text = str(value or "").strip()
+    if re.fullmatch(r"\d+(\.\d+)?", text):
+        return epoch_ms(float(text))
+    text = re.sub(r"(\.\d{1,6})\d*", lambda m: m.group(1).ljust(7, "0"), text.replace("Z", "+00:00"), count=1)
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return 0
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return int(parsed.timestamp() * 1000)
 
 
 def clip(text: str, limit: int = MAX_MSG_CHARS) -> str:
@@ -552,24 +595,115 @@ def remember(host: str, topic: str, content: str, user_said: str = "") -> str:
     return f"{sid}: {add}/{flush(sid)}"
 
 
-def record_practice(host: str, topic: str, task: str, steps: list[dict], conclusion: str) -> str:
-    """做法轨迹：需求 → 每步动作与结果 → 结论。过渡期双写 v1 agent 轨道，抽取更稳定，检索仍可能延迟。"""
-    ensure_writable()
-    t = int(time.time() * 1000) - (len(steps) * 2 + 2)
-    sid = f"agent_{datetime.now(CST):%Y%m%d}_{slug(topic) or 'practice'}"
-    msgs = [{"role": "user", "sender_id": owner(), "timestamp": t, "content": clip(task)}]
+def _text_field(step: dict, key: str) -> str:
+    value = step.get(key)
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise ValueError(f"做法步骤的 {key} 必须是字符串")
+    return value.strip()
+
+
+def validate_practice(steps, conclusion) -> None:
+    """所有宿主共用的写前校验：MCP schema 之外，直接调用 core 的入口也要拦住。"""
+    if not isinstance(steps, list) or len(steps) < PRACTICE_MIN_STEPS:
+        raise ValueError(PRACTICE_STEPS_HINT)
     for i, step in enumerate(steps, 1):
-        t += 1
-        msgs.append({"role": "assistant", "sender_id": host, "timestamp": t,
-                     "content": clip(step.get("why") or step.get("action", "")),
+        if not isinstance(step, dict):
+            raise ValueError(f"做法第 {i} 步必须是对象")
+        if not _text_field(step, "action") or not _text_field(step, "result"):
+            raise ValueError(f"做法第 {i} 步缺少 action 或 result")
+        _text_field(step, "why")
+        _text_field(step, "user_correction")
+        if (step.get("outcome") or "ok") not in PRACTICE_OUTCOMES:
+            raise ValueError(f"做法第 {i} 步的 outcome 只能是 {'、'.join(PRACTICE_OUTCOMES)}")
+    if not isinstance(conclusion, str) or not conclusion.strip():
+        raise ValueError("做法的 conclusion 不能为空：写根因、解法和验证方式")
+
+
+def practice_messages(host: str, task: str, steps: list[dict], conclusion: str,
+                      now_ms: int | None = None) -> list[dict]:
+    """需求 → 每步（动作与原因 → 结果 → 没走通或意外时的复盘 → 用户纠正）→ 结论。
+
+    v2 提炼 case 前由 LLM 判断轨迹里有没有试错、意外或用户纠正；判断时工具结果只看开头约 80 token，
+    助手文字约 600 token。所以原因和复盘写进助手文字，用户纠正作为独立的 user 消息。
+    """
+    owner_id = owner()
+    body = []
+    for i, step in enumerate(steps, 1):
+        action, result = _text_field(step, "action"), _text_field(step, "result")
+        why, correction = _text_field(step, "why"), _text_field(step, "user_correction")
+        mark = PRACTICE_OUTCOMES[step.get("outcome") or "ok"]
+        body.append({"role": "assistant", "sender_id": host,
+                     "content": clip(action + (f"\n原因：{why}" if why else "")),
                      "tool_calls": [{"id": f"call_{i}", "type": "function",
                                      "function": {"name": "step", "arguments": json.dumps(
-                                         {"action": step.get("action", "")}, ensure_ascii=False)}}]})
-        t += 1
-        msgs.append({"role": "tool", "sender_id": host, "timestamp": t, "tool_call_id": f"call_{i}",
-                     "content": clip(step.get("result", ""))})
-    msgs.append({"role": "assistant", "sender_id": host, "timestamp": t + 1, "content": clip(conclusion)})
-    results, failed = [], False
+                                         {"action": action}, ensure_ascii=False)}}]})
+        body.append({"role": "tool", "sender_id": host, "tool_call_id": f"call_{i}",
+                     "content": clip(f"【{mark[0]}】{result}" if mark else result)})
+        if mark:
+            body.append({"role": "assistant", "sender_id": host, "content": clip(f"{mark[1]}：{clip(result, 400)}")})
+        if correction:
+            body.append({"role": "user", "sender_id": owner_id, "content": clip(correction)})
+    msgs = [{"role": "user", "sender_id": owner_id, "content": clip(task)}, *body,
+            {"role": "assistant", "sender_id": host, "content": clip(conclusion)}]
+    start = (int(time.time() * 1000) if now_ms is None else now_ms) - len(msgs)
+    for offset, msg in enumerate(msgs):
+        msg["timestamp"] = start + offset
+    return msgs
+
+
+def find_practice_case(session_id: str, since_ms: int, timeout: float = 10) -> dict | None:
+    """在 v2 做法 case 里找本次写入生成的那条：同一 session，且不早于本次轨迹的首条消息。
+
+    服务端按 session_id 过滤；本地仍逐条核对，同一天同一 topic 的旧 case 不算数。
+    """
+    out = api("/api/v2/memory/get", {"memory_type": "agent_case", "agent_id": agent_id(), "page_size": 20,
+                                     "sort_by": "timestamp", "sort_order": "desc",
+                                     "filters": {"session_id": session_id[:128]}}, timeout=timeout)
+    for case in (out.get("data") or {}).get("agent_cases") or []:
+        if case.get("session_id") == session_id[:128] and epoch_ms(case.get("timestamp")) >= since_ms - 1000:
+            return case
+    return None
+
+
+def practice_case_note(session_id: str, since_ms: int, started: float) -> str:
+    """写后回读：在 EVEROS_CASE_WAIT 秒内轮询 v2 做法 case，结果只作提示，不影响写入成败。"""
+    wait = case_wait()
+    if wait <= 0:
+        return "v2 做法 case 未回读（EVEROS_CASE_WAIT=0）"
+    deadline, error = started + wait, None
+    while True:
+        try:
+            case = find_practice_case(session_id, since_ms,
+                                      timeout=max(1.0, min(10.0, deadline - time.monotonic())))
+            error = None
+        except Exception as exc:
+            case, error = None, exc
+        if case:
+            elapsed = time.monotonic() - started
+            log(f"practice case {session_id} found {elapsed:.0f}s quality={case.get('quality_score')}")
+            return f"v2 做法 case 已生成（质量 {case.get('quality_score')}，约 {elapsed:.0f} 秒）"
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(CASE_POLL, remaining))
+    if error is not None:
+        log(f"practice case {session_id} check failed: {error!r}")
+        return f"v2 做法 case 回读失败（{error}）；写入本身已完成"
+    log(f"practice case {session_id} missing after {wait:.0f}s")
+    return (f"v2 做法 case 在 {wait:.0f} 秒内没有生成。可能没通过 v2 的提炼筛选：步骤都是顺利执行、"
+            "没写出失败尝试或意外发现、没有用户纠正，或者轨迹过长；也可能还在后台处理。"
+            "轨迹已作为普通记忆写入，检索仍能查到；稍后可用 memory_search(kind=practices) 复查")
+
+
+def record_practice(host: str, topic: str, task: str, steps: list[dict], conclusion: str) -> str:
+    """做法轨迹：需求 → 每步动作与结果 → 结论。过渡期双写 v1 agent 轨道；写完回读 v2 是否生成做法 case。"""
+    ensure_writable()
+    validate_practice(steps, conclusion)
+    sid = f"agent_{datetime.now(CST):%Y%m%d}_{slug(topic) or 'practice'}"
+    msgs = practice_messages(host, task, steps, conclusion)
+    results, failed, v2_done = [], False, None
     vers = ["v2", "v1"] if version() == "v2" and read_v1() else [version()]
     for ver in vers:
         add = None
@@ -577,6 +711,8 @@ def record_practice(host: str, topic: str, task: str, steps: list[dict], conclus
             add = post_messages(sid, msgs, agent=True, ver=ver)
             time.sleep(1)
             results.append(f"{ver} {add}/{flush(sid, agent=True, ver=ver)}")
+            if ver == "v2":
+                v2_done = time.monotonic()
         except Exception as exc:
             failed = True
             phase = f"（add={add}，flush 未完成）" if add is not None else ""
@@ -585,6 +721,8 @@ def record_practice(host: str, topic: str, task: str, steps: list[dict], conclus
     if failed:
         log(f"practice incomplete {result}")
         raise RuntimeError("做法记录未完整写入；" + result)
+    if v2_done is not None:
+        result += "；" + practice_case_note(sid, msgs[0]["timestamp"], v2_done)
     return result
 
 

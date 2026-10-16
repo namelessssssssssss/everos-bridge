@@ -8,9 +8,10 @@
 - 每轮对话自动入库；
 - 关键节点用 MCP 工具补写结构化记录。
 
-先读三份文件：
+先读这几份文件：
 - [PROTOCOL.md](PROTOCOL.md)：读写规则，唯一依据；
 - [docs/methodology.md](docs/methodology.md)：为什么这样做，以及踩过的坑；
+- [docs/everos-notes.md](docs/everos-notes.md)：EverOS 服务本身的诀窍、局限与坑点，例如状态怎么读、做法 case 怎么生成；
 - [docs/agent-onboarding.md](docs/agent-onboarding.md)：接入一个新 agent 的自查清单和方法。
 
 ## 接入步骤（按顺序做，每步核对结果）
@@ -64,7 +65,7 @@
 - **写**：
   - 对话原文由 hook 自动入库；
   - 交付、纠错、偏好、决策这类关键节点，调 `memory_remember`；
-  - 排障或工具用法闭环，调 `memory_record_practice`；
+  - 排障或工具用法闭环，调 `memory_record_practice`：至少 3 个真实步骤，没走通或出乎意料的步骤标 `outcome`，用户纠正的原话填 `user_correction`；返回里会说明 v2 是否生成做法 case；
   - 画像写错了或过期了，调 `memory_fix_profile`。
 - **交付自检**：写了就在回复里列出写了什么；没写就在结尾输出「记忆写入：无」。
 
@@ -77,4 +78,5 @@
 - 不要把 key 写进仓库、提交记录或回复。
 - 不要删除记忆，除非用户明确要求。
 - 不要绕过 `install.sh` 去改其他 agent 的配置；确实需要手改时，先备份。
+- 不要在各 agent 加载的仓库目录里切分支或改代码，那等于直接改线上；开发用 `git worktree`，合并后再在原目录 pull 并重跑 `install.sh`。
 - 改了读写规则，要同步更新 PROTOCOL.md 和 docs/，提交并推送。

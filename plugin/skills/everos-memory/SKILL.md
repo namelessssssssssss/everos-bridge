@@ -28,6 +28,9 @@ description: 用户跨 agent、跨设备共用的 EverOS 长期记忆。会话�
   - user_said 放用户原话，不改写；
   - 同一话题沿用同一个 topic。
 - 排障或工具用法闭环时，用 `memory_record_practice` 写一条轨迹：需求 → 每步动作与结果 → 结论。
+  - 至少 3 个真实步骤；只有一两步的结论改用 `memory_remember`，不补写没发生的步骤。
+  - 没走通的尝试单独记一步并标 `outcome=failed`，出乎意料的结果标 `outcome=unexpected`；`result` 第一句写这一步的发现；用户中途纠正的原话填 `user_correction`。
+  - EverOS v2 只把有试错、意外、非显然诊断或用户纠正的轨迹提炼成做法 case。返回里会说明 case 是否生成，没生成不算失败，内容仍可检索。门槛和实测见 everos-bridge 仓库的 `docs/everos-notes.md`。
 - 用户纠正了画像里的偏好或背景，或者画像里的进度过期了：先 `memory_profile` 拿到 item_id，再 `memory_fix_profile`，并写明 reason。
 - episode 只追加不删除；owner 明确要求才删。
 - 交付自检：写了就在回复里列出写入内容；没写就在结尾输出「记忆写入：无」。

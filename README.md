@@ -5,6 +5,7 @@
 - **Agent 从这里开始**：[AGENTS.md](AGENTS.md)。新工作区里让 agent 读它，就能重建默认的读写流程。
 - **规则**：[PROTOCOL.md](PROTOCOL.md)。
 - **方法论**：[docs/methodology.md](docs/methodology.md)。
+- **EverOS 诀窍、局限与坑点**：[docs/everos-notes.md](docs/everos-notes.md)。
 - **新 Agent 接入清单**：[docs/agent-onboarding.md](docs/agent-onboarding.md)。
 
 ## 覆盖面
@@ -22,6 +23,8 @@
 | Claude Code on the web（云端） | setup script + 仓库级 hook + 网络密钥 | ✅ | ✅ | ✅ | ✅ |
 
 Python 代码只用标准库，不用安装依赖；运行期 hook 失败放行，MCP 和安装器会明确报告失败。接口用 EverOS v2，v1 旧库在过渡期合并读取（`EVEROS_READ_V1=1`），做法轨迹仍按协议双写。
+
+所有宿主的记忆工具都由同一个 `plugin/everos/mcp_server.py` 提供，工具说明和写入校验对每个宿主一致。`memory_record_practice` 至少要 3 个真实步骤，写完会回读 v2 是否生成做法 case，并在返回里说明，等待上限由 `EVEROS_CASE_WAIT` 控制。
 
 ## 手动检索 CLI
 
@@ -127,6 +130,7 @@ python3 scripts/validate_trae.py --out /tmp/everos-traex-validation
 AGENTS.md / CLAUDE.md             Agent 入口（CLAUDE.md 引用 AGENTS.md）
 PROTOCOL.md                       读写规则（唯一依据）
 docs/methodology.md               方法论：原则、决策记录、已知坑、演进路线
+docs/everos-notes.md              EverOS 服务本身的诀窍、局限与坑点：状态、v1/v2 差异、做法 case 门槛、接口与实测
 docs/agent-onboarding.md          新 Agent 接入：自查清单、实现步骤、验证清单、已接入宿主速查
 install.sh                        检测本机 agent 并逐个接线（改动前备份，幂等；支持非交互）；同步 Kimi Work 桌面端 daimon skill，并把 PROTOCOL.md 软链进 ~/.everos/
 bin/everos                        手动检索入口；安装到 ~/.local/bin/everos，支持 install.sh --cli-only
