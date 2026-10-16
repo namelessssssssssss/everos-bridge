@@ -43,6 +43,12 @@ third turn
 
 
 class DoubaoParseTests(unittest.TestCase):
+    def setUp(self):
+        # messages_doubao() stamps the owner id; parsing must not require a configured EverOS.
+        self.stack = contextlib.ExitStack()
+        self.addCleanup(self.stack.close)
+        self.stack.enter_context(patch.object(core, "owner", return_value="test_owner"))
+
     def test_only_user_text_and_final_answers_are_kept(self):
         rows = [
             row("user", "first turn"),
