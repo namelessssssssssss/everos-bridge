@@ -500,8 +500,31 @@ class Installer:
         link.symlink_to(target)
         print("  已把 {} 指向仓库副本（{}）".format(link, target))
 
+    def install_bin(self, name):
+        """Symlink a repo bin entry into ~/.local/bin; never overwrite a foreign file."""
+        target = self.repo / "bin" / name
+        link = self.home / ".local/bin" / name
+        if not target.is_file() or not os.access(target, os.X_OK):
+            raise ValueError("可执行入口不存在或不可执行：{}".format(target))
+        if link.is_symlink():
+            try:
+                if link.resolve() == target:
+                    return
+            except (OSError, RuntimeError):
+                pass  # Broken/cyclic links are conflicts, never replace them.
+        if link.exists() or link.is_symlink():
+            raise ValueError("路径已被其他文件占用，未覆盖：{}".format(link))
+        if self.dry:
+            print("  [dry-run] 把 {} 指向 {}".format(link, target))
+            return
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.symlink_to(target)
+        print("  命令已安装：{}".format(link))
+        if str(link.parent) not in os.environ.get("PATH", "").split(os.pathsep):
+            print("  使用短命令前，请把 {} 加入 PATH。".format(link.parent))
+
     def install_cli(self):
-        """Install only the manual CLI; no credentials, host changes or API calls."""
+        """Install the manual search CLI; no credentials, host changes or API calls."""
         target = self.repo / "bin/everos"
         link = self.home / ".local/bin/everos"
         if not target.is_file() or not os.access(target, os.X_OK):
@@ -523,6 +546,57 @@ class Installer:
         print("  CLI 已安装：{}；终端可运行 everos search \"问题\"".format(link))
         if str(link.parent) not in os.environ.get("PATH", "").split(os.pathsep):
             print("  使用短命令前，请把 {} 加入 PATH。".format(link.parent))
+
+    def doubao(self):
+        """Doubao Work: no hook/config surface exists, so only bins + user skill are wired."""
+        print("== Doubao Work")
+        self.install_bin("everos-mcp")
+        self.install_bin("everos-doubao-ingest")
+        skills_root = Path(os.environ.get(
+            "DOUBAO_USER_SKILLS",
+            str(self.home / ".doubao/agent_mode/workspace/.user_skills")))
+        source_dir = self.repo / "plugin/skills/everos-memory-doubao"
+        target_dir = skills_root / "everos-memory"
+        if not skills_root.is_dir():
+            print("  用户 skill 目录不存在，已跳过 skill 同步：{}".format(skills_root))
+            print("  需要时创建该目录后重跑，或手动复制 plugin/skills/everos-memory-doubao 为 everos-memory。")
+            return
+        for entry in ("SKILL.md",):
+            self.sync_doubao_skill_file(source_dir / entry, target_dir / entry, entry)
+        self.sync_doubao_skill_file(source_dir.parent.parent / "doubao/check.sh",
+                                    target_dir / "scripts/check.sh", "check.sh", executable=True)
+
+    def sync_doubao_skill_file(self, source: Path, target: Path, label: str, executable: bool = False):
+        """Copy one skill file (with backup), matching the daimon skill three-way policy."""
+        if not source.is_file():
+            raise ValueError("skill 源文件不存在：{}".format(source))
+        text = source.read_text(encoding="utf-8")
+        digest = hashlib.sha256(text.encode()).hexdigest()
+        old = target.read_text(encoding="utf-8") if target.exists() else None
+        marker = self.everos / "state/install/doubao-everos-memory-{}.sha256".format(
+            hashlib.sha256(label.encode()).hexdigest()[:12])
+        last = marker.read_text().strip() if marker.exists() else None
+        old_digest = hashlib.sha256(old.encode()).hexdigest() if old is not None else None
+        if old_digest == digest:
+            print("  Doubao skill {} 已是最新".format(label))
+            return
+        note_old = ("  [dry-run] 将安装 Doubao skill {}".format(label) if self.dry
+                    else "  已安装 Doubao skill {}".format(label))
+        note_chg = ("  [dry-run] 将更新 Doubao skill {}".format(label) if self.dry
+                    else "  Doubao skill {} 有更新，已覆盖".format(label))
+        note_foreign = ("  [dry-run] Doubao skill {} 被外部改过，将备份并覆盖".format(label) if self.dry
+                        else "  Doubao skill {} 被外部改过，已备份并覆盖".format(label))
+        if old is None:
+            print(note_old + "：{}".format(target))
+        elif last == old_digest:
+            print(note_chg + "：{}".format(target))
+        else:
+            print(note_foreign + "：{}".format(target))
+        if self.dry:
+            return
+        self.edit(target, text, mode=0o755 if executable else None)
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(digest)
 
     def sync_daimon_skill(self, desktop):
         """Keep the daimon-managed everos-memory skill identical to the repo version.
@@ -664,6 +738,7 @@ class Installer:
         if self.only == "trae":
             self.finish()
             return
+        self.doubao()
         print("== 其他 MCP 客户端")
         process = subprocess.run(["ps", "-axo", "command"], text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         if "Claude.app/Contents/MacOS/Claude" in process.stdout:
@@ -728,6 +803,9 @@ def main():
         installer = Installer(Path(__file__).resolve().parents[1], args.dry_run, args.only)
         if args.cli_only:
             installer.install_cli()
+            # Doubao Work 的两个命令不依赖凭据或宿主配置，--cli-only 也一并装上
+            installer.install_bin("everos-mcp")
+            installer.install_bin("everos-doubao-ingest")
         else:
             installer.install()
     except (OSError, ValueError, subprocess.CalledProcessError) as error:

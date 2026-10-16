@@ -93,6 +93,13 @@ class InstallerTests(unittest.TestCase):
         shutil.copy2(ROOT / "scripts/install_config.py", self.repo / "scripts/install_config.py")
         (self.repo / "bin").mkdir()
         shutil.copy2(ROOT / "bin/everos", self.repo / "bin/everos")
+        for name in ("everos-mcp", "everos-doubao-ingest"):
+            shutil.copy2(ROOT / "bin" / name, self.repo / "bin" / name)
+        (self.repo / "plugin/doubao").mkdir(parents=True)
+        shutil.copy2(ROOT / "plugin/doubao/check.sh", self.repo / "plugin/doubao/check.sh")
+        (self.repo / "plugin/skills/everos-memory-doubao").mkdir(parents=True)
+        shutil.copy2(ROOT / "plugin/skills/everos-memory-doubao/SKILL.md",
+                     self.repo / "plugin/skills/everos-memory-doubao/SKILL.md")
         (self.repo / "plugin/rules/everos-rules.md").write_text("每条提问检索；每轮对话入库。\n")
         (self.repo / "plugin/skills/everos-memory").mkdir(parents=True)
         (self.repo / "plugin/skills/everos-memory/SKILL.md").write_text("repo skill v1\n")
@@ -163,6 +170,40 @@ class InstallerTests(unittest.TestCase):
         self.assertFalse((self.home / ".everos").exists())
         self.assertFalse((self.home / ".codex").exists())
         self.assertEqual(self.calls(), [])
+
+    def test_cli_only_also_installs_doubao_bins_idempotently(self):
+        del self.env["EVEROS_USER_ID"]
+        del self.env["EVEROS_API_KEY"]
+        self.run_install("--cli-only")
+        for name in ("everos-mcp", "everos-doubao-ingest"):
+            link = self.home / ".local/bin" / name
+            self.assertTrue(link.is_symlink(), name)
+            self.assertEqual(link.resolve(), self.repo / "bin" / name)
+        before = (self.home / ".local/bin/everos-mcp").lstat().st_mtime_ns
+        self.run_install("--cli-only")
+        self.assertEqual((self.home / ".local/bin/everos-mcp").lstat().st_mtime_ns, before)
+        self.assertEqual(self.calls(), [])
+
+    def test_doubao_bins_conflict_is_not_overwritten(self):
+        link = self.home / ".local/bin/everos-mcp"
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.write_text("#!/bin/sh\necho foreign\n")
+        result = self.run_install("--cli-only", expect=1)
+        self.assertIn("其他文件占用", result.stderr)
+        self.assertIn("foreign", link.read_text())
+
+    def test_full_install_syncs_doubao_skill_when_dir_exists(self):
+        skills = self.home / ".doubao/agent_mode/workspace/.user_skills/everos-memory"
+        skills.mkdir(parents=True)
+        (skills / "scripts").mkdir()
+        self.run_install()
+        self.assertEqual((skills / "SKILL.md").read_text(),
+                         (self.repo / "plugin/skills/everos-memory-doubao/SKILL.md").read_text())
+        self.assertTrue((skills / "scripts/check.sh").read_text().startswith("#!"))
+        # idempotent: second run leaves files untouched
+        before = (skills / "SKILL.md").lstat().st_mtime_ns
+        self.run_install()
+        self.assertEqual((skills / "SKILL.md").lstat().st_mtime_ns, before)
 
     def test_cli_only_dry_run_does_not_create_directories(self):
         result = self.run_install("--cli-only", "--dry-run")
