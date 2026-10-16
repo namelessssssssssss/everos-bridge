@@ -52,6 +52,7 @@
 - [ ] `install.sh` 重复运行不会重复追加配置（幂等）。
 - [ ] 改完代码后在新会话里验证（MCP 服务是常驻进程，旧会话里还是旧代码）。
 - [ ] `EVEROS_WRITE=0` 时自动采集和 MCP 三个写工具均不能入库；业务错误不会推进 offset 或清除 pending；多行记忆只标记真正注入的 ID。
+- [ ] 新宿主里调一次 `memory_record_practice`：2 步时应被拒绝并提示改用 `memory_remember`；3 步以上、含一步 `outcome=failed` 时，返回里应出现 v2 做法 case 的回读结论。宿主的 MCP 外层超时要容得下写入加 `EVEROS_CASE_WAIT`（默认 30 秒）。
 
 ## 已接入宿主速查
 

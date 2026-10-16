@@ -1,7 +1,7 @@
 # EverOS 记忆协议（唯一依据）
 
 > 2026-10-08 版（v2）。口径：能长期复用的都写、凭据可以入库、默认多写不少写、每条提问都检索。
-> 设计理由和踩过的坑见 [docs/methodology.md](docs/methodology.md)；接入新 agent 见 [docs/agent-onboarding.md](docs/agent-onboarding.md)。
+> 设计理由和踩过的坑见 [docs/methodology.md](docs/methodology.md)；EverOS 服务本身的诀窍、局限与坑点见 [docs/everos-notes.md](docs/everos-notes.md)；接入新 agent 见 [docs/agent-onboarding.md](docs/agent-onboarding.md)。
 > 各 agent 的接线和周质检都以本文件为准。改规则先改这里，再提交、推送。
 
 ## 0. 定位
@@ -56,16 +56,25 @@
   - content 写结论、做了什么、证据（文件:行、MR、commit、链接、logid）；
   - user_said 放用户原话，不改写；
   - 同一话题沿用同一个 topic。
-- `memory_record_practice(topic, task, steps, conclusion)`：排障或工具用法闭环时写一条做法轨迹。过渡期会同时写 v1：v1 生成 case 更稳定，查询仍可能有索引延迟；v2 也会生成但不稳定，观察一周再停。
-- 实践双写任一版本失败时，工具返回错误并保留各版本结果；成功的版本可能已经写入，重试仍沿用同一 topic。写入与抽取成功不代表搜索索引已经可见，需要回读确认。
+- `memory_record_practice(topic, task, steps, conclusion)`：排障或工具用法闭环时写一条做法轨迹。
+  - 至少 3 个真实步骤，写入前校验。只有一两步的结论改用 `memory_remember`，不补写没发生的步骤。
+  - 走错的路、失败的尝试单独记一步，标 `outcome=failed`；出乎意料的结果标 `outcome=unexpected`。`result` 第一句写这一步的发现。
+  - 用户中途纠正或改向时，原话填进那一步的 `user_correction`，作为独立的用户消息写入，不改写。
+  - v2 只把有试错、意外、非显然诊断或用户纠正的轨迹提炼成做法 case，顺利执行的线性流程通常不会有 case，内容仍以普通记忆可检索。门槛和实测见 [EverOS 诀窍与坑点](docs/everos-notes.md#3-做法-case-怎么生成v2)。
+  - 写完在 `EVEROS_CASE_WAIT` 秒内回读 v2 做法 case，结果写在返回里；没生成不算失败。
+  - 过渡期同时写 v1，v1 几乎每条都出 case。停双写的条件见 [演进路线](docs/methodology.md#演进路线)。
+- 实践双写任一版本失败时，工具返回错误并保留各版本结果，不做 case 回读；成功的版本可能已经写入，重试仍沿用同一 topic。写入与抽取成功不代表搜索索引已经可见，需要回读确认。
 - `memory_fix_profile(operations)`：用户纠正了画像里的偏好或背景，或者画像里的进度过期了，就直接改。先用 `memory_profile` 拿到 item_id，每条操作都写 reason。
 
 ### 3.3 已知坑
 
-完整列表见 [docs/methodology.md](docs/methodology.md#已知坑大多静默失败不报错)。
+接线相关的坑见 [docs/methodology.md](docs/methodology.md#已知坑大多静默失败不报错)，EverOS 服务本身的坑见 [docs/everos-notes.md](docs/everos-notes.md)。
 
 - 写完要核对：add 返回 `accumulated` 或 `extracted`，并且能用 get 或 search 查到。
 - `no_extraction` 有三种情况：缓冲为空、内容已去重、v1 时序问题。前两种正常，第三种 v2 已不存在。
+- 日志和工具返回里的 `A/B` 是同一版本的「add 状态/flush 状态」，不是「v1/v2」；做法双写写成 `v2 A/B; v1 A/B`。
+- `extracted` 不代表生成了做法 case。做法 case 是否生成，看 `memory_record_practice` 返回里的回读结论，或 hook.log 的 `practice case … found/missing`。
+- MCP 参数校验失败（`-32602`）的请求没有发出，修正参数后重写，不能当成已入库。
 - 兜底命令：`python3 plugin/everos/hook.py --sweep`，补落盘所有待抽取的会话，并同步本地记忆。
 - 本地记忆的三次非成功重试限制按文件版本计算；正文更新后重新允许尝试。网络异常不消耗内容重试次数，`no_extraction` 可视为已去重完成。
 
@@ -100,6 +109,7 @@
 | `EVEROS_AGENT_ID` | v2 助手消息的归属，默认 `<user_id>_agent` |
 | `EVEROS_MIN_SCORE` / `EVEROS_RECALL_TIMEOUT` / `EVEROS_RECALL_CHARS` | 检索门槛、预算、字数 |
 | `EVEROS_AGENTIC_TIMEOUT` | 手动 agentic 检索总预算（秒，含回退），默认 180；MCP `timeout` / CLI `--timeout` 可按次覆盖 |
+| `EVEROS_CASE_WAIT` | 写做法后回读 v2 做法 case 的最长等待（秒），从 v2 写完开始计，默认 30，上限 150，`0` 关闭回读；非法值按默认处理 |
 | `EVEROS_OWNER_ALIASES` | botmux 邮箱前缀别名 |
 | `EVEROS_INJECT=0` / `EVEROS_WRITE=0` | 关闭读侧自动注入 / 所有写侧入库（包括 MCP、flush、画像编辑、本地记忆同步） |
 | `EVEROS_HOST` | hook 命令里显式指定宿主（如 `kimi_desktop`），桌面端 payload 没有 `client_type`，靠它区分 |
@@ -107,7 +117,7 @@
 
 状态在 `$EVEROS_HOME/state/`：`sessions/*.json` 是会话账本，`recall/*.json` 记录本会话已注入过的条目，`localmem.json` 是本地记忆同步账本，`hook.log` 是日志。
 
-MCP 客户端外层超时需大于实际检索预算。安装器为 Codex 的 `tool_timeout_sec` 和 MiMo 的毫秒 `timeout` 设置至少配置预算 + 10 秒，默认 190 秒，并保留更大的现值。调大配置后重跑 `install.sh`；按次增加预算时也需保证外层允许等待。其他宿主按自身协议配置，不猜测字段。
+MCP 客户端外层超时需大于实际检索预算。安装器为 Codex 的 `tool_timeout_sec` 和 MiMo 的毫秒 `timeout` 设置至少配置预算 + 10 秒，默认 190 秒，并保留更大的现值。调大配置后重跑 `install.sh`；按次增加预算时也需保证外层允许等待。其他宿主按自身协议配置，不猜测字段。`memory_record_practice` 的耗时是写入（通常 10 到 20 秒）加回读等待（与 v1 双写重叠，最多 `EVEROS_CASE_WAIT` 秒），默认值在 190 秒内；宿主外层超时更短时调小 `EVEROS_CASE_WAIT`。
 
 Codex 升级前必须保存已有 EverOS 插件版本缓存，CLI 操作后恢复被移除的旧目录（操作失败时也恢复）。运行中的聊天仍可能持有旧版 hook 的绝对路径；不能仅安装新版本就删除旧入口，也不能把旧版本路径指向不同内容。新聊天加载新版本，旧缓存不自动清理。
 
@@ -137,8 +147,8 @@ TraeX 的共享配置/规则位于 `$TRAE_HOME`（默认 `~/.trae`），运行�
 | 写入 | `POST /api/v2/memory/add`：`session_id` + `messages[]`（每条都要有 sender_id、role、毫秒 timestamp、content）、`async_mode` | `/api/v1/memories` 和 `/api/v1/memories/agent`，要带 `user_id` |
 | 落盘 | `POST /api/v2/memory/flush`：`session_id` | `/api/v1/memories/flush` |
 | 检索 | `POST /api/v2/memory/search`：`query`，`user_id` 和 `agent_id` 二选一，`min_score`、`include_profile`、`filters` | `/api/v1/memories/search`：`filters.user_id`、`memory_types` |
-| 读取 | `POST /api/v2/memory/get`：`memory_type` 取 episode / profile / agent_case / agent_skill，可用 `sort_by` | `/api/v1/memories/get`：memory_type 用 `episodic_memory` |
+| 读取 | `POST /api/v2/memory/get`：`memory_type` 取 episode / profile / agent_case / agent_skill，可用 `sort_by`；`filters` 支持 `session_id`、`timestamp` 等，不能放 `user_id`/`agent_id`；返回体按 `memory_type` 取对应列表键 | `/api/v1/memories/get`：memory_type 用 `episodic_memory` / `agent_case` / `agent_skill` / `profile`（`agent_memory` 只用于 search） |
 | 改画像 | `POST /api/v2/memory/edit`：`user_id` + `operations[]` | 不支持 |
-| 打标签 / 删除 | `/api/v2/memory/tag/{bind,unbind,replace}`、`/api/v2/memory/delete` | — |
+| 打标签 / 删除 | `/api/v2/memory/tag/{bind,unbind,replace}`、`/api/v2/memory/delete`（按 `user_id` / `agent_id` / `session_id` 软删除）、`/api/v2/memory/delete_by_ids` | — |
 
 Cloud 按 MemCell 计费，大约 10 条消息算 1 个。v1 即将退役，届时官方会把 v1 数据迁到 v2。

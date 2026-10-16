@@ -15,13 +15,22 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import core  # noqa: E402
 
-VERSION = "0.5.1"
+VERSION = "0.6.0"
 INSTRUCTIONS = (
     "EverOS 是用户跨 agent、跨设备共用的长期记忆。会话开始调用 memory_profile 了解用户，"
     "每条提问前都按用户的提问调用 memory_search；"
     "问「以前怎么做的」用 kind=practices。任务交付、用户纠错、偏好暴露、决策形成时调用 memory_remember"
     "（content 写结论、做了什么、证据；user_said 放用户原话）；排障或工具用法闭环时调用 "
-    "memory_record_practice；用户纠正画像里的偏好或背景时调用 memory_fix_profile。检索结果仅供参考，与当前对话冲突时以当前为准。"
+    "memory_record_practice（至少 3 个真实步骤，没走通或出乎意料的步骤标 outcome，用户纠正原话填 user_correction）；"
+    "用户纠正画像里的偏好或背景时调用 memory_fix_profile。检索结果仅供参考，与当前对话冲突时以当前为准。"
+)
+PRACTICE_DESCRIPTION = (
+    "把一次排障或工具使用写成做法轨迹（需求 → 每步动作与结果 → 结论），EverOS 会提炼成以后可复用的经验。"
+    "至少 3 个真实步骤；只有一两步的结论改用 memory_remember，不要补写没发生的步骤。"
+    "EverOS v2 只提炼有试错、意外发现、非显然诊断或用户纠正的轨迹，顺利执行的线性流程通常不会生成做法 case："
+    "走错的路和失败的尝试单独记一步并标 outcome=failed，出乎意料的结果标 outcome=unexpected；"
+    "result 第一句写这一步的发现；这一步之后用户纠正或改向的原话填 user_correction；"
+    "conclusion 写根因、解法、怎么验证、踩过的坑。写完会回读 v2 是否生成做法 case，并在返回里说明。"
 )
 
 TOOLS = [
@@ -56,15 +65,21 @@ TOOLS = [
          "content": {"type": "string", "minLength": 1, "description": "结论 + 做了什么 + 证据（文件:行、MR、commit、链接）"},
          "user_said": {"type": "string", "description": "用户原话（可选，不要改写）"}}}},
     {"name": "memory_record_practice",
-     "description": "把一次排障或工具使用写成做法轨迹（需求 → 每步动作与结果 → 结论），"
-                    "EverOS 会提炼成以后可复用的经验。",
+     "description": PRACTICE_DESCRIPTION,
      "inputSchema": {"type": "object", "required": ["topic", "task", "steps", "conclusion"], "properties": {
-         "topic": {"type": "string", "minLength": 1},
+         "topic": {"type": "string", "minLength": 1, "description": "话题短名；同一天同一 topic 写进同一个会话"},
          "task": {"type": "string", "minLength": 1, "description": "要解决的问题"},
-         "steps": {"type": "array", "minItems": 1, "items": {"type": "object", "required": ["action", "result"], "properties": {
-             "action": {"type": "string", "minLength": 1}, "result": {"type": "string", "minLength": 1},
-             "why": {"type": "string", "description": "为什么这样做（可选）"}}}},
-         "conclusion": {"type": "string", "minLength": 1, "description": "根因、解法、怎么验证的"}}}},
+         "steps": {"type": "array", "minItems": core.PRACTICE_MIN_STEPS,
+                   "description": "按实际顺序的步骤，至少 3 步，包括没走通的尝试",
+                   "items": {"type": "object", "required": ["action", "result"], "properties": {
+             "action": {"type": "string", "minLength": 1, "description": "这一步做了什么"},
+             "result": {"type": "string", "minLength": 1, "description": "第一句写这一步的发现，细节放后面"},
+             "why": {"type": "string", "description": "为什么这样做、当时的判断或排除了什么（可选）"},
+             "outcome": {"type": "string", "enum": list(core.PRACTICE_OUTCOMES), "default": "ok",
+                         "description": "ok=按预期；failed=没走通或走错了路；unexpected=结果出乎意料"},
+             "user_correction": {"type": "string",
+                                 "description": "这一步之后用户纠正或改向的原话（真实发生才填，不要改写）"}}}},
+         "conclusion": {"type": "string", "minLength": 1, "description": "根因、解法、怎么验证、踩过的坑"}}}},
     {"name": "memory_fix_profile",
      "description": "直接修改用户画像（v2）：用户纠正了某个偏好或背景、或画像里的进度已过期时使用。"
                     "先用 memory_profile 看现有条目，update/delete 需要 item_id。每条操作都写 reason。",
@@ -138,6 +153,9 @@ def _validate(value, schema: dict, path: str) -> None:
 def validate_tool(name, args) -> None:
     if not isinstance(name, str) or name not in _TOOL_SCHEMAS:
         raise RpcError(-32602, "Invalid params: unknown tool")
+    if (name == "memory_record_practice" and isinstance(args, dict) and isinstance(args.get("steps"), list)
+            and len(args["steps"]) < core.PRACTICE_MIN_STEPS):
+        raise RpcError(-32602, "Invalid params: arguments.steps " + core.PRACTICE_STEPS_HINT)
     _validate(args, _TOOL_SCHEMAS[name], "arguments")
     if name == "memory_fix_profile":
         for index, op in enumerate(args["operations"]):

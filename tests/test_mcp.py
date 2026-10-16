@@ -228,14 +228,54 @@ class McpTests(unittest.TestCase):
             recent.assert_called_once_with(7, 20)
 
     def test_write_arguments_validate_required_fields_and_nested_steps(self):
-        practice = {"topic": "topic", "task": "task", "steps": [{"action": "act", "result": "ok"}],
-                    "conclusion": "done"}
+        ok = {"action": "act", "result": "ok"}
+        practice = {"topic": "topic", "task": "task", "steps": [ok, ok, ok], "conclusion": "done"}
         invalid_practices = [dict(practice, steps=steps) for steps in (
-            [], {}, [None], [{"action": "act"}], [{"action": "act", "result": 3}],
-            [{"action": " ", "result": "ok"}], [{"action": "act", "result": "ok", "why": []}])]
+            [], {}, [ok], [ok, ok], [ok, ok, None], [ok, ok, {"action": "act"}],
+            [ok, ok, {"action": "act", "result": 3}], [ok, ok, {"action": " ", "result": "ok"}],
+            [ok, ok, dict(ok, why=[])], [ok, ok, dict(ok, outcome="maybe")],
+            [ok, ok, dict(ok, user_correction=1)])]
+        invalid_practices.append(dict(practice, conclusion=" "))
         for args in invalid_practices:
             with self.subTest(args=args):
                 self.assert_invalid_params(self.call_tool("memory_record_practice", args))
+
+    def test_short_practice_error_explains_the_v2_gate_and_alternative(self):
+        response = self.call_tool("memory_record_practice", {"topic": "t", "task": "task", "conclusion": "done",
+                                                             "steps": [{"action": "a", "result": "r"}] * 2})
+        self.assert_invalid_params(response)
+        self.assertIn("至少需要 3 个真实步骤", response["error"]["message"])
+        self.assertIn("memory_remember", response["error"]["message"])
+
+    def test_practice_schema_advertises_gates_outcomes_and_user_corrections(self):
+        tools = {tool["name"]: tool for tool in self.server.respond(request("tools/list"))["result"]["tools"]}
+        practice = tools["memory_record_practice"]
+        self.assertIn("至少 3 个真实步骤", practice["description"])
+        self.assertIn("user_correction", practice["description"])
+        steps = practice["inputSchema"]["properties"]["steps"]
+        self.assertEqual(steps["minItems"], 3)
+        item = steps["items"]["properties"]
+        self.assertEqual(item["outcome"]["enum"], ["ok", "failed", "unexpected"])
+        self.assertEqual(item["user_correction"]["type"], "string")
+        self.assertEqual(steps["items"]["required"], ["action", "result"])
+
+    def test_valid_practice_with_outcomes_reaches_core_unchanged(self):
+        steps = [{"action": "a", "result": "r"}, {"action": "b", "result": "r", "outcome": "failed"},
+                 {"action": "c", "result": "r", "outcome": "unexpected", "user_correction": "use d"}]
+        with mock.patch.object(mcp_server.core, "record_practice", return_value="sid: v2 extracted/no_extraction") as call:
+            result = self.call_tool("memory_record_practice", {"topic": "t", "task": "task", "steps": steps,
+                                                               "conclusion": "done"})["result"]
+        self.assertFalse(result["isError"])
+        self.assertEqual(result["content"][0]["text"], "已写入 sid: v2 extracted/no_extraction")
+        call.assert_called_once_with("mcp", "t", "task", steps, "done")
+
+    def test_server_and_plugin_manifests_share_one_version(self):
+        for manifest in ("plugin/.claude-plugin/plugin.json", "plugin/.codex-plugin/plugin.json"):
+            with self.subTest(manifest=manifest):
+                self.assertEqual(json.loads((ROOT / manifest).read_text())["version"], mcp_server.VERSION)
+        info = self.server.respond(request("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
+                                                          "clientInfo": {"name": "Kimi"}}))["result"]["serverInfo"]
+        self.assertEqual(info["version"], mcp_server.VERSION)
         for args in ({}, {"topic": "topic"}, {"topic": " ", "content": "x"},
                      {"topic": "topic", "content": "x", "user_said": []}):
             with self.subTest(args=args):
@@ -266,7 +306,7 @@ class McpTests(unittest.TestCase):
     def test_write_switch_blocks_every_mutating_tool_before_core_dispatch(self):
         cases = [("memory_remember", "remember", {"topic": "t", "content": "c"}),
                  ("memory_record_practice", "record_practice", {"topic": "t", "task": "task",
-                  "steps": [{"action": "a", "result": "r"}], "conclusion": "done"}),
+                  "steps": [{"action": "a", "result": "r"}] * 3, "conclusion": "done"}),
                  ("memory_fix_profile", "fix_profile", {"operations": [{"action": "delete",
                   "type": "explicit_info", "item_id": "item", "reason": "correction"}]})]
         with mock.patch.object(mcp_server.core, "cfg", return_value={"EVEROS_WRITE": "0"}):
@@ -285,7 +325,7 @@ class McpTests(unittest.TestCase):
         self.assertIn("service offline", response["result"]["content"][0]["text"])
 
     def test_partial_practice_write_failure_is_visible_to_client(self):
-        args = {"topic": "t", "task": "task", "steps": [{"action": "a", "result": "r"}],
+        args = {"topic": "t", "task": "task", "steps": [{"action": "a", "result": "r"}] * 3,
                 "conclusion": "done"}
         with mock.patch.object(mcp_server.core, "cfg", return_value={"EVEROS_USER_ID": "unit-owner",
                 "EVEROS_API_VERSION": "v2", "EVEROS_READ_V1": "1"}), \

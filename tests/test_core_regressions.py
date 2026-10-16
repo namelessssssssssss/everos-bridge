@@ -41,6 +41,7 @@ class IsolatedCore(unittest.TestCase):
         self.addCleanup(self.stack.close)
         self.stack.enter_context(patch.dict(os.environ))
         os.environ.pop("EVEROS_AGENTIC_TIMEOUT", None)
+        os.environ.pop("EVEROS_CASE_WAIT", None)
         self.stack.enter_context(patch.dict(os.environ, {
             "EVEROS_HOME": str(self.root), "EVEROS_USER_ID": "test_owner",
             "EVEROS_API_KEY": "test_key", "EVEROS_API_VERSION": "v2", "EVEROS_READ_V1": "0",
@@ -164,18 +165,21 @@ class ResponseAndWriteTests(IsolatedCore):
         self.assertFalse(core.LOCALMEM_LEDGER.exists())
 
     def test_practice_failure_retains_dual_write_outcomes(self):
+        steps = [{"action": f"act {i}", "result": f"result {i}"} for i in range(3)]
         with patch.dict(os.environ, {"EVEROS_READ_V1": "1"}), patch.object(core.time, "sleep"):
             self.api.side_effect = [response("extracted"), response("no_extraction"), RuntimeError("v1 offline")]
             with self.assertRaisesRegex(RuntimeError, "v2 extracted/no_extraction; v1 failed"):
-                core.record_practice("codex", "partial", "task", [], "conclusion")
+                core.record_practice("codex", "partial", "task", steps, "conclusion")
             self.assertIn("v2 extracted/no_extraction; v1 failed", core.LOG.read_text())
             self.api.side_effect = RuntimeError("all writes offline")
             with self.assertRaisesRegex(RuntimeError, "v2 failed.*v1 failed"):
-                core.record_practice("codex", "all", "task", [], "conclusion")
+                core.record_practice("codex", "all", "task", steps, "conclusion")
             self.api.side_effect = [response("extracted"), RuntimeError("v2 flush offline"),
                                     response("accumulated"), response("extracted")]
             with self.assertRaisesRegex(RuntimeError, "add=extracted，flush 未完成.*v1 accumulated/extracted"):
-                core.record_practice("codex", "flush_failed", "task", [], "conclusion")
+                core.record_practice("codex", "flush_failed", "task", steps, "conclusion")
+        # 写入失败时不做 case 回读：只有上面列出的 add / flush 调用。
+        self.assertNotIn("/api/v2/memory/get", [c.args[0] for c in self.api.call_args_list])
 
     def test_profile_edit_never_reports_partial_application_as_success(self):
         ops = [{"action": "add"}, {"action": "update"}]
@@ -680,6 +684,171 @@ class LocalMemoryTests(IsolatedCore):
             core.sync_local_memory()
         self.assertEqual(self.api.call_count, 2)
         self.assertEqual(core.load_state(core.LOCALMEM_LEDGER)[str(note)]["attempted_mtime"], note.stat().st_mtime)
+
+
+class FakeClock:
+    """单调时钟随 sleep 前进，回读轮询不必真的等待。"""
+
+    def __init__(self):
+        self.now = 1000.0
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
+class PracticeTests(IsolatedCore):
+    STEPS = [{"action": "act 1", "why": "why 1", "result": "result 1"},
+             {"action": "act 2", "result": "result 2", "outcome": "failed"},
+             {"action": "act 3", "result": "result 3", "outcome": "unexpected", "user_correction": "use X instead"}]
+
+    def setUp(self):
+        super().setUp()
+        self.clock = FakeClock()
+        self.stack.enter_context(patch.object(core.time, "monotonic", self.clock.monotonic))
+        self.stack.enter_context(patch.object(core.time, "sleep", self.clock.sleep))
+        self.polls = []
+        self.api.side_effect = self.fake_api
+
+    def fake_api(self, path, body, timeout=90):
+        if path == "/api/v2/memory/add":
+            return response("extracted")
+        if path in ("/api/v2/memory/flush", "/api/v1/memories/agent/flush"):
+            return response("no_extraction" if path.startswith("/api/v2") else "extracted")
+        if path == "/api/v1/memories/agent":
+            return response("accumulated")
+        if path == "/api/v2/memory/get":
+            item = self.polls.pop(0) if self.polls else []
+            if isinstance(item, Exception):
+                raise item
+            return {"data": {"agent_cases": item(body) if callable(item) else item}}
+        raise AssertionError(f"unexpected API path {path}")
+
+    def paths(self):
+        return [c.args[0] for c in self.api.call_args_list]
+
+    @staticmethod
+    def case_for(body, timestamp=None, quality=0.9):
+        stamp = timestamp or datetime_utc_now()
+        return [{"session_id": body["filters"]["session_id"], "timestamp": stamp, "quality_score": quality}]
+
+    def test_practice_requires_three_real_steps_before_any_write(self):
+        ok = {"action": "act", "result": "done"}
+        invalid = [
+            ([], "conclusion", "至少需要 3 个真实步骤"), ([ok, ok], "conclusion", "memory_remember"),
+            ([ok, ok, "step"], "conclusion", "必须是对象"), ([ok, ok, {"action": "act"}], "conclusion", "缺少"),
+            ([ok, ok, {"action": " ", "result": "x"}], "conclusion", "缺少"),
+            ([ok, ok, dict(ok, outcome="maybe")], "conclusion", "outcome"),
+            ([ok, ok, dict(ok, why=[])], "conclusion", "why"),
+            ([ok, ok, dict(ok, user_correction=1)], "conclusion", "user_correction"),
+            ([ok, ok, ok], " ", "conclusion"),
+        ]
+        for steps, conclusion, message in invalid:
+            with self.subTest(steps=steps, conclusion=conclusion):
+                with self.assertRaisesRegex(ValueError, message):
+                    core.record_practice("codex", "topic", "task", steps, conclusion)
+        self.api.assert_not_called()
+
+    def test_practice_messages_surface_failures_and_user_corrections(self):
+        msgs = core.practice_messages("codex", "task", self.STEPS, "conclusion", now_ms=10_000)
+        self.assertEqual([m["role"] for m in msgs], [
+            "user", "assistant", "tool", "assistant", "tool", "assistant",
+            "assistant", "tool", "assistant", "user", "assistant"])
+        self.assertEqual(msgs[1]["content"], "act 1\n原因：why 1")
+        self.assertEqual(msgs[2]["content"], "result 1")
+        self.assertEqual(msgs[4]["content"], "【失败】result 2")
+        self.assertEqual(msgs[5]["content"], "这一步没走通：result 2")
+        self.assertEqual(msgs[7]["content"], "【意外】result 3")
+        self.assertEqual(msgs[8]["content"], "这一步的结果出乎意料：result 3")
+        self.assertEqual((msgs[9]["sender_id"], msgs[9]["content"]), ("test_owner", "use X instead"))
+        self.assertEqual(msgs[-1]["content"], "conclusion")
+        self.assertEqual(sum(1 for m in msgs if m.get("tool_calls")), 3)
+        self.assertEqual([m["tool_call_id"] for m in msgs if m["role"] == "tool"], ["call_1", "call_2", "call_3"])
+        stamps = [m["timestamp"] for m in msgs]
+        self.assertEqual(stamps, sorted(set(stamps)))
+        self.assertEqual(stamps[-1], 9_999)
+        mapped = core._v2_messages(msgs)
+        self.assertEqual({m["sender_id"] for m in mapped if m["role"] == "user"}, {"test_owner"})
+        self.assertEqual({m["sender_id"] for m in mapped if m["role"] != "user"}, {"test_owner_agent"})
+
+    def test_reflection_keeps_long_results_visible_but_bounded(self):
+        long_result = "发现：" + "x" * 1000
+        msgs = core.practice_messages("codex", "task", [dict(self.STEPS[1], result=long_result)] * 3, "done")
+        reflection = msgs[3]["content"]
+        self.assertTrue(reflection.startswith("这一步没走通：发现："))
+        self.assertLess(len(reflection), 500)
+        self.assertEqual(msgs[2]["content"], "【失败】" + long_result)
+
+    def test_readback_reports_generated_case_after_polling(self):
+        self.polls = [[], lambda body: self.case_for(body)]
+        out = core.record_practice("codex", "topic", "task", self.STEPS, "conclusion")
+        self.assertIn("v2 extracted/no_extraction；v2 做法 case 已生成（质量 0.9", out)
+        self.assertEqual(self.paths(), ["/api/v2/memory/add", "/api/v2/memory/flush",
+                                        "/api/v2/memory/get", "/api/v2/memory/get"])
+        body = self.api.call_args_list[2].args[1]
+        self.assertEqual((body["memory_type"], body["agent_id"]), ("agent_case", "test_owner_agent"))
+        self.assertTrue(body["filters"]["session_id"].startswith("agent_") and body["filters"]["session_id"].endswith("_topic"))
+        self.assertIn("practice case agent_", core.LOG.read_text())
+        self.assertIn("found", core.LOG.read_text())
+
+    def test_readback_ignores_stale_or_foreign_cases_and_reports_missing(self):
+        stale = lambda body: self.case_for(body, timestamp="2026-01-01T00:00:00Z")
+        foreign = [{"session_id": "agent_other", "timestamp": datetime_utc_now(), "quality_score": 1}]
+        self.polls = [stale, foreign] * 20
+        with patch.dict(os.environ, {"EVEROS_CASE_WAIT": "9"}):
+            out = core.record_practice("codex", "topic", "task", self.STEPS, "conclusion")
+        self.assertIn("v2 做法 case 在 9 秒内没有生成", out)
+        self.assertIn("memory_search(kind=practices)", out)
+        self.assertEqual(self.paths().count("/api/v2/memory/get"), 4)  # 回读 0/3/6/9 秒，到上限即停
+        self.assertIn("missing after 9s", core.LOG.read_text())
+
+    def test_readback_failure_never_turns_a_written_practice_into_an_error(self):
+        self.polls = [RuntimeError("get down")] * 40
+        out = core.record_practice("codex", "topic", "task", self.STEPS, "conclusion")
+        self.assertIn("v2 做法 case 回读失败（get down）；写入本身已完成", out)
+        self.assertIn("check failed", core.LOG.read_text())
+
+    def test_disabled_wait_and_v1_only_skip_v2_case_readback(self):
+        with patch.dict(os.environ, {"EVEROS_CASE_WAIT": "0"}):
+            out = core.record_practice("codex", "topic", "task", self.STEPS, "conclusion")
+        self.assertTrue(out.endswith("v2 做法 case 未回读（EVEROS_CASE_WAIT=0）"))
+        self.api.reset_mock()
+        with patch.dict(os.environ, {"EVEROS_API_VERSION": "v1"}):
+            out = core.record_practice("codex", "topic", "task", self.STEPS, "conclusion")
+        self.assertEqual(self.paths(), ["/api/v1/memories/agent", "/api/v1/memories/agent/flush"])
+        self.assertNotIn("做法 case", out)
+
+    def test_dual_write_sends_one_trajectory_to_both_versions_before_checking_v2(self):
+        self.polls = [lambda body: self.case_for(body)]
+        with patch.dict(os.environ, {"EVEROS_READ_V1": "1"}):
+            out = core.record_practice("codex", "topic", "task", self.STEPS, "conclusion")
+        self.assertEqual(self.paths(), ["/api/v2/memory/add", "/api/v2/memory/flush", "/api/v1/memories/agent",
+                                        "/api/v1/memories/agent/flush", "/api/v2/memory/get"])
+        v2 = self.api.call_args_list[0].args[1]["messages"]
+        v1 = self.api.call_args_list[2].args[1]["messages"]
+        self.assertEqual([(m["role"], m["content"], m["timestamp"]) for m in v2],
+                         [(m["role"], m["content"], m["timestamp"]) for m in v1])
+        self.assertIn("v2 extracted/no_extraction; v1 accumulated/extracted；v2 做法 case 已生成", out)
+
+    def test_case_wait_config_and_timestamp_parsing(self):
+        self.assertEqual(core.case_wait(), 30)
+        for value, expected in (("0", 0), ("12.5", 12.5), ("abc", 30), ("-1", 30), ("nan", 30), ("1e9", 150)):
+            with self.subTest(value=value), patch.dict(os.environ, {"EVEROS_CASE_WAIT": value}):
+                self.assertEqual(core.case_wait(), expected)
+        stamp = 1792133910428
+        for value, expected in (("2026-10-16T06:58:30.428000Z", stamp), ("2026-10-16T06:58:30.428Z", stamp),
+                                ("2026-10-16T06:58:30.42Z", stamp - 8), ("2026-10-16T06:58:30.428000999+00:00", stamp),
+                                ("2026-10-16T14:58:30.428+08:00", stamp), ("2026-10-16T06:58:30", stamp - 428),
+                                (stamp, stamp), (stamp / 1000, stamp), (str(stamp), stamp),
+                                (None, 0), ("", 0), ("garbage", 0), (True, 0)):
+            with self.subTest(value=value):
+                self.assertEqual(core.epoch_ms(value), expected)
+
+
+def datetime_utc_now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(time.time() + 5))
 
 
 class DoctorTests(IsolatedCore):
