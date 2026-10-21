@@ -51,19 +51,22 @@ def build_prompt_blocks(sid: str, prompt: str, *, need_profile: bool = False) ->
     """按提问检索并可选补画像；会话内去重。返回待注入文本块。"""
     state_p = core.RECALL_DIR / f"{sid or 'nosession'}.json"
     st = core.load_state(state_p)
-    budget = core._num("EVEROS_RECALL_TIMEOUT", 18)
+    budget = core.agentic_timeout()
     deadline = time.monotonic() + max(0.0, budget)
     chars = int(core._num("EVEROS_RECALL_CHARS", 2000))
     blocks = []
     need_profile = need_profile or (HOST_OVERRIDE == "trae" and
                     (st.get("needs_profile") or not st.get("profile_injected")))
     if need_profile:
-        profile = core.profile_text(budget=max(0.0, deadline - time.monotonic()))
+        profile = core.profile_text(budget=min(core.READ_TIMEOUT, max(0.0, deadline - time.monotonic())))
         if profile:
             blocks.append(f"【EverOS 用户画像】{HEADER}\n{profile}")
             st.update(profile_injected=True, needs_profile=False)
+    notices = []
     items = core.search_items(prompt, top_k=5, budget=max(0.0, deadline - time.monotonic()),
-                              v1_episodes=3 if core.substantial(prompt) else 0)
+                              v1_episodes=3 if core.substantial(prompt) else 0, method="agentic", notices=notices)
+    if notices:
+        blocks.append("【EverOS 检索提示】\n" + "\n".join(notices))
     seen = set(st.get("ids") or [])
     fresh = [it for it in items if str(it.get("id")) not in seen]
     text, shown_ids = core.format_items_with_ids(fresh, limit=chars)
@@ -76,7 +79,7 @@ def build_prompt_blocks(sid: str, prompt: str, *, need_profile: bool = False) ->
 
 
 def on_prompt(payload: dict, kimi: bool = False) -> None:
-    """每条提问都检索：v2 用得分门槛过滤，同一会话已注入过的不再重复，总预算与字数有上限。"""
+    """每条提问先用 agentic 检索，失败或空结果按轨道回退；会话内去重、总预算与字数有上限。"""
     sid = str(payload.get("session_id") or "")
     prompt = str(payload.get("prompt") or "").strip()
     # 后台任务通知、系统提醒也会触发 UserPromptSubmit，不是用户提问，检索只会带来噪声

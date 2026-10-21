@@ -209,7 +209,7 @@ def is_everos_hook(command):
                 or re.search(r"(?:^|[/\\])everos[/\\]hook\.py(?:$|[\s'\"])", command))
 
 
-def kimi_hooks(text, hook, desktop=False):
+def kimi_hooks(text, hook, desktop=False, recall_timeout=190):
     lines = text.splitlines(keepends=True)
     headers = table_headers(text)
     remove = set()
@@ -224,15 +224,15 @@ def kimi_hooks(text, hook, desktop=False):
     existing = "".join(line for index, line in enumerate(lines) if index not in remove).rstrip()
     command = ("EVEROS_HOST=kimi_desktop " if desktop else "") + "python3 " + shlex.quote(str(hook))
     blocks = []
-    for event, timeout in (("UserPromptSubmit", 20), ("Stop", 10), ("PreCompact", 10), ("SessionEnd", 5)):
+    for event, timeout in (("UserPromptSubmit", recall_timeout), ("Stop", 10), ("PreCompact", 10), ("SessionEnd", 5)):
         blocks.append('[[hooks]]\nevent = "{}"\ncommand = {}\ntimeout = {}'.format(event, json.dumps(command), timeout))
     return existing + ("\n\n" if existing else "") + "\n\n".join(blocks) + "\n"
 
 
-def trae_hooks(text, hook, runtime):
+def trae_hooks(text, hook, runtime, recall_timeout=190):
     """Merge only EverOS handlers; preserve unrelated hooks and top-level fields."""
     data = json.loads(text or "{}")
-    events = (("SessionStart", 10), ("UserPromptSubmit", 20), ("Stop", 10),
+    events = (("SessionStart", 10), ("UserPromptSubmit", recall_timeout), ("Stop", 10),
               ("PreCompact", 10), ("PostCompact", 5), ("SessionEnd", 5))
     canonical = {event.lower(): event for event, _ in events}
     merged = {}
@@ -469,7 +469,7 @@ class Installer:
         plugins = data.get("plugin")
         if not isinstance(plugins, list):
             plugins = []
-        entry = [plugin_url, {"hook": str(self.hook)}]
+        entry = [plugin_url, {"hook": str(self.hook), "recallTimeoutMs": minimum}]
         plugins = [p for p in plugins
                    if not (isinstance(p, str) and "everos.mjs" in p)
                    and not (isinstance(p, list) and p and "everos.mjs" in str(p[0]))]
@@ -653,7 +653,7 @@ class Installer:
                 match = re.search(r"(?:traecli|traex)\s+(\d+)\.(\d+)\.(\d+)", version, re.I)
                 if self.dry or (match and tuple(map(int, match.groups())) >= (0, 209, 1)):
                     path = runtime / "hooks.json"
-                    self.edit(path, trae_hooks(path.read_text() if path.exists() else "", self.hook, runtime))
+                    self.edit(path, trae_hooks(path.read_text() if path.exists() else "", self.hook, runtime, self.mcp_timeout_seconds()))
                     print("  TraeX L3/L4 已配置；新会话在 /hooks 审阅并信任 EverOS 当前定义后生效。")
                 else:
                     print("  此宿主仅配置 MCP + 规则；L3/L4 需要 TraeX >= 0.209.1。")
@@ -687,7 +687,7 @@ class Installer:
             print("== Kimi Code")
             self.mcp_json(kimi_home / "mcp.json", create=True)
             config = kimi_home / "config.toml"
-            self.edit(config, kimi_hooks(config.read_text() if config.exists() else "", self.hook))
+            self.edit(config, kimi_hooks(config.read_text() if config.exists() else "", self.hook, recall_timeout=self.mcp_timeout_seconds()))
             self.run([kimi_cli, "doctor"])
         elif kimi_home.is_dir():
             print("== Kimi Code（跳过：{} 已存在但找不到可执行的 kimi 命令；".format(kimi_home))
@@ -698,7 +698,7 @@ class Installer:
             print("== Kimi Work 桌面端")
             desktop_home = Path(os.environ.get("EVEROS_KIMI_DESKTOP_HOME", str(desktop.parent / "home")))
             self.mcp_json(desktop_home / "mcp.json", create=True)
-            self.edit(desktop, kimi_hooks(desktop.read_text(), self.hook, desktop=True))
+            self.edit(desktop, kimi_hooks(desktop.read_text(), self.hook, desktop=True, recall_timeout=self.mcp_timeout_seconds()))
             self.sync_daimon_skill(desktop)
         mimo_cfg = Path(self.environment.get("XDG_CONFIG_HOME") or (self.home / ".config")) / "mimocode" / "mimocode.jsonc"
         mimo_home = self.home / "Library/Application Support/Xiaomi MiMo"

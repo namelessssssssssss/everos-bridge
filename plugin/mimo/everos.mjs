@@ -20,11 +20,11 @@ function hookPath(options) {
   return String(options?.hook || DEFAULT_HOOK);
 }
 
-function callHook(hook, args, payload) {
+function callHook(hook, args, payload, timeout = 30000) {
   return execFileSync("python3", [hook, ...args], {
     input: JSON.stringify(payload ?? {}),
     encoding: "utf8",
-    timeout: 30000,
+    timeout,
     env: { ...process.env, EVEROS_HOST: HOST },
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -98,7 +98,7 @@ export const server = async (_ctx, options = {}) => {
           session_id: sid,
           query,
           first,
-        }).trim();
+        }, options.recallTimeoutMs ?? 190000).trim();
         profileDone.add(sid);
         if (text) {
           parts.push(textPart(sid, messageID, text));

@@ -62,6 +62,10 @@ class MessagesMimoTests(IsolatedCore):
 
 
 class MimoRecallTests(IsolatedCore):
+    def setUp(self):
+        super().setUp()
+        os.environ["EVEROS_AGENTIC_TIMEOUT"] = ".06"
+
     def run_cli(self, args, payload):
         out = io.StringIO()
         with patch("sys.argv", ["hook.py", *args]), patch("sys.stdin", io.StringIO(json.dumps(payload))), \
@@ -188,6 +192,7 @@ class MimocodeInstallerTests(IsolatedCore):
         self.assertEqual(data["mcp"]["other"]["command"], ["x"])
         self.assertEqual(data["mcp"]["everos"]["type"], "local")
         self.assertEqual(data["mcp"]["everos"]["timeout"], 190000)
+        self.assertEqual(data["plugin"][-1][1]["recallTimeoutMs"], 190000)
         self.assertTrue(data["mcp"]["everos"]["command"][1].endswith("mcp_server.py"))
         self.assertEqual(data["instructions"], ["/keep.md", str(root / "repo/plugin/rules/everos-rules.md")])
         names = [p[0] if isinstance(p, list) else p for p in data["plugin"]]
@@ -200,6 +205,7 @@ class MimocodeInstallerTests(IsolatedCore):
         (inst.everos / "config.env").write_text("EVEROS_AGENTIC_TIMEOUT=240.1\n")
         inst.mimocode()
         self.assertEqual(json.loads(cfg.read_text())["mcp"]["everos"]["timeout"], 251000)
+        self.assertEqual(json.loads(cfg.read_text())["plugin"][-1][1]["recallTimeoutMs"], 251000)
         inst.environment["EVEROS_AGENTIC_TIMEOUT"] = "300"
         inst.mimocode()
         self.assertEqual(json.loads(cfg.read_text())["mcp"]["everos"]["timeout"], 310000)

@@ -199,7 +199,9 @@ class TraeTests(IsolatedCore):
         def profile(**kwargs):
             time.sleep(.035)
             return "fallback profile"
-        with patch.object(core, "profile_text", side_effect=profile), patch.object(core, "search_items", return_value=[]) as search:
+        with patch.dict(os.environ, {"EVEROS_AGENTIC_TIMEOUT": ".06"}), \
+                patch.object(core, "profile_text", side_effect=profile), \
+                patch.object(core, "search_items", return_value=[]) as search:
             self.lifecycle("UserPromptSubmit", prompt="fallback question")
         self.assertLess(search.call_args.kwargs["budget"], .04)
 

@@ -50,9 +50,9 @@ everos search "复杂的历史问题" --method agentic --timeout 240
 
 退出码：`0` 表示检索完成（包含未命中或部分轨道成功），`1` 表示配置缺失或检索全部失败，`2` 表示参数错误，`130` 表示用户取消。`everos --help` 和 `everos search --help` 无需配置，不调用 API。
 
-## 按次深检索
+## 每条消息首次深检索
 
-`memory_search` 默认 `method="hybrid"`。隐含描述或复杂历史问题未被普通召回覆盖时，可显式选择 `agentic`：
+自动 hook 和 `memory_search` 默认使用 `agentic`：每条用户消息首次检索直接深查，同一会话的后续消息也一样。已有本轮注入时不再重复调用 MCP；后续补查可显式选择 hybrid。独立只读 CLI 保留默认 hybrid。示例：
 
 ```json
 {"query":"写入成功后紧接着抽取却说没有内容，那次问题的根因是什么？","kind":"episodes","top_k":5,"method":"agentic"}
@@ -70,7 +70,7 @@ everos search "复杂的历史问题" --method agentic --timeout 240
 
 MCP 客户端的外层超时需大于实际总预算。安装器会为 Codex 设置 `tool_timeout_sec`，为 MiMo 设置毫秒 `timeout`，至少达到配置预算 + 10 秒（默认 190 秒），并保留更大的现值。提高长期配置后重跑 `install.sh` 同步外层限制；按次传更大的 timeout 时也需确保宿主允许等待。其他宿主需按各自配置设置外层超时。
 
-agentic 不套用 hybrid 的得分门槛，回退结果恢复对应门槛。每次输出仍限制在 4000 字内；它是按次补查选项，hook 仍用 hybrid 和原预算。插件更新后需重连 MCP 或新开聊天加载新 schema。质量对比见 [调研报告](docs/retrieval-study-2026-10-09.md)。
+agentic 不套用 hybrid 的得分门槛，回退结果恢复对应门槛。每次输出仍限制在 4000 字内；自动 hook 使用相同深检索与回退规则，默认总预算180秒、外层190秒；旧 EVEROS_RECALL_TIMEOUT 不再限制提问检索。Kimi / TraeX / MiMo 外层由安装器按配置预算加10秒设置；Claude Code / Codex 插件和云端静态 hook 默认190秒，预算超过180秒时需同步提高 UserPromptSubmit timeout 并重新审阅、信任。插件更新后需重连 MCP 或新开聊天加载新 schema。质量对比见 [调研报告](docs/retrieval-study-2026-10-09.md)。
 
 ## 新设备 / 新工作区
 
