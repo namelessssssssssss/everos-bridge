@@ -35,7 +35,7 @@
    - hook 输入不带会话记录路径时，像 Kimi 那样按 session_id 去定位；
    - 在 `hook.py` 里适配它的输出格式：JSON 的 `additionalContext`，或者纯文本 stdout；
    - 在 `session_name()` 里给它分配 session 前缀（cc_ / cx_ / km_ …）；
-   - 在 `install.sh` 里挂上 hook，超时按宿主自己的单位填：提问前 20 秒，回合结束 10 秒。
+   - 在 `install.sh` 里挂上 hook，超时按宿主自己的单位填：提问前默认 190 秒（大于 agentic 总预算），回合结束 10 秒。
 4. **文档**：更新 README 的覆盖表、PROTOCOL.md 的接线表、本文的速查表；新踩的坑记进 `docs/methodology.md`。
 5. **提交并推送**，再在另一台机器上按 AGENTS.md 走一遍，确认能复现。
 
@@ -48,7 +48,7 @@
 - [ ] 真实会话里，让模型复述「EverOS 相关记忆」或「用户画像」，确认注入生效。
 - [ ] 一轮对话结束后，v2 里出现这个会话的 episode，`sender_ids` 归属正确（用户是 owner，同事是 `feishu_*`）。
 - [ ] 断网或填错 key 时，会话照常进行（失败放行），`state/hook.log` 里有错误记录。
-- [ ] 提问前 hook 的总预算生效：默认 18 秒，宿主上限 20 秒；Kimi 首轮画像与召回共用预算，超时只采用已经返回的结果。
+- [ ] 提问前 hook 的总预算生效：默认 180 秒（EVEROS_AGENTIC_TIMEOUT），宿主默认 190 秒；每条消息的 v2 首次请求都必须为 agentic；Kimi 首轮画像最多 6 秒并与召回共用预算，超时只采用已经返回的结果。
 - [ ] `install.sh` 重复运行不会重复追加配置（幂等）。
 - [ ] 改完代码后在新会话里验证（MCP 服务是常驻进程，旧会话里还是旧代码）。
 - [ ] `EVEROS_WRITE=0` 时自动采集和 MCP 三个写工具均不能入库；业务错误不会推进 offset 或清除 pending；多行记忆只标记真正注入的 ID。

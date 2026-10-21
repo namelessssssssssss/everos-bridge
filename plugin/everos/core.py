@@ -12,8 +12,8 @@
   EVEROS_READ_V1=1      过渡期：读取时同时查 v1 旧库并合并（官方迁完数据后关掉）
   EVEROS_AGENT_ID       v2 里助手消息的归属 agent，默认 <user_id>_agent；原 agent 名记在 sender_name
   EVEROS_MIN_SCORE      v2 检索的得分门槛，默认 0.3
-  EVEROS_RECALL_TIMEOUT 每条提问检索的总预算（秒），默认 18；hook 超时 20 秒
-  EVEROS_AGENTIC_TIMEOUT 手动 agentic 检索的总预算（秒），默认 180，包含回退
+  EVEROS_RECALL_TIMEOUT 旧版画像读取预算（秒）；不再控制提问检索
+  EVEROS_AGENTIC_TIMEOUT 自动/手动 agentic 检索的总预算（秒），默认 180，包含回退
   EVEROS_RECALL_CHARS   每轮注入上限（字），默认 2000
   EVEROS_CASE_WAIT      写做法后等待 v2 生成做法 case 的上限（秒），默认 30；0 关闭回读
 """
@@ -40,7 +40,7 @@ MAX_BODY_BYTES = 250_000       # 单次 add 请求体上限（留余量）
 IDLE_FLUSH_H = 2
 SWEEP_EVERY_MIN = 30
 READ_TIMEOUT = 6               # 读侧同步注入的网络超时，宁可不注入也不拖慢会话
-AGENTIC_TIMEOUT = 180          # 手动深检索的默认共同预算，包含回退
+AGENTIC_TIMEOUT = 180          # 自动/手动深检索的默认共同预算，包含回退
 AGENT_MIN_SCORE = 0.55         # 「做法」类召回的相关度门槛
 PRACTICE_MIN_STEPS = 3         # v2 少于 3 轮工具调用不提炼做法 case
 CASE_WAIT = 30                 # 写做法后等待 v2 做法 case 的默认上限（秒）
@@ -140,7 +140,7 @@ def _num(key: str, default: float) -> float:
 
 
 def agentic_timeout(config: dict | None = None) -> float:
-    """Validate the shared deep-search budget without changing hook timeouts."""
+    """Validate the shared automatic/manual deep-search budget."""
     value = (cfg() if config is None else config).get("EVEROS_AGENTIC_TIMEOUT", AGENTIC_TIMEOUT)
     try:
         seconds = float(value)

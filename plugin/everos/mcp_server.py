@@ -15,10 +15,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import core  # noqa: E402
 
-VERSION = "0.6.0"
+VERSION = "0.7.0"
 INSTRUCTIONS = (
     "EverOS 是用户跨 agent、跨设备共用的长期记忆。会话开始调用 memory_profile 了解用户，"
-    "每条提问前都按用户的提问调用 memory_search；"
+    "每条提问前的首次记忆检索调用 memory_search(method=agentic)，已有本轮 hook 注入时复用；"
     "问「以前怎么做的」用 kind=practices。任务交付、用户纠错、偏好暴露、决策形成时调用 memory_remember"
     "（content 写结论、做了什么、证据；user_said 放用户原话）；排障或工具用法闭环时调用 "
     "memory_record_practice（至少 3 个真实步骤，没走通或出乎意料的步骤标 outcome，用户纠正原话填 user_correction）；"
@@ -39,7 +39,7 @@ TOOLS = [
      "inputSchema": {"type": "object", "properties": {}}},
     {"name": "memory_search",
      "description": "按语义检索用户的长期记忆。kind=episodes 只查事件，practices 只查做法/经验，all 两者都查。"
-                    "默认 hybrid；隐含描述或复杂历史问题可显式选 agentic 深查，默认总预算180秒，可配置或按次修改，"
+                    "每条用户消息首次检索默认 agentic，可显式选 hybrid，默认总预算180秒，可配置或按次修改，"
                     "失败或未命中按轨道回退hybrid。",
      "inputSchema": {"type": "object", "required": ["query"], "properties": {
          "query": {"type": "string", "minLength": 1, "description": "检索语句，直接用用户的问题或主题"},
@@ -47,8 +47,8 @@ TOOLS = [
                    "description": "每类记忆的召回上限：1–100；-1 交给服务端决定。输出仍受字数预算限制。",
                    "anyOf": [{"enum": [-1]}, {"type": "integer", "minimum": 1, "maximum": 100}]},
          "kind": {"type": "string", "enum": ["all", "episodes", "practices"], "default": "all"},
-         "method": {"type": "string", "enum": ["hybrid", "agentic"], "default": "hybrid",
-                    "description": "agentic 为按次深检索，允许更长等待；不会改变每轮自动检索的默认方式。"},
+         "method": {"type": "string", "enum": ["hybrid", "agentic"], "default": "agentic",
+                    "description": "每条用户消息首次检索默认 agentic；hybrid 可用于后续显式补查。"},
          "timeout": {"type": "number", "exclusiveMinimum": 0,
                      "description": "本次检索总预算（秒，含回退），优先于 EVEROS_AGENTIC_TIMEOUT；"
                                     "不填时 agentic 默认180秒或采用配置，hybrid 沿用原预算。"}}}},
@@ -207,7 +207,7 @@ class Server:
         if name == "memory_profile":
             return core.profile_text(limit=8000, with_ids=True) or "（画像为空）"
         if name == "memory_search":
-            options = {"method": args.get("method", "hybrid")}
+            options = {"method": args.get("method", "agentic")}
             if "timeout" in args:
                 options["budget"] = args["timeout"]
             return core.search_text(args["query"], args.get("top_k", 5), args.get("kind", "all"),

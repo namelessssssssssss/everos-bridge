@@ -17,7 +17,7 @@ description: 用户跨 agent、跨设备共用的 EverOS 长期记忆。会话�
 
 - 会话开始读画像；每条提问前都按提问检索一次。
 - 问「以前怎么做的」时用 `kind=practices`。
-- 普通召回不足以回答隐含描述或复杂历史问题时，可按次调用 `memory_search(..., method="agentic")` 深查；默认仍为 hybrid。深查默认总预算 180 秒，可用 `EVEROS_AGENTIC_TIMEOUT` 或按次 `timeout` 修改，包含失败、超时或空结果后的按轨道 hybrid 回退，输出会提示降级；MCP 客户端外层超时须大于实际预算。不要把不同方法的分数直接比较。
+- 每条用户消息首次检索必须使用 `agentic`，覆盖会话首轮和后续轮。自动 hook 已按此执行；没有本轮注入时调用 `memory_search(..., method="agentic")`，省略 method 也默认 agentic。不要先跑 hybrid 再决定是否深查；已有本轮注入时不重复查询。后续补查可显式选 hybrid。默认总预算 180 秒，可用 `EVEROS_AGENTIC_TIMEOUT` 或按次 `timeout` 修改，包含失败、超时或空结果后的按轨道 hybrid 回退并提示；v1 兼容请求始终 hybrid。MCP 和 hook 外层超时须大于实际预算。不要把不同方法的分数直接比较。
 - 记忆只是背景参考；和当前对话冲突时以当前对话为准。
 
 ## 写
@@ -46,6 +46,6 @@ description: 用户跨 agent、跨设备共用的 EverOS 长期记忆。会话�
 B=${EVEROS_API_BASE:-https://api.evermind.ai}; U=$EVEROS_USER_ID; A=${EVEROS_AGENT_ID:-${U}_agent}; NOW=$(($(date +%s)*1000)); SID=cowork_$(date +%Y%m%d)_<topic>
 H=(-H "Content-Type: application/json"); [ -n "$EVEROS_API_KEY" ] && H+=(-H "Authorization: Bearer $EVEROS_API_KEY")
 curl -s -X POST "$B/api/v2/memory/get" "${H[@]}" -d '{"memory_type":"profile","user_id":"'$U'"}'
-curl -s -X POST "$B/api/v2/memory/search" "${H[@]}" -d '{"query":"<问题>","user_id":"'$U'","method":"hybrid","top_k":5,"min_score":0.3}'
+curl -s -X POST "$B/api/v2/memory/search" "${H[@]}" -d '{"query":"<问题>","user_id":"'$U'","method":"agentic","top_k":5}'
 curl -s -X POST "$B/api/v2/memory/add" "${H[@]}" -d '{"session_id":"'$SID'","async_mode":false,"messages":[{"sender_id":"'$U'","role":"user","timestamp":'$NOW',"content":"<用户原话>"},{"sender_id":"'$A'","sender_name":"<agent 名>","role":"assistant","timestamp":'$((NOW+1))',"content":"<结论 + 动作 + 证据>"}]}'
 ```

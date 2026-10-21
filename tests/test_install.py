@@ -252,6 +252,15 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("[features]\nhooks = true", text)
         self.assert_toml(text)
 
+    def test_prompt_hook_timeouts_allow_the_configured_deep_search_budget(self):
+        kimi = install.kimi_hooks("", Path("/example/everos/hook.py"), recall_timeout=251)
+        self.assertIn('event = "UserPromptSubmit"\ncommand = ', kimi)
+        self.assertIn('timeout = 251', kimi)
+        trae = json.loads(install.trae_hooks("{}", Path("/example/everos/hook.py"),
+                                           Path("/example/runtime"), recall_timeout=251))
+        self.assertEqual(trae["hooks"]["UserPromptSubmit"][0]["hooks"][0]["timeout"], 251)
+        self.assertEqual(trae["hooks"]["Stop"][0]["hooks"][0]["timeout"], 10)
+
     def test_codex_timeout_defaults_to_agentic_budget_with_transport_headroom(self):
         self.cli("codex")
         path = self.put(".codex/config.toml", '[mcp_servers.other]\ntool_timeout_sec = 15\n')
