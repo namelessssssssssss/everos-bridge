@@ -54,6 +54,28 @@
           }
         ]
       }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ \"$CLAUDE_CODE_REMOTE\" = true ] && [ -f /opt/everos-bridge/plugin/everos/hook.py ] && python3 /opt/everos-bridge/plugin/everos/hook.py || true",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ \"$CLAUDE_CODE_REMOTE\" = true ] && [ -f /opt/everos-bridge/plugin/everos/hook.py ] && python3 /opt/everos-bridge/plugin/everos/hook.py || true",
+            "timeout": 3
+          }
+        ]
+      }
     ]
   }
 }
