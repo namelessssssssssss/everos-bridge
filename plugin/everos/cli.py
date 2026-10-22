@@ -46,6 +46,12 @@ def main(argv: list[str] | None = None) -> int:
                         help="检索方法（默认 hybrid；agentic 默认总预算 180 秒，含回退）")
     search.add_argument("--timeout", type=_timeout, metavar="SECONDS",
                         help="本次检索总预算（秒，含回退），优先于 EVEROS_AGENTIC_TIMEOUT 配置")
+    search.add_argument("--context", default="", help="当前任务的新线索（最多500字）")
+    search.add_argument("--session-id", default="", help="可选的会话覆盖标识")
+    read = commands.add_parser("open", help="按em_标识分段读取本机检索快照正文")
+    read.add_argument("memory_id")
+    read.add_argument("--offset", type=int, default=0)
+    read.add_argument("--limit", type=int, default=4000)
     args = parser.parse_args(argv)
 
     # Help and argument validation work without credentials or API access.
@@ -55,7 +61,17 @@ def main(argv: list[str] | None = None) -> int:
         if not core.ready():
             raise RuntimeError("未配置：设置 EVEROS_USER_ID 与 EVEROS_API_KEY，"
                                "或写入 $EVEROS_HOME/config.env（默认 ~/.everos/config.env）")
+        if args.command == "open":
+            import recall
+            print(recall.open_memory(args.memory_id, args.offset, args.limit))
+            return 0
+        if len(args.context) > 500:
+            raise ValueError("context 最多500字")
         options = {"method": args.method, "strict": True}
+        if args.context:
+            options["context"] = args.context
+        if args.session_id:
+            options["session_id"] = args.session_id
         if args.timeout is not None:
             options["budget"] = args.timeout
         text = core.search_text(args.query, args.top_k, args.kind, **options)

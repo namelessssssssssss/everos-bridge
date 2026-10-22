@@ -6,7 +6,7 @@
 
 | 层级 | 做什么 | 必做 | 得到什么 |
 | --- | --- | --- | --- |
-| L1 MCP | 注册 `plugin/everos/mcp_server.py`（stdio） | 是 | 6 个 `memory_*` 工具，模型可以主动读写 |
+| L1 MCP | 注册 `plugin/everos/mcp_server.py`（stdio） | 是 | 8 个 `memory_*` 工具（含正文展开和本机任务上下文），模型可以主动读写 |
 | L2 指令规则 | 把 AGENTS.md「日常读写」那段写进宿主的全局指令文件 | 是 | 没有 hook 时，靠模型自觉在每条提问前检索 |
 | L3 提问前注入 | 挂「提问前」hook（如 UserPromptSubmit），会话开始的 hook 能注入时也挂上 | 宿主支持就做 | 自动读画像，每条提问自动检索 |
 | L4 回合结束采集 | 挂「回合结束」hook（如 Stop），并给它的会话记录写解析器 | 宿主支持就做 | 对话原文自动入库 |
@@ -40,6 +40,8 @@
 5. **提交并推送**，再在另一台机器上按 AGENTS.md 走一遍，确认能复现。
 
 ## 验证清单（全部通过才算接入完成）
+
+任务中检索还需验证：search返回ID可通过open跨进程分页读取；新问题/正文更新/压缩后可重新注入；Claude Code/Codex工具事件只本地提醒、无网络、无权限裁决；其他宿主不得仅凭MCP可连接声称已接入工具事件。
 
 - [ ] `python3 plugin/everos/hook.py --doctor` 各项 OK 且退出码为 0；缺配置或任一 API 检查失败时退出非零。
 - [ ] `python3 -m unittest discover -s tests -v` 通过；`install.sh --dry-run` 不修改配置也不访问 API。

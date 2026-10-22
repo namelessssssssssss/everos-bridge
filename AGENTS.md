@@ -61,6 +61,7 @@
 - **读**：
   - 有 hook 的 agent 会自动注入：会话开始注入画像，每条提问先用 agentic 检索并注入相关记忆；
   - 没有 hook 的 agent，每条提问首次调 `memory_search(method="agentic")`，会话开始调 `memory_profile`；
+  - 任务中发现新线索、失败或历史决定缺口时主动定向补查；摘要不足用 memory_open 展开。memory_context 可保存本机任务线索，压缩恢复后清除过期覆盖。已有注入仅覆盖对应问题。
   - 记忆只是背景参考，和当前对话冲突时以当前为准。
 - **写**：
   - 对话原文由 hook 自动入库；

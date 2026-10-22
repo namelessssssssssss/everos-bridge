@@ -658,7 +658,7 @@ class AgenticRecallTests(IsolatedCore):
             return [{"id": "answer", "text": "recovered answer", "kind": "episode"}]
         with patch.object(core, "search_items", side_effect=search):
             first = "\n".join(hook.build_prompt_blocks("fallback", "question"))
-            second = "\n".join(hook.build_prompt_blocks("fallback", "question again"))
+            second = "\n".join(hook.build_prompt_blocks("fallback", "question"))
         self.assertIn("recovered answer", first)
         self.assertNotIn("recovered answer", second)
         self.assertIn("agentic 未命中，已回退 hybrid", second)

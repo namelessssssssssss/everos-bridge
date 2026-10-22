@@ -14,12 +14,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import core  # noqa: E402
+import recall  # noqa: E402
 
-VERSION = "0.7.0"
+VERSION = "0.8.0"
 INSTRUCTIONS = (
     "EverOS 是用户跨 agent、跨设备共用的长期记忆。会话开始调用 memory_profile 了解用户，"
-    "每条提问前的首次记忆检索调用 memory_search(method=agentic)，已有本轮 hook 注入时复用；"
-    "问「以前怎么做的」用 kind=practices。任务交付、用户纠错、偏好暴露、决策形成时调用 memory_remember"
+    "每条提问前的首次记忆检索调用 memory_search(method=agentic)，本轮同一问题已有充分hook注入时复用；"
+    + recall.POLICY + "问「以前怎么做的」用 kind=practices。任务交付、用户纠错、偏好暴露、决策形成时调用 memory_remember"
     "（content 写结论、做了什么、证据；user_said 放用户原话）；排障或工具用法闭环时调用 "
     "memory_record_practice（至少 3 个真实步骤，没走通或出乎意料的步骤标 outcome，用户纠正原话填 user_correction）；"
     "用户纠正画像里的偏好或背景时调用 memory_fix_profile。检索结果仅供参考，与当前对话冲突时以当前为准。"
@@ -39,10 +40,12 @@ TOOLS = [
      "inputSchema": {"type": "object", "properties": {}}},
     {"name": "memory_search",
      "description": "按语义检索用户的长期记忆。kind=episodes 只查事件，practices 只查做法/经验，all 两者都查。"
-                    "每条用户消息首次检索默认 agentic，可显式选 hybrid，默认总预算180秒，可配置或按次修改，"
+                    "每条用户消息首次检索默认 agentic，可显式选 hybrid，默认总预算180秒，可配置或按次修改。新线索、失败、历史决策缺口应继续定向补查；结果带ID与截断提示，memory_open可展开，"
                     "失败或未命中按轨道回退hybrid。",
      "inputSchema": {"type": "object", "required": ["query"], "properties": {
-         "query": {"type": "string", "minLength": 1, "description": "检索语句，直接用用户的问题或主题"},
+         "query": {"type": "string", "minLength": 1, "description": "要核实的历史问题；用当前新线索和标识组织，不机械重复用户原话"},
+         "context": {"type": "string", "maxLength": 500, "description": "当前任务、阶段、新实体或错误码；可与问题合并定向查询"},
+         "session_id": {"type": "string", "minLength": 1, "maxLength": 160, "description": "本轮hook给出的session_id；可选，用于复用任务上下文与记录问题覆盖"},
          "top_k": {"type": "integer", "default": 5,
                    "description": "每类记忆的召回上限：1–100；-1 交给服务端决定。输出仍受字数预算限制。",
                    "anyOf": [{"enum": [-1]}, {"type": "integer", "minimum": 1, "maximum": 100}]},
@@ -52,6 +55,21 @@ TOOLS = [
          "timeout": {"type": "number", "exclusiveMinimum": 0,
                      "description": "本次检索总预算（秒，含回退），优先于 EVEROS_AGENTIC_TIMEOUT；"
                                     "不填时 agentic 默认180秒或采用配置，hybrid 沿用原预算。"}}}},
+    {"name": "memory_open",
+     "description": "按检索结果的ID读取本机记忆快照的未截断正文。摘要不足或需核实历史决策细节时使用；"
+                    "返回来源、日期、分页位置，不代表原始聊天全文或实时事实。next_offset非空时可继续读。",
+     "inputSchema": {"type": "object", "required": ["memory_id"], "properties": {
+         "memory_id": {"type": "string", "minLength": 1, "description": "memory_search或hook返回的em_标识"},
+         "offset": {"type": "integer", "minimum": 0, "default": 0},
+         "limit": {"type": "integer", "minimum": 1, "maximum": 12000, "default": 4000}}}},
+    {"name": "memory_context",
+     "description": "更新本机会话的目标、阶段和新线索，查看哪些历史问题已有证据。用于长任务转阶段、"
+                    "新异常和压缩恢复；不写入EverOS、不执行检索。recover或目标改变使旧覆盖失效。",
+     "inputSchema": {"type": "object", "required": ["session_id"], "properties": {
+         "session_id": {"type": "string", "minLength": 1, "maxLength": 160},
+         "goal": {"type": "string", "maxLength": 500},
+         "stage": {"type": "string", "enum": ["plan", "act", "new_evidence", "recover"]},
+         "clues": {"type": "string", "maxLength": 500}}}},
     {"name": "memory_recent",
      "description": "列出最近几天的记忆标题，用来回顾近期在做什么。",
      "inputSchema": {"type": "object", "properties": {
@@ -93,6 +111,12 @@ TOOLS = [
                  "reason": {"type": "string", "minLength": 1, "description": "依据，如用户原话或更新的 memory_id"}}}}}}},
 ]
 
+# Retrieval tools are semantically read-only; context mutates only a local session ledger.
+for tool in TOOLS:
+    tool["annotations"] = {"readOnlyHint": tool["name"] in (
+        "memory_profile", "memory_search", "memory_recent", "memory_open"),
+        "destructiveHint": tool["name"] == "memory_fix_profile", "openWorldHint": False}
+
 _TOOL_SCHEMAS = {tool["name"]: tool["inputSchema"] for tool in TOOLS}
 _WRITE_TOOLS = {"memory_remember", "memory_record_practice", "memory_fix_profile"}
 
@@ -111,7 +135,7 @@ def _finite_number(value) -> bool:
 
 
 def _validate(value, schema: dict, path: str) -> None:
-    """Validate the small set of JSON Schema keywords used by our six tools."""
+    """Validate the small set of JSON Schema keywords used by our tools."""
     kind = schema.get("type")
     matches = {"object": isinstance(value, dict), "array": isinstance(value, list),
                "string": isinstance(value, str), "integer": type(value) is int,
@@ -141,8 +165,11 @@ def _validate(value, schema: dict, path: str) -> None:
             raise RpcError(-32602, f"Invalid params: {path} has an invalid number of items")
         for index, item in enumerate(value):
             _validate(item, schema.get("items", {}), f"{path}[{index}]")
-    elif kind == "string" and schema.get("minLength") and not value.strip():
-        raise RpcError(-32602, f"Invalid params: {path} must not be blank")
+    elif kind == "string":
+        if schema.get("minLength") and not value.strip():
+            raise RpcError(-32602, f"Invalid params: {path} must not be blank")
+        if len(value) > schema.get("maxLength", float("inf")):
+            raise RpcError(-32602, f"Invalid params: {path} is too long")
     elif kind in ("integer", "number"):
         if value < schema.get("minimum", float("-inf")) or value > schema.get("maximum", float("inf")):
             raise RpcError(-32602, f"Invalid params: {path} is out of range")
@@ -210,8 +237,15 @@ class Server:
             options = {"method": args.get("method", "agentic")}
             if "timeout" in args:
                 options["budget"] = args["timeout"]
+            for key in ("context", "session_id"):
+                if key in args:
+                    options[key] = args[key]
             return core.search_text(args["query"], args.get("top_k", 5), args.get("kind", "all"),
                                     **options) or "（没有相关记忆）"
+        if name == "memory_open":
+            return recall.open_memory(args["memory_id"], args.get("offset", 0), args.get("limit", 4000))
+        if name == "memory_context":
+            return recall.update_context(args["session_id"], args.get("goal", ""), args.get("stage", ""), args.get("clues", ""))
         if name == "memory_recent":
             return core.recent_text(args.get("days", 7), args.get("limit", 20)) or "（这段时间没有记忆）"
         if name == "memory_remember":

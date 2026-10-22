@@ -43,7 +43,7 @@ class McpTests(unittest.TestCase):
         self.assertEqual(response["id"], 1)
         self.assertNotIn("result", response)
 
-    def test_initialize_and_six_tools_remain_compatible(self):
+    def test_initialize_preserves_existing_tools_and_adds_retrieval_tools(self):
         result = self.server.respond(request("initialize", {
             "protocolVersion": "2025-06-18", "capabilities": {},
             "clientInfo": {"name": "Codex", "version": "test"}}))["result"]
@@ -56,7 +56,7 @@ class McpTests(unittest.TestCase):
         tools = self.server.respond(request("tools/list"))["result"]["tools"]
         self.assertEqual({tool["name"] for tool in tools}, {
             "memory_profile", "memory_search", "memory_recent", "memory_remember",
-            "memory_record_practice", "memory_fix_profile"})
+            "memory_record_practice", "memory_fix_profile", "memory_open", "memory_context"})
 
     def test_invalid_envelopes_return_invalid_request(self):
         invalid = [None, [], 3, "text", {}, {"jsonrpc": "2.0", "id": 1},
