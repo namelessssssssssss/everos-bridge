@@ -1,6 +1,6 @@
 # 任务中的记忆检索
 
-0.8.0 将“每条消息首次检索”扩展为任务中的历史证据工作流：首轮召回后，方案/行动前、新线索/失败、历史决定缺口和压缩恢复仍可定向补查；已有充分证据则复用。是否更主动、更有效需由行为评测证明，不能从规则存在或调用次数推导。
+0.8.0 起将“每条消息首次检索”扩展为任务中的历史证据工作流：首轮召回后，方案/行动前、新线索/失败、历史决定缺口和压缩恢复仍可定向补查；已有充分证据则复用。是否更主动、更有效需由行为评测证明，不能从规则存在或调用次数推导。
 
 ## 接口与数据流
 
@@ -29,9 +29,9 @@
 | 宿主 | 初始召回 | 任务中补查与展开 | 自动工具阶段提醒 | 压缩恢复 |
 | --- | --- | --- | --- | --- |
 | Claude Code / Codex | UserPromptSubmit | 共享规则＋8个MCP工具 | PreToolUse方案/修改前，PostToolUse失败后；均无网络、失败放行 | PreCompact失效，SessionStart compact/resume恢复规则 |
-| TraeX | 既有UserPromptSubmit | 共享规则＋MCP | 本版不声明接入未核实的工具事件 | 既有PreCompact/PostCompact |
+| TraeX | 既有UserPromptSubmit | 共享规则＋MCP | 0.210.1起接入PreToolUse/PostToolUse本地提醒；旧版保留规则补查 | 既有PreCompact/PostCompact |
 | Kimi Code / Kimi Work | 既有提问hook | MCP指令；桌面端同步skill | 不添加未核实事件 | 既有PreCompact或显式memory_context recover |
-| MiMoCode / Desktop | 既有Plugin chat.message | 共享规则＋MCP | 不添加未核实Plugin事件 | 显式recover |
+| MiMoCode / Desktop | 既有Plugin chat.message | 共享规则＋MCP | tool.execute.before提示进入下次模型上下文；after提示追加工具输出 | experimental.session.compacting本机失效与规则恢复 |
 | 仅MCP客户端 | Agent主动首轮agentic | MCP指令与工具 | 无宿主hook时由Agent判断 | 显式recover |
 
 工具提醒跳过memory工具，按动作/异常去重，只给证据缺口检查提示，不自动检索、不批准或阻止操作。错误识别是有限的文本启发式，不等同于证明工具技术失败或识别所有新实体；新实体的语义判断仍由Agent承担。
@@ -56,3 +56,5 @@ fixture MCP不调用EverOS，不写记忆；所有用户/场景均为合成数�
 实际hook进程、关闭注入、恢复失效、跨身份拒绝与分页等由离线回归单独覆盖；真实EverOS只读验证用于确认search→open和本地覆盖链路，不向真实空间写入评测案例。
 
 本次代表性验证结果见[2026-10-22验证记录](retrieval-workflow-eval-2026-10-22.md)。
+
+0.8.1补齐Cursor/Gemini/Claude Desktop首次配置及显式MCP状态目录绑定，详见[跨harness验收](harness-activation-2026-10-22.md)。

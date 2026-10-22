@@ -76,7 +76,7 @@ agentic 不套用 hybrid 的得分门槛，回退结果恢复对应门槛。每�
 
 每条消息首轮agentic后，遇到新错误码、历史决定缺口、行动前约束或压缩恢复应继续补查。已有注入只覆盖对应问题。MCP的memory_search可带context与session_id；memory_context保存本机目标、阶段和线索；memory_open按搜索返回的em_ ID分段展开。
 
-CLI同样支持 `everos search "当前历史问题" --context "新线索" --session-id <sid>` 和 `everos open <em_id> --offset 0 --limit 4000`。结果标注来源、日期和截断；快照不是原始聊天全文或实时事实。Claude Code/Codex工具事件只做本地阶段提醒，不为每次工具调用发起网络检索。能力与评测见[检索工作流](docs/retrieval-workflow.md)。
+CLI同样支持 `everos search "当前历史问题" --context "新线索" --session-id <sid>` 和 `everos open <em_id> --offset 0 --limit 4000`。结果标注来源、日期和截断；快照不是原始聊天全文或实时事实。Claude Code/Codex/新版TraeX与MiMo工具事件只做本地阶段提醒，不为每次工具调用发起网络检索。能力与评测见[检索工作流](docs/retrieval-workflow.md)。
 
 ## 新设备 / 新工作区
 
@@ -102,7 +102,7 @@ python3 ~/.everos-bridge/plugin/everos/hook.py --doctor
 Codex 插件安装或更新后，还需在新会话中审阅并信任 hook 的当前定义，自动注入和采集才会执行。启用插件与 MCP 可连接本身不能证明 hook 已生效。
 
 TraeX 可只刷新当前宿主：`./install.sh --only trae`（也支持 `--dry-run`）。配置和规则写到
-`$TRAE_HOME`（默认 `~/.trae`），六个 hook 写到 `$TRAECLI_HOME/hooks.json`（默认
+`$TRAE_HOME`（默认 `~/.trae`），六个生命周期 hook（TraeX≥0.210.1另加两个工具事件）写到 `$TRAECLI_HOME/hooks.json`（默认
 `~/.trae/cli/hooks.json`）。新会话在 `/hooks` 审阅并信任 EverOS 的当前定义；安装器不自动信任。
 自动采集保存用户和助手的文本，排除环境提示、注入记忆、工具镜像及 reasoning；不上传图片二进制。
 压缩后在下一条提问补读画像。实现与验证细节见 [TraeX 接入](docs/traex-integration.md)。
@@ -166,3 +166,5 @@ cloud/                            云端 setup script 与仓库级配置片段
 ## 配置
 
 环境变量优先，其次 `$EVEROS_HOME/config.env`（默认 `~/.everos/config.env`）。完整变量表见 PROTOCOL.md §5。密钥和状态都不在仓库里，`.gitignore` 已排除。
+
+跨harness接线与验收：`python3 scripts/audit_harnesses.py --exercise` 会用实际配置的stdio入口、本地合成API核对八工具与展开链路；它不表示旧应用会话已重载。详细范围见[跨harness验收](docs/harness-activation-2026-10-22.md)。

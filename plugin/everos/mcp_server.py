@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import core  # noqa: E402
 import recall  # noqa: E402
 
-VERSION = "0.8.0"
+VERSION = "0.8.1"
 INSTRUCTIONS = (
     "EverOS 是用户跨 agent、跨设备共用的长期记忆。会话开始调用 memory_profile 了解用户，"
     "每条提问前的首次记忆检索调用 memory_search(method=agentic)，本轮同一问题已有充分hook注入时复用；"
