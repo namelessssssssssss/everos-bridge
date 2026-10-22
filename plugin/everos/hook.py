@@ -142,7 +142,7 @@ def main() -> int:
             if data.get("profile_only"):
                 state_p = recall.state_path(sid or "nosession")
                 st = core.load_state(state_p)
-                if st.get("profile_injected"):
+                if st.get("profile_injected") and not st.get("needs_profile"):
                     return 0
                 profile = core.profile_text(budget=core._num("EVEROS_RECALL_TIMEOUT", 18))
                 if profile:
@@ -156,6 +156,13 @@ def main() -> int:
             blocks = build_prompt_blocks(sid, prompt, need_profile=bool(data.get("first")))
             if blocks:
                 print("\n\n".join(blocks))
+            return 0
+        if args[:1] == ["--mimo-recover"]:
+            data = json.loads(sys.stdin.read() or "{}")
+            if core.cfg().get("EVEROS_INJECT") != "0":
+                with recall.locked(str(data.get("session_id") or "nosession")) as state:
+                    recall.reset_context(state)
+                print(recall.POLICY)
             return 0
         if args[:1] == ["--mimo-write"]:
             # MiMoCode Plugin L4：stdin {"session_id","cwd","title","trajectory"}

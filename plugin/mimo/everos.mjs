@@ -50,6 +50,19 @@ export const server = async (_ctx, options = {}) => {
   const hook = hookPath(options);
   const profileDone = new Set();
   const recallBusy = new Set();
+  const pending = new Map();
+
+  function remind(event, input, response) {
+    if (/memory_|everos/.test(input?.tool || "")) return "";
+    const result = callHook(hook, [], {
+      session_id: input?.sessionID || "",
+      hook_event_name: event,
+      tool_name: input?.tool || "",
+      tool_input: input?.args || {},
+      tool_response: response || {},
+    }, 3000).trim();
+    return result ? JSON.parse(result)?.hookSpecificOutput?.additionalContext || "" : "";
+  }
 
   return {
     id: "everos",
@@ -60,6 +73,9 @@ export const server = async (_ctx, options = {}) => {
 
     "experimental.chat.system.transform": async (input, output) => {
       const sid = input?.sessionID || "";
+      const reminders = pending.get(sid) || [];
+      pending.delete(sid);
+      if (reminders.length) output.system = [...(output.system || []), ...reminders];
       if (!sid || profileDone.has(sid)) return;
       try {
         const text = callHook(hook, ["--mimo-recall"], {
@@ -75,6 +91,35 @@ export const server = async (_ctx, options = {}) => {
       } catch (err) {
         profileDone.add(sid);
         console.error(`[everos] profile inject failed: ${err}`);
+      }
+    },
+
+    "tool.execute.before": async (input, output) => {
+      try {
+        const text = remind("PreToolUse", { ...input, args: output?.args });
+        if (text) pending.set(input.sessionID, [...(pending.get(input.sessionID) || []), text].slice(-4));
+      } catch (err) {
+        console.error(`[everos] local tool reminder failed: ${err}`);
+      }
+    },
+
+    "tool.execute.after": async (input, output) => {
+      try {
+        const text = remind("PostToolUse", input, { output: output?.output });
+        if (text && typeof output.output === "string") output.output += `\n\n${text}`;
+      } catch (err) {
+        console.error(`[everos] local tool reminder failed: ${err}`);
+      }
+    },
+
+    "experimental.session.compacting": async (input, output) => {
+      try {
+        const text = callHook(hook, ["--mimo-recover"], { session_id: input?.sessionID || "" }, 3000).trim();
+        profileDone.delete(input?.sessionID || "");
+        pending.delete(input?.sessionID || "");
+        if (text) output.context = [...(output.context || []), text];
+      } catch (err) {
+        console.error(`[everos] local recovery reset failed: ${err}`);
       }
     },
 

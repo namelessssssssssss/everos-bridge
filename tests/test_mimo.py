@@ -191,6 +191,7 @@ class MimocodeInstallerTests(IsolatedCore):
         data = json.loads(install_config.Installer.strip_jsonc(cfg.read_text()))
         self.assertEqual(data["mcp"]["other"]["command"], ["x"])
         self.assertEqual(data["mcp"]["everos"]["type"], "local")
+        self.assertEqual(data["mcp"]["everos"]["environment"]["EVEROS_HOME"], str(inst.everos))
         self.assertEqual(data["mcp"]["everos"]["timeout"], 190000)
         self.assertEqual(data["plugin"][-1][1]["recallTimeoutMs"], 190000)
         self.assertTrue(data["mcp"]["everos"]["command"][1].endswith("mcp_server.py"))

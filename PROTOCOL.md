@@ -106,14 +106,14 @@
 - 快照在 `$EVEROS_HOME/state/reads/`，按后端、owner、agent、来源、类型、原ID与投影后的内容生成标识，文件权限0600；不缓存embedding或传输凭据。跨身份拒绝读取；迁移到其他设备或快照缺失时重新检索，不猜路径、不全库扫描。
 - `memory_context` 更新本机会话goal/stage/clues。检索覆盖按问题与内容版本记录，最多保留24个问题；记录仅证明候选曾展示，不证明Agent已读懂或证据充分。目标改变或recover/压缩清除覆盖；首轮旧账本兼容迁移后按新规则处理。
 - Claude Code / Codex 的 PreToolUse 和 PostToolUse 使用短小本地提醒：方案/写入/提交动作前、失败输出后检查缺口；每种相同动作/异常只提醒一次，不递归提醒memory工具，不执行网络请求，不批准或阻止动作，失败放行。
-- TraeX 沿用已核实的生命周期与PostCompact恢复；Kimi/MiMo/仅MCP宿主通过共享规则、上下文工具和主动查询获得任务中补查，不声明未经验证的工具事件接入。
+- TraeX 0.210.1起接入PreToolUse/PostToolUse（旧版保留六个生命周期事件）；MiMo 0.1.15 Plugin API接入tool.execute.before/after和experimental.session.compacting。MiMo的before提示进入下次模型上下文，不阻止或重写当前动作；after提示追加工具输出。Kimi及仅MCP宿主通过共享规则和工具补查，不声明未支持的自动工具事件。
 - 关闭注入时不运行任务提醒；关闭写入时仍可本机检索、展开和维护临时上下文，但不写EverOS。历史权限、实时状态、记忆冲突继续按当前指令与Owning Source核实。
 
 架构、各宿主能力与隔离行为评测见 [检索工作流](docs/retrieval-workflow.md)。
 
 ## 5. 配置与部署
 
-环境变量优先，其次 `$EVEROS_HOME/config.env`（默认 `~/.everos/config.env`，0600，永不入库）。
+MCP子进程可能过滤父进程环境，安装器在各客户端支持的env/environment字段或CLI --env中显式绑定EVEROS_HOME，避免hook与MCP读取不同状态目录；只写目录，不复制凭据。Claude插件按其原生继承环境运行。环境变量优先，其次 `$EVEROS_HOME/config.env`（默认 `~/.everos/config.env`，0600，永不入库）。
 
 | 变量 | 说明 |
 | --- | --- |

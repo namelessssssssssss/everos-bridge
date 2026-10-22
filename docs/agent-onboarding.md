@@ -70,3 +70,5 @@
 | Claude Desktop / Cowork | `claude_desktop_config.json`（App 退出时写，或在 App 设置里加） | claude.ai 上的 skill | — | — | App 运行时会覆盖外部改动；Cowork 靠 skill |
 | Cursor、Gemini CLI | `mcp.json` / `settings.json` | `~/.gemini/GEMINI.md` | — | — | 只有 MCP |
 | Claude Code on the web | 仓库里的 `.mcp.json` | 仓库 CLAUDE.md、claude.ai 上的 skill | 仓库 `.claude/settings.json` 里的 hook | 同左 | 不装插件；要用网络密钥放行 `api.evermind.ai`，见 README「云端」 |
+
+0.8.1首次接入Cursor会创建全局MCP配置与共享skill；已安装Gemini和Claude Desktop也不再因为缺少初始配置而静默跳过。MCP状态目录必须与hook一致，不能假设父进程的EVEROS_HOME会被保留。
