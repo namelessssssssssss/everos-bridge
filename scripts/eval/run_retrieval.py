@@ -97,11 +97,12 @@ def main():
         parser.error('codex CLI is required')
     baseline = output / 'baseline'
     baseline.mkdir(exist_ok=True)
-    archive = subprocess.check_output(['git', 'archive', args.baseline, 'plugin/everos'], cwd=ROOT)
+    archive = subprocess.check_output(['git', 'archive', args.baseline, 'plugin'], cwd=ROOT)
     subprocess.run(['tar', '-x', '-C', str(baseline)], input=archive, check=True)
-    candidate = output / 'candidate/plugin/everos'
-    shutil.copytree(ROOT / 'plugin/everos', candidate, ignore=shutil.ignore_patterns('__pycache__'), dirs_exist_ok=True)
-    fingerprint = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(candidate.glob('*.py'))}
+    candidate = output / 'candidate/plugin'
+    shutil.copytree(ROOT / 'plugin', candidate, ignore=shutil.ignore_patterns('__pycache__'), dirs_exist_ok=True)
+    fingerprint = {str(p.relative_to(candidate)): hashlib.sha256(p.read_bytes()).hexdigest()
+                   for p in sorted(candidate.rglob('*')) if p.is_file()}
     metadata = {'candidate_files_sha256': fingerprint, 'baseline': subprocess.check_output(['git', 'rev-parse', args.baseline], cwd=ROOT, text=True).strip(),
                 'candidate': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
                 'codex_version': subprocess.check_output([codex, '--version'], text=True).strip(),

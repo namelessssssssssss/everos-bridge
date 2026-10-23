@@ -19,6 +19,9 @@ import tempfile
 import uuid
 from datetime import datetime
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "plugin/everos"))
+import rules as rulebook
+
 
 def backup(path):
     """Create a unique backup before any write, including host CLI writes."""
@@ -255,9 +258,11 @@ def trae_hooks(text, hook, runtime, recall_timeout=190, tool_events=False):
 
 
 class Installer:
-    def __init__(self, repo, dry=False, only=None):
+    def __init__(self, repo, dry=False, only=None, rule_hosts=None):
         self.repo, self.dry = Path(repo).resolve(), dry
         self.only = only
+        self.rule_hosts = set(rule_hosts or [])
+        self.legacy_rules = []
         # Explicit test/alternate host root: do not overwrite the system HOME.
         self.home = Path(os.environ.get("EVEROS_INSTALL_HOME", str(Path.home())))
         self.everos = Path(os.environ.get("EVEROS_HOME", str(self.home / ".everos")))
@@ -394,14 +399,92 @@ class Installer:
         data.setdefault("mcpServers", {})["everos"] = {"command": "python3", "args": [str(self.mcp)], "env": {"EVEROS_HOME": str(self.everos)}}
         self.edit(path, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
 
-    def rules(self, path):
+    def rules(self, path, prefix=""):
         path = Path(path)
-        content = (self.repo / "plugin/rules/everos-rules.md").read_text().strip()
-        block = "<!-- everos-bridge:begin -->\n" + content + "\n<!-- everos-bridge:end -->"
+        if path.is_symlink():
+            raise ValueError("EverOS native rule file is a symlink; preserve it and resolve the intended instruction source: " + str(path))
         old = path.read_text() if path.exists() else ""
-        pattern = re.compile(r"<!-- everos-bridge:begin -->.*?<!-- everos-bridge:end -->", re.S)
-        text = pattern.sub(lambda _: block, old) if pattern.search(old) else (old.rstrip() + "\n\n" + block + "\n").lstrip()
+        if prefix and rulebook.BEGIN in old and not re.search(r"^alwaysApply:\s*true\s*$", old, re.M):
+            raise ValueError("EverOS Cursor rule is not Always Apply; preserve user's header and resolve before sync: " + str(path))
+        text = rulebook.managed_text(old, rulebook.bundle(self.repo / "plugin"), prefix)
+        match = rulebook.PATTERN.search(old)
+        if match:
+            body = match.group(0)[len(rulebook.BEGIN):-len(rulebook.END)].strip()
+            body = re.sub(r"^<!-- rules-revision: [a-f0-9]+ -->\s*", "", body).strip()
+            if body != rulebook.bundle(self.repo / "plugin")["rules"] and body not in self.legacy_rules:
+                self.legacy_rules.append(body)
         self.edit(path, text)
+        if not self.dry and path.read_text() != text:
+            raise ValueError("EverOS rule readback mismatch: " + str(path))
+        return {"path": str(path), "status": "preview" if self.dry else "file_verified",
+                "changed": old != text}
+
+    def sync_rules(self):
+        """Native user instructions, not generated episodic memories or project files."""
+        documents = rulebook.bundle(self.repo / "plugin")
+        state = self.everos / "state/rules"
+        previous = rulebook.load(state / "current.json")
+        targets = []
+
+        def want(host, detected):
+            return host in self.rule_hosts if self.rule_hosts else detected
+
+        def add(host, path, prefix=""):
+            targets.append(dict(self.rules(path, prefix), host=host))
+
+        trae = Path(self.environment.get("TRAE_HOME", str(self.home / ".trae"))).expanduser()
+        if want("trae", any(shutil.which(cli) for cli in ("traecli", "traex", "coco")) or (trae / "traecli.toml").exists()):
+            add("trae", trae / "AGENTS.md")
+        if self.only != "trae":
+            codex = Path(self.environment.get("CODEX_HOME", str(self.home / ".codex")))
+            if want("codex", shutil.which("codex") or (codex / "config.toml").exists()):
+                # Codex prefers the nonempty override over AGENTS.md at this level.
+                override = codex / "AGENTS.override.md"
+                add("codex", override if override.exists() and override.read_text().strip() else codex / "AGENTS.md")
+            claude = Path(self.environment.get("CLAUDE_CONFIG_DIR", str(self.home / ".claude")))
+            if want("claude", shutil.which("claude") or (claude / "settings.json").exists()):
+                add("claude", claude / "CLAUDE.md")
+            gemini = self.home / ".gemini"
+            if want("gemini", shutil.which("gemini") or (gemini / "settings.json").exists()):
+                add("gemini", gemini / "GEMINI.md")
+            kimi = Path(self.environment.get("KIMI_CODE_HOME", str(self.home / ".kimi-code")))
+            if want("kimi", shutil.which("kimi") or (kimi / "bin/kimi").exists() or (kimi / "config.toml").exists()):
+                add("kimi", kimi / "AGENTS.md")
+            default = self.home / "Library/Application Support/kimi-desktop/daimon-share/daimon/runtime/kimi-code/config.toml"
+            desktop = Path(os.environ.get("EVEROS_KIMI_DESKTOP_CONFIG", str(default)))
+            if want("kimi_desktop", desktop.exists()):
+                root = Path(os.environ.get("EVEROS_KIMI_DESKTOP_HOME", str(desktop.parent / "home")))
+                add("kimi_desktop", root / "AGENTS.md")
+            cursor = self.home / ".cursor"
+            if want("cursor", cursor.exists() or shutil.which("cursor") or (self.home / "Applications/Cursor.app").exists() or (
+                    self.home == Path.home() and Path("/Applications/Cursor.app").exists())):
+                add("cursor", cursor / "rules/everos-bridge.mdc", "---\ndescription: EverOS memory workflow\nalwaysApply: true\n---\n")
+            mimo = Path(self.environment.get("XDG_CONFIG_HOME") or (self.home / ".config")) / "mimocode/mimocode.jsonc"
+            if mimo.exists() and not self.rule_hosts:
+                data = json.loads(self.strip_jsonc(mimo.read_text()))
+                source = str(self.repo / "plugin/rules/everos-rules.md")
+                targets.append({"host": "mimocode", "path": str(mimo),
+                                "status": "instruction_reference_verified" if source in data.get("instructions", []) else "needs_install"})
+            if not self.rule_hosts:
+                targets.append({"host": "claude_desktop_cowork", "status": "native_memory_api_required",
+                                "fallback": "memory_rules + MCP instructions; no supported writable global file"})
+        # Do not replace the previous transition on no-op reinstalls. All managed
+        # files must be read back before recording successful installation evidence.
+        if not previous and len(self.legacy_rules) == 1:
+            previous = {"documents": {"rules": self.legacy_rules[0]},
+                        "baseline": "legacy_native_rules_only_skill_baseline_unavailable"}
+        current = rulebook.transition(documents, previous)
+        self.edit(state / "current.json", json.dumps(current, ensure_ascii=False, indent=2) + "\n", 0o600)
+        scope = sorted(self.rule_hosts) if self.rule_hosts else [self.only] if self.only else "detected_supported_hosts"
+        self.edit(state / "targets.json", json.dumps({"revision": current["revision"], "scope": scope, "targets": targets},
+                                                    ensure_ascii=False, indent=2) + "\n", 0o600)
+        print("  Bridge规则 " + current["revision"][:12] + "；逐宿主文件回读与增量：" + str(state))
+        if current["baseline"] == "legacy_native_rules_only_skill_baseline_unavailable":
+            print("  已从旧原生管理块恢复简版差异；旧skill基线缺失，需全量复核skill，不将其全部视为新增。")
+        elif current["previous_revision"]:
+            print("  更新Agent应调用 memory_rules(section=changes) 理解最近增量，再回读原生规则；重复安装保留此差异。")
+        else:
+            print("  首次接入Agent应读取 memory_rules 的 rules/skill；MCP专用宿主用其原生记忆工具保存规则。")
 
     @staticmethod
     def strip_jsonc(text):
@@ -658,7 +741,6 @@ class Installer:
                 runtime = Path(self.environment.get("TRAECLI_HOME", str(shared / "cli"))).expanduser()
                 self.before_cli(shared / "traecli.toml")
                 self.mcp_cli(cli)
-                self.rules(shared / "AGENTS.md")
                 # Old Coco has different hook/storage contracts. Do not silently
                 # claim L3/L4 support there; keep its existing MCP + rules path.
                 version = self.run([cli, "--version"], capture=True)
@@ -698,8 +780,6 @@ class Installer:
             self.edit(cursor_home / "skills/everos-memory/SKILL.md",
                       (self.repo / "plugin/skills/everos-memory/SKILL.md").read_text())
         self.mcp_json(self.home / ".gemini/settings.json", create=bool(shutil.which("gemini")))
-        if shutil.which("gemini"):
-            self.rules(self.home / ".gemini/GEMINI.md")
         kimi_home = Path(self.environment.get("KIMI_CODE_HOME", str(self.home / ".kimi-code")))
         kimi_cli = shutil.which("kimi")
         if not kimi_cli:
@@ -732,6 +812,7 @@ class Installer:
         self.finish()
 
     def finish(self):
+        self.sync_rules()
         print("== 自检")
         self.run([sys.executable, self.hook, "--doctor"])
         if self.dry:
@@ -745,14 +826,21 @@ def main():
     parser.add_argument("--dry-run", action="store_true")
     scope = parser.add_mutually_exclusive_group()
     scope.add_argument("--cli-only", action="store_true", help="只安装手动检索命令，不接线宿主或调用 API")
+    scope.add_argument("--rules-only", action="store_true", help="只同步已安装宿主原生规则与增量；不调用API或安装插件")
+    parser.add_argument("--rules-host", action="append", choices=["claude", "codex", "trae", "gemini", "kimi", "kimi_desktop", "cursor"],
+                        help="与--rules-only配合，显式指定云端/未启动的原生指令宿主，可重复")
     scope.add_argument("--only", choices=["trae"], help="只刷新 TraeX，不改其他宿主")
     args = parser.parse_args()
+    if args.rules_host and not args.rules_only:
+        parser.error("--rules-host requires --rules-only")
     if sys.version_info < (3, 9):
         parser.error("需要 python3 >= 3.9")
     try:
-        installer = Installer(Path(__file__).resolve().parents[1], args.dry_run, args.only)
+        installer = Installer(Path(__file__).resolve().parents[1], args.dry_run, args.only, args.rules_host)
         if args.cli_only:
             installer.install_cli()
+        elif args.rules_only:
+            installer.sync_rules()
         else:
             installer.install()
     except (OSError, ValueError, subprocess.CalledProcessError) as error:

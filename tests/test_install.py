@@ -90,6 +90,7 @@ class InstallerTests(unittest.TestCase):
         (self.repo / "plugin/everos").mkdir(parents=True)
         shutil.copy2(ROOT / "plugin/everos/core.py", self.repo / "plugin/everos/core.py")
         shutil.copy2(ROOT / "plugin/everos/trae.py", self.repo / "plugin/everos/trae.py")
+        shutil.copy2(ROOT / "plugin/everos/rules.py", self.repo / "plugin/everos/rules.py")
         (self.repo / "plugin/rules").mkdir(parents=True)
         shutil.copy2(ROOT / "install.sh", self.repo / "install.sh")
         shutil.copy2(ROOT / "scripts/install_config.py", self.repo / "scripts/install_config.py")
@@ -368,7 +369,7 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("[features]\nhooks = true", (self.home / ".codex/config.toml").read_text())
         self.assertIn("审阅并信任", result.stdout)
         self.assertFalse(any("trust" in str(call) for call in self.calls()))
-        self.assertFalse((self.home / ".codex/AGENTS.md").exists())
+        self.assertIn("everos-bridge:begin", (self.home / ".codex/AGENTS.md").read_text())
 
     def test_codex_upgrade_preserves_old_cache_and_leaves_new_cache_untouched(self):
         self.cli("codex")

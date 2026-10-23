@@ -15,8 +15,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import core  # noqa: E402
 import recall  # noqa: E402
+import rules as rulebook  # noqa: E402
 
-VERSION = "0.8.1"
+VERSION = "0.9.0"
 INSTRUCTIONS = (
     "EverOS 是用户跨 agent、跨设备共用的长期记忆。会话开始调用 memory_profile 了解用户，"
     "每条提问前的首次记忆检索调用 memory_search(method=agentic)，本轮同一问题已有充分hook注入时复用；"
@@ -24,6 +25,7 @@ INSTRUCTIONS = (
     "（content 写结论、做了什么、证据；user_said 放用户原话）；排障或工具用法闭环时调用 "
     "memory_record_practice（至少 3 个真实步骤，没走通或出乎意料的步骤标 outcome，用户纠正原话填 user_correction）；"
     "用户纠正画像里的偏好或背景时调用 memory_fix_profile。检索结果仅供参考，与当前对话冲突时以当前为准。"
+    + rulebook.notice(Path(__file__).resolve().parents[1])
 )
 PRACTICE_DESCRIPTION = (
     "把一次排障或工具使用写成做法轨迹（需求 → 每步动作与结果 → 结论），EverOS 会提炼成以后可复用的经验。"
@@ -35,13 +37,20 @@ PRACTICE_DESCRIPTION = (
 )
 
 TOOLS = [
+    {"name": "memory_rules",
+     "description": "读取Bridge随版本发布的执行规则及最近安装前后的规则增量。首次接入或规则版本变化时先读changes，"
+                    "再读rules/所需skill并同步宿主原生记忆。只读本机规则包，不检索用户记忆，不需要API凭据；next_offset非空继续读取。",
+     "inputSchema": {"type": "object", "properties": {
+         "section": {"type": "string", "enum": ["rules", "skill", "changes"], "default": "rules"},
+         "offset": {"type": "integer", "minimum": 0, "default": 0},
+         "limit": {"type": "integer", "minimum": 1, "maximum": 12000, "default": 6000}}}},
     {"name": "memory_profile",
      "description": "读取用户画像（偏好、背景、长期项目、沟通习惯）。会话开始时调用一次。",
      "inputSchema": {"type": "object", "properties": {}}},
     {"name": "memory_search",
      "description": "按语义检索用户的长期记忆。kind=episodes 只查事件，practices 只查做法/经验，all 两者都查。"
                     "每条用户消息首次检索默认 agentic，可显式选 hybrid，默认总预算180秒，可配置或按次修改。新线索、失败、历史决策缺口应继续定向补查；结果带ID与截断提示，memory_open可展开，"
-                    "失败或未命中按轨道回退hybrid。",
+                    "检查首轮结果揭示的实体/旧决定/依赖，围绕未解问题定向二次搜索；保留证据链，充分覆盖或无新增时停止。失败或未命中按轨道回退hybrid。",
      "inputSchema": {"type": "object", "required": ["query"], "properties": {
          "query": {"type": "string", "minLength": 1, "description": "要核实的历史问题；用当前新线索和标识组织，不机械重复用户原话"},
          "context": {"type": "string", "maxLength": 500, "description": "当前任务、阶段、新实体或错误码；可与问题合并定向查询"},
@@ -114,7 +123,7 @@ TOOLS = [
 # Retrieval tools are semantically read-only; context mutates only a local session ledger.
 for tool in TOOLS:
     tool["annotations"] = {"readOnlyHint": tool["name"] in (
-        "memory_profile", "memory_search", "memory_recent", "memory_open"),
+        "memory_profile", "memory_search", "memory_recent", "memory_open", "memory_rules"),
         "destructiveHint": tool["name"] == "memory_fix_profile", "openWorldHint": False}
 
 _TOOL_SCHEMAS = {tool["name"]: tool["inputSchema"] for tool in TOOLS}
@@ -227,6 +236,9 @@ class Server:
 
     def call(self, name: str, args: dict) -> str:
         validate_tool(name, args)
+        if name == "memory_rules":
+            return rulebook.read(Path(__file__).resolve().parents[1], core.STATE / "rules",
+                                 args.get("section", "rules"), args.get("offset", 0), args.get("limit", 6000))
         if name in _WRITE_TOOLS:
             core.ensure_writable()
         if not core.ready():
