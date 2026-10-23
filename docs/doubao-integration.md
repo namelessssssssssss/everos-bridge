@@ -116,3 +116,5 @@ session_id 规则：`dw_<首日>_<首句slug>_<完整sid>`，前缀与其他宿�
 - 会话记录格式属于 harness 内部布局，harness 改版（字段、目录、时间戳位置）时需要同步更新
   `plugin/doubao/doubao.py` 与其测试。
 - 云端 VM 的 home 持久化范围由平台决定；`check.sh` 用于新会话快速发现缺失并给出修复提示。
+- harness 工具通道偶发直接返回 `http timeout`（不是 bridge 输出，长耗时非 everos 命令也会出现）；
+  agentic 首查遇到时改为后台运行再取结果，不把它当作无记忆。

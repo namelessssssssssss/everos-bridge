@@ -25,6 +25,8 @@ everos-mcp list                       # 应列出 8 个 memory_* 工具
   - 省略 method 服务端也默认 agentic；显式写出便于自检。
   - 默认总预算 180 秒（含按轨道回退 hybrid），`everos-mcp` 客户端等 200 秒。**Bash 工具默认 120 秒
     超时会先打断它，调用时把 timeout 设为 240000**；输出里的降级/回退提示照常采信。
+  - 工具直接返回 `http timeout`（不是 everos 输出）属于 harness 通道错误，不等于检索失败也不等于无
+    记忆：改用 Bash 后台运行（run_in_background）再用 TaskOutput 取结果。
   - 问“以前怎么做的”用 `"kind":"practices"`。
 - `<会话id>` 取主项目目录 `~/Doubao/chats/<会话id>` 的末段；同一会话内保持不变。
 - 本轮同一问题已有充分证据时复用，不为凑调用次数重复检索。
