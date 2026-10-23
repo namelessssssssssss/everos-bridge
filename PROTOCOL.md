@@ -17,7 +17,7 @@
 | 能力 | Claude Code / Codex / TraeX | Kimi Code / Kimi Work 桌面端 | MiMoCode / MiMo Desktop | Doubao Work（无 hook 云端宿主） | 其他 MCP 客户端 |
 | --- | --- | --- | --- | --- | --- |
 | 会话开始读画像 | SessionStart hook 自动注入（压缩后会再注入一次） | 首条提问时一起注入 | Plugin `system.transform` / 首条提问注入 | 模型按用户 skill 主动调 `memory_profile`（`everos-mcp`） | 调 `memory_profile` |
-| 每条提问检索 | UserPromptSubmit hook 自动注入 | 同左 | Plugin `chat.message` 注入 synthetic part | 模型按用户 skill 每轮主动调 `memory_search` | 每条提问先调 `memory_search` |
+| 每条提问检索 | UserPromptSubmit hook 自动注入 | 同左 | Plugin `chat.message` 注入 synthetic part | 模型按用户 skill 每轮主动调 `memory_search(method=agentic)`，任务中按缺口补查、`memory_open` 展开 | 每条提问先调 `memory_search` |
 | 对话原文入库 | Stop hook 每轮自动写入 | 同左 | Plugin `session.post` → `--mimo-write` | 每轮主动跑 `everos-doubao-ingest --all`（main agent 的用户原话与最终回复） | 不自动；靠 3.2 的结构化记录 |
 | 结构化记录、做法、改画像 | MCP：`memory_remember` / `memory_record_practice` / `memory_fix_profile` | 同左 | 同左 | `everos-mcp` 调同一个 mcp_server，工具与校验一致 | 同左 |
 

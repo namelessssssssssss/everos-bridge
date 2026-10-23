@@ -8,9 +8,9 @@ Doubao Work 是云端 Linux 会话：agent 运行在受控 VM 里，**不能自�
 
 | 层 | 能力 | Doubao Work 上的实现 |
 | --- | --- | --- |
-| L1 MCP | 6 个 `memory_*` 工具 | `bin/everos-mcp`（命令行 stdio 客户端，调未改动的 `plugin/everos/mcp_server.py`） |
+| L1 MCP | 8 个 `memory_*` 工具 | `bin/everos-mcp`（命令行 stdio 客户端，调未改动的 `plugin/everos/mcp_server.py`） |
 | L2 指令 | 每轮读写规则 | 用户级 skill `everos-memory`（`plugin/skills/everos-memory-doubao`） |
-| L3 提问前检索 | 画像/记忆注入 | 无 hook；由 agent 按 skill 每轮主动调 `memory_profile` / `memory_search` |
+| L3 提问前检索 | 画像/记忆注入 | 无 hook；由 agent 按 skill 每轮主动调 `memory_profile` / `memory_search`（每条消息首次 agentic），任务中按缺口补查并用 `memory_open` 展开 |
 | L4 回合结束采集 | 对话原文入库 | 无 hook；每轮回复前主动跑 `everos-doubao-ingest` |
 
 ## 安装
@@ -52,10 +52,13 @@ python3 -c "import time;open('$HOME/.everos/state/doubao_ingest_since','w').writ
 ```bash
 bash ~/.doubao/agent_mode/workspace/.user_skills/everos-memory/scripts/check.sh  # 环境自检
 
-# L3（由 agent 每轮主动执行）
+# L3（由 agent 每轮主动执行；每条消息首次检索用 agentic，最长约 180 秒）
 everos-mcp memory_profile '{}'
-everos-mcp memory_search '{"query":"…","kind":"all","top_k":5}'
-everos-mcp memory_search '{"query":"…","kind":"practices","method":"agentic"}'
+everos-mcp memory_search '{"query":"…","kind":"all","top_k":5,"method":"agentic","session_id":"dw_<会话id>"}'
+# 任务中补查 / 展开 / 阶段上下文
+everos-mcp memory_search '{"query":"…","context":"新线索","method":"hybrid","session_id":"dw_<会话id>"}'
+everos-mcp memory_open '{"memory_id":"em_…","offset":0,"limit":4000}'
+everos-mcp memory_context '{"session_id":"dw_<会话id>","stage":"new_evidence","clues":"…"}'
 
 # 结构化写入（交付 / 纠错 / 决策 / 排障闭环）
 everos-mcp memory_remember @/abs/path/args.json
@@ -66,6 +69,9 @@ everos-doubao-ingest --all       # 增量采集接入点之后有更新的会话
 everos-doubao-ingest --current   # 只采集当前会话
 everos-doubao-ingest --current --dry-run   # 只预览将写入的消息，不调 API
 ```
+
+`everos-mcp` 客户端等待 200 秒（`EVEROS_MCP_CLIENT_TIMEOUT`），大于 agentic 默认预算；agent 在
+Doubao Work 的 Bash 工具里调用时要把工具超时设到 240 秒以上，否则默认 120 秒会先打断检索。
 
 退出码：`0` 成功（含无新增），`1` 写入/服务失败或参数之外的错误，`2` 参数错误。
 `EVEROS_WRITE=0` 时写工具与采集全部拒绝入库。
@@ -96,7 +102,8 @@ session_id 规则：`dw_<首日>_<首句slug>_<完整sid>`，前缀与其他宿�
 
 - [ ] `bash plugin/doubao/check.sh`（或 skill 内副本）各项 OK；
 - [ ] `python3 -m unittest discover -s tests -v` 全绿，含 `tests/test_doubao.py`；
-- [ ] `everos-mcp list` 列出 6 个 `memory_*` 工具，`memory_profile` 能返回画像；
+- [ ] `everos-mcp list` 列出 8 个 `memory_*` 工具，`memory_profile` 能返回画像；
+- [ ] `memory_search` 不带 method 时走 agentic，结果行的 `em_` 标识能被 `memory_open` 展开；
 - [ ] `everos-doubao-ingest --current --dry-run` 解析出的角色只有 user/assistant 最终回复，
       不含脚手架与 key/token；
 - [ ] 真实写入后重复执行 `--current` 的 `new_messages=0`（幂等）；

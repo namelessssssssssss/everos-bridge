@@ -70,6 +70,6 @@
 | Claude Desktop / Cowork | `claude_desktop_config.json`（App 退出时写，或在 App 设置里加） | claude.ai 上的 skill | — | — | App 运行时会覆盖外部改动；Cowork 靠 skill |
 | Cursor、Gemini CLI | `mcp.json` / `settings.json` | `~/.gemini/GEMINI.md` | — | — | 只有 MCP |
 | Claude Code on the web | 仓库里的 `.mcp.json` | 仓库 CLAUDE.md、claude.ai 上的 skill | 仓库 `.claude/settings.json` 里的 hook | 同左 | 不装插件；要用网络密钥放行 `api.evermind.ai`，见 README「云端」 |
-| Doubao Work（豆包办公） | `bin/everos-mcp`（命令行 stdio 客户端，调原版 mcp_server） | 用户级 skill `everos-memory`（安装时同步到 `~/.doubao/.../.user_skills`） | 无 hook：模型按 skill 每轮主动调 `memory_profile` / `memory_search` | 无 hook：每轮主动跑 `everos-doubao-ingest --all` | 无 MCP 注册/插件/全局指令；trajectory.jsonl 无时间戳，用 assignment.md 标题对齐；只写 main agent 的用户原话与最终回复；session 前缀 `dw`；详见 [doubao-integration.md](doubao-integration.md) |
+| Doubao Work（豆包办公） | `bin/everos-mcp`（命令行 stdio 客户端，调原版 mcp_server） | 用户级 skill `everos-memory`（安装时同步到 `~/.doubao/.../.user_skills`） | 无 hook：模型按 skill 每轮主动调 `memory_profile` / `memory_search`（每条消息首次 agentic），按缺口补查与 `memory_open` 展开 | 无 hook：每轮主动跑 `everos-doubao-ingest --all` | 无 MCP 注册/插件/全局指令；trajectory.jsonl 无时间戳，用 assignment.md 标题对齐；只写 main agent 的用户原话与最终回复；session 前缀 `dw`；详见 [doubao-integration.md](doubao-integration.md) |
 
 0.8.1首次接入Cursor会创建全局MCP配置与共享skill；已安装Gemini和Claude Desktop也不再因为缺少初始配置而静默跳过。MCP状态目录必须与hook一致，不能假设父进程的EVEROS_HOME会被保留。
