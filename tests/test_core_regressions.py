@@ -200,6 +200,10 @@ class ResponseAndWriteTests(IsolatedCore):
 
 
 class RecallTests(IsolatedCore):
+    def setUp(self):
+        super().setUp()
+        os.environ["EVEROS_AGENTIC_TIMEOUT"] = ".06"
+
     def test_top_k_reaches_user_agent_and_legacy_queries_without_clamping(self):
         for top_k in (-1, 1, 21, 100):
             with self.subTest(top_k=top_k), patch.dict(os.environ, {"EVEROS_READ_V1": "1"}), \
@@ -605,13 +609,59 @@ class AgenticRecallTests(IsolatedCore):
         self.assertIn("hybrid", text)
         self.assertIn("answer 0:", text)
 
-    def test_hook_remains_hybrid_with_its_existing_eighteen_second_budget(self):
-        with patch.dict(os.environ, {"EVEROS_RECALL_TIMEOUT": "18"}), \
+    def test_every_prompt_starts_with_agentic_even_after_first_turn(self):
+        with patch.dict(os.environ, {"EVEROS_AGENTIC_TIMEOUT": "180", "EVEROS_RECALL_TIMEOUT": "18"}), \
                 patch.object(core, "search_items", return_value=[]) as search:
-            hook.on_prompt({"session_id": "hook-still-fast", "prompt": "meaningful question"})
-        self.assertEqual(search.call_args.kwargs.get("method", "hybrid"), "hybrid")
-        self.assertGreater(search.call_args.kwargs["budget"], 17)
-        self.assertLessEqual(search.call_args.kwargs["budget"], 18)
+            hook.on_prompt({"session_id": "agentic-every-turn", "prompt": "first question"})
+            hook.on_prompt({"session_id": "agentic-every-turn", "prompt": "next question"})
+        self.assertEqual(search.call_count, 2)
+        for call in search.call_args_list:
+            self.assertEqual(call.kwargs["method"], "agentic")
+            self.assertGreater(call.kwargs["budget"], 179)
+            self.assertLessEqual(call.kwargs["budget"], 180)
+
+    def test_all_prompt_entrypoints_send_agentic_on_every_turn_at_api_boundary(self):
+        def api(path, body, timeout):
+            if path.endswith("/get"):
+                return {"data": {}}
+            if body.get("user_id"):
+                return {"data": {"episodes": [self.episode()]}}
+            return {"data": {"agent_cases": [self.case()]}}
+        self.api.side_effect = api
+        for host in ("claude", "codex", "kimi", "kimi_desktop", "trae", "mimocode"):
+            with self.subTest(host=host):
+                self.api.reset_mock()
+                for turn in (1, 2):
+                    payload = {"session_id": host, "hook_event_name": "UserPromptSubmit",
+                               "prompt": "meaningful question", "client_type": host, "turn_id": turn}
+                    args = ["hook.py"]
+                    if host == "mimocode":
+                        args.append("--mimo-recall")
+                        payload = {"session_id": host, "query": "meaningful question", "first": turn == 1}
+                    with patch.object(hook, "HOST_OVERRIDE", host), patch.object(sys, "argv", args), \
+                            patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), \
+                            contextlib.redirect_stdout(io.StringIO()) as out:
+                        self.assertEqual(hook.main(), 0)
+                    if turn == 1:
+                        self.assertIn("the direct historical answer", out.getvalue())
+                    else:
+                        self.assertNotIn("the direct historical answer", out.getvalue())
+                calls = [c for c in self.api.call_args_list if c.args[0].endswith("/search")]
+                self.assertEqual(len(calls), 4)
+                for call in calls:
+                    self.assertEqual(call.args[1]["method"], "agentic")
+                    self.assertNotIn("min_score", call.args[1])
+
+    def test_prompt_injects_per_track_fallback_notices_and_keeps_dedup(self):
+        def search(*args, **kwargs):
+            kwargs["notices"].append("agentic 未命中，已回退 hybrid")
+            return [{"id": "answer", "text": "recovered answer", "kind": "episode"}]
+        with patch.object(core, "search_items", side_effect=search):
+            first = "\n".join(hook.build_prompt_blocks("fallback", "question"))
+            second = "\n".join(hook.build_prompt_blocks("fallback", "question"))
+        self.assertIn("recovered answer", first)
+        self.assertNotIn("recovered answer", second)
+        self.assertIn("agentic 未命中，已回退 hybrid", second)
 
     def test_deep_search_subprocess_exits_without_waiting_for_late_workers(self):
         script = "\n".join([

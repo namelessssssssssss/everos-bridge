@@ -209,7 +209,7 @@ def is_everos_hook(command):
                 or re.search(r"(?:^|[/\\])everos[/\\]hook\.py(?:$|[\s'\"])", command))
 
 
-def kimi_hooks(text, hook, desktop=False):
+def kimi_hooks(text, hook, desktop=False, recall_timeout=190):
     lines = text.splitlines(keepends=True)
     headers = table_headers(text)
     remove = set()
@@ -224,16 +224,18 @@ def kimi_hooks(text, hook, desktop=False):
     existing = "".join(line for index, line in enumerate(lines) if index not in remove).rstrip()
     command = ("EVEROS_HOST=kimi_desktop " if desktop else "") + "python3 " + shlex.quote(str(hook))
     blocks = []
-    for event, timeout in (("UserPromptSubmit", 20), ("Stop", 10), ("PreCompact", 10), ("SessionEnd", 5)):
+    for event, timeout in (("UserPromptSubmit", recall_timeout), ("Stop", 10), ("PreCompact", 10), ("SessionEnd", 5)):
         blocks.append('[[hooks]]\nevent = "{}"\ncommand = {}\ntimeout = {}'.format(event, json.dumps(command), timeout))
     return existing + ("\n\n" if existing else "") + "\n\n".join(blocks) + "\n"
 
 
-def trae_hooks(text, hook, runtime):
+def trae_hooks(text, hook, runtime, recall_timeout=190, tool_events=False):
     """Merge only EverOS handlers; preserve unrelated hooks and top-level fields."""
     data = json.loads(text or "{}")
-    events = (("SessionStart", 10), ("UserPromptSubmit", 20), ("Stop", 10),
+    events = (("SessionStart", 10), ("UserPromptSubmit", recall_timeout), ("Stop", 10),
               ("PreCompact", 10), ("PostCompact", 5), ("SessionEnd", 5))
+    if tool_events:
+        events += (("PreToolUse", 3), ("PostToolUse", 3))
     canonical = {event.lower(): event for event, _ in events}
     merged = {}
     for event, groups in data.get("hooks", {}).items():
@@ -389,7 +391,7 @@ class Installer:
         if not path.exists() and not create:
             return
         data = json.loads(path.read_text().strip() or "{}") if path.exists() else {}
-        data.setdefault("mcpServers", {})["everos"] = {"command": "python3", "args": [str(self.mcp)]}
+        data.setdefault("mcpServers", {})["everos"] = {"command": "python3", "args": [str(self.mcp)], "env": {"EVEROS_HOME": str(self.everos)}}
         self.edit(path, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
 
     def rules(self, path):
@@ -457,6 +459,7 @@ class Installer:
         data["mcp"]["everos"] = {
             "type": "local",
             "command": ["python3", str(self.mcp)],
+            "environment": {"EVEROS_HOME": str(self.everos)},
             "timeout": timeout,
         }
         rules = str(self.repo / "plugin/rules/everos-rules.md")
@@ -469,7 +472,7 @@ class Installer:
         plugins = data.get("plugin")
         if not isinstance(plugins, list):
             plugins = []
-        entry = [plugin_url, {"hook": str(self.hook)}]
+        entry = [plugin_url, {"hook": str(self.hook), "recallTimeoutMs": minimum}]
         plugins = [p for p in plugins
                    if not (isinstance(p, str) and "everos.mjs" in p)
                    and not (isinstance(p, list) and p and "everos.mjs" in str(p[0]))]
@@ -658,19 +661,28 @@ class Installer:
                 raise ValueError("Codex everos-bridge marketplace migration did not take effect")
 
     def mcp_cli(self, cli):
+        remove = False
         if self.dry:
             print("  [dry-run] 检查并更新 {} 的 everos MCP 旧路径".format(cli))
         else:
             current = subprocess.run([cli, "mcp", "get", "everos"], env=self.environment,
                                      text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             if current.returncode == 0:
-                self.run([cli, "mcp", "remove", "everos"])
+                remove = True
             elif current.returncode != 1 or "No MCP server named 'everos' found" not in current.stderr:
                 if current.stderr:
                     print(current.stderr, end="", file=sys.stderr)
                 raise subprocess.CalledProcessError(current.returncode, current.args,
                                                     current.stdout, current.stderr)
-        self.run([cli, "mcp", "add", "everos", "--", "python3", self.mcp])
+        help_text = self.run([cli, "mcp", "add", "--help"], capture=True)
+        command = [cli, "mcp", "add", "everos"]
+        if re.search(r"(?<![\w-])--env(?:[\s=,]|$)", help_text) or self.dry:
+            command += ["--env", "EVEROS_HOME=" + str(self.everos)]
+        elif self.everos != self.home / ".everos":
+            raise ValueError(f"{cli} 不支持显式MCP环境变量，无法绑定自定义EVEROS_HOME")
+        if remove:
+            self.run([cli, "mcp", "remove", "everos"])
+        self.run(command + ["--", "python3", self.mcp])
 
     def install(self):
         self.mcp_timeout_seconds()
@@ -727,7 +739,8 @@ class Installer:
                 match = re.search(r"(?:traecli|traex)\s+(\d+)\.(\d+)\.(\d+)", version, re.I)
                 if self.dry or (match and tuple(map(int, match.groups())) >= (0, 209, 1)):
                     path = runtime / "hooks.json"
-                    self.edit(path, trae_hooks(path.read_text() if path.exists() else "", self.hook, runtime))
+                    self.edit(path, trae_hooks(path.read_text() if path.exists() else "", self.hook, runtime, self.mcp_timeout_seconds(),
+                                               tool_events=bool(match and tuple(map(int, match.groups())) >= (0, 210, 1))))
                     print("  TraeX L3/L4 已配置；新会话在 /hooks 审阅并信任 EverOS 当前定义后生效。")
                 else:
                     print("  此宿主仅配置 MCP + 规则；L3/L4 需要 TraeX >= 0.209.1。")
@@ -744,10 +757,22 @@ class Installer:
         if "Claude.app/Contents/MacOS/Claude" in process.stdout:
             print("  Claude Desktop 正在运行，本次跳过其配置；退出 App 后重跑，或在设置中手动添加 MCP。")
         else:
-            self.mcp_json(self.home / "Library/Application Support/Claude/claude_desktop_config.json")
-            self.mcp_json(self.home / ".config/Claude/claude_desktop_config.json")
-        self.mcp_json(self.home / ".cursor/mcp.json")
-        self.mcp_json(self.home / ".gemini/settings.json")
+            desktop_root = self.home / "Library/Application Support/Claude"
+            desktop_present = ((self.home / "Applications/Claude.app").is_dir() or
+                               (self.home == Path.home() and Path("/Applications/Claude.app").is_dir()))
+            self.mcp_json(desktop_root / "claude_desktop_config.json",
+                          create=desktop_present or desktop_root.is_dir())
+            linux_desktop = self.home / ".config/Claude"
+            self.mcp_json(linux_desktop / "claude_desktop_config.json", create=linux_desktop.is_dir())
+        cursor_home = self.home / ".cursor"
+        cursor_installed = (cursor_home.is_dir() or shutil.which("cursor") or
+                            (self.home / "Applications/Cursor.app").is_dir() or
+                            (self.home == Path.home() and Path("/Applications/Cursor.app").is_dir()))
+        self.mcp_json(cursor_home / "mcp.json", create=bool(cursor_installed))
+        if cursor_installed:
+            self.edit(cursor_home / "skills/everos-memory/SKILL.md",
+                      (self.repo / "plugin/skills/everos-memory/SKILL.md").read_text())
+        self.mcp_json(self.home / ".gemini/settings.json", create=bool(shutil.which("gemini")))
         if shutil.which("gemini"):
             self.rules(self.home / ".gemini/GEMINI.md")
         kimi_home = Path(self.environment.get("KIMI_CODE_HOME", str(self.home / ".kimi-code")))
@@ -762,7 +787,7 @@ class Installer:
             print("== Kimi Code")
             self.mcp_json(kimi_home / "mcp.json", create=True)
             config = kimi_home / "config.toml"
-            self.edit(config, kimi_hooks(config.read_text() if config.exists() else "", self.hook))
+            self.edit(config, kimi_hooks(config.read_text() if config.exists() else "", self.hook, recall_timeout=self.mcp_timeout_seconds()))
             self.run([kimi_cli, "doctor"])
         elif kimi_home.is_dir():
             print("== Kimi Code（跳过：{} 已存在但找不到可执行的 kimi 命令；".format(kimi_home))
@@ -773,7 +798,7 @@ class Installer:
             print("== Kimi Work 桌面端")
             desktop_home = Path(os.environ.get("EVEROS_KIMI_DESKTOP_HOME", str(desktop.parent / "home")))
             self.mcp_json(desktop_home / "mcp.json", create=True)
-            self.edit(desktop, kimi_hooks(desktop.read_text(), self.hook, desktop=True))
+            self.edit(desktop, kimi_hooks(desktop.read_text(), self.hook, desktop=True, recall_timeout=self.mcp_timeout_seconds()))
             self.sync_daimon_skill(desktop)
         mimo_cfg = Path(self.environment.get("XDG_CONFIG_HOME") or (self.home / ".config")) / "mimocode" / "mimocode.jsonc"
         mimo_home = self.home / "Library/Application Support/Xiaomi MiMo"

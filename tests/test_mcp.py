@@ -43,7 +43,7 @@ class McpTests(unittest.TestCase):
         self.assertEqual(response["id"], 1)
         self.assertNotIn("result", response)
 
-    def test_initialize_and_six_tools_remain_compatible(self):
+    def test_initialize_preserves_existing_tools_and_adds_retrieval_tools(self):
         result = self.server.respond(request("initialize", {
             "protocolVersion": "2025-06-18", "capabilities": {},
             "clientInfo": {"name": "Codex", "version": "test"}}))["result"]
@@ -56,7 +56,7 @@ class McpTests(unittest.TestCase):
         tools = self.server.respond(request("tools/list"))["result"]["tools"]
         self.assertEqual({tool["name"] for tool in tools}, {
             "memory_profile", "memory_search", "memory_recent", "memory_remember",
-            "memory_record_practice", "memory_fix_profile"})
+            "memory_record_practice", "memory_fix_profile", "memory_open", "memory_context"})
 
     def test_invalid_envelopes_return_invalid_request(self):
         invalid = [None, [], 3, "text", {}, {"jsonrpc": "2.0", "id": 1},
@@ -136,16 +136,16 @@ class McpTests(unittest.TestCase):
                     mock.patch.object(mcp_server.core, "search_text", return_value="search") as search:
                 response = self.call_tool("memory_search", {"query": "task", "top_k": top_k})
                 self.assertFalse(response["result"]["isError"])
-                search.assert_called_once_with("task", top_k, "all", method="hybrid")
+                search.assert_called_once_with("task", top_k, "all", method="agentic")
 
-    def test_search_schema_advertises_opt_in_agentic_and_keeps_hybrid_default(self):
+    def test_search_schema_defaults_to_agentic_with_explicit_hybrid_available(self):
         tools = self.server.respond(request("tools/list"))["result"]["tools"]
         search = next(tool for tool in tools if tool["name"] == "memory_search")
         schema = search["inputSchema"]
         self.assertNotIn("method", schema["required"])
         self.assertEqual(schema["properties"]["method"]["type"], "string")
         self.assertEqual(set(schema["properties"]["method"]["enum"]), {"hybrid", "agentic"})
-        self.assertEqual(schema["properties"]["method"]["default"], "hybrid")
+        self.assertEqual(schema["properties"]["method"]["default"], "agentic")
 
     def test_search_timeout_schema_is_optional_positive_number_without_a_default(self):
         tools = self.server.respond(request("tools/list"))["result"]["tools"]
@@ -222,7 +222,7 @@ class McpTests(unittest.TestCase):
             profile.assert_called_once_with(limit=8000, with_ids=True)
         with mock.patch.object(mcp_server.core, "search_text", return_value="search") as search:
             self.assertFalse(self.call_tool("memory_search", {"query": "task"})["result"]["isError"])
-            search.assert_called_once_with("task", 5, "all", method="hybrid")
+            search.assert_called_once_with("task", 5, "all", method="agentic")
         with mock.patch.object(mcp_server.core, "recent_text", return_value="recent") as recent:
             self.assertFalse(self.call_tool("memory_recent", {})["result"]["isError"])
             recent.assert_called_once_with(7, 20)

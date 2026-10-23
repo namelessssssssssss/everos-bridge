@@ -12,8 +12,8 @@
   EVEROS_READ_V1=1      过渡期：读取时同时查 v1 旧库并合并（官方迁完数据后关掉）
   EVEROS_AGENT_ID       v2 里助手消息的归属 agent，默认 <user_id>_agent；原 agent 名记在 sender_name
   EVEROS_MIN_SCORE      v2 检索的得分门槛，默认 0.3
-  EVEROS_RECALL_TIMEOUT 每条提问检索的总预算（秒），默认 18；hook 超时 20 秒
-  EVEROS_AGENTIC_TIMEOUT 手动 agentic 检索的总预算（秒），默认 180，包含回退
+  EVEROS_RECALL_TIMEOUT 旧版画像读取预算（秒）；不再控制提问检索
+  EVEROS_AGENTIC_TIMEOUT 自动/手动 agentic 检索的总预算（秒），默认 180，包含回退
   EVEROS_RECALL_CHARS   每轮注入上限（字），默认 2000
   EVEROS_CASE_WAIT      写做法后等待 v2 生成做法 case 的上限（秒），默认 30；0 关闭回读
 """
@@ -40,7 +40,7 @@ MAX_BODY_BYTES = 250_000       # 单次 add 请求体上限（留余量）
 IDLE_FLUSH_H = 2
 SWEEP_EVERY_MIN = 30
 READ_TIMEOUT = 6               # 读侧同步注入的网络超时，宁可不注入也不拖慢会话
-AGENTIC_TIMEOUT = 180          # 手动深检索的默认共同预算，包含回退
+AGENTIC_TIMEOUT = 180          # 自动/手动深检索的默认共同预算，包含回退
 AGENT_MIN_SCORE = 0.55         # 「做法」类召回的相关度门槛
 PRACTICE_MIN_STEPS = 3         # v2 少于 3 轮工具调用不提炼做法 case
 CASE_WAIT = 30                 # 写做法后等待 v2 做法 case 的默认上限（秒）
@@ -140,7 +140,7 @@ def _num(key: str, default: float) -> float:
 
 
 def agentic_timeout(config: dict | None = None) -> float:
-    """Validate the shared deep-search budget without changing hook timeouts."""
+    """Validate the shared automatic/manual deep-search budget."""
     value = (cfg() if config is None else config).get("EVEROS_AGENTIC_TIMEOUT", AGENTIC_TIMEOUT)
     try:
         seconds = float(value)
@@ -423,32 +423,39 @@ def search_items(query: str, top_k: int = 5, kind: str = "all", include_profile:
             notes.append(f"（{'、'.join(missing)}检索失败或超时，以下仅展示成功轨道的结果。）")
     items = []
     v2u, v2a, v1 = results.get("v2u") or {}, results.get("v2a") or {}, results.get("v1") or {}
+
+    def add(row, kind, text, source, **extra):
+        import recall
+        item = dict(id=row.get("id"), kind=kind, text=text, **extra)
+        try:
+            item = recall.snapshot(item, row, source)
+        except OSError as exc:
+            log(f"recall snapshot unavailable: {type(exc).__name__}")
+        items.append(item)
+
     for ep in v2u.get("episodes") or []:
-        items.append({"id": ep.get("id"), "kind": "episode", "date": str(ep.get("timestamp", ""))[:10],
-                      "score": float(ep.get("score") or 0), "text": _recall_text(ep, "summary", "subject")})
+        add(ep, "episode", _recall_text(ep, "summary", "subject"), "v2/episode",
+            date=str(ep.get("timestamp", ""))[:10], score=float(ep.get("score") or 0))
     for pr in v2u.get("profiles") or []:
         pdata = pr.get("profile_data") if isinstance(pr, dict) and "profile_data" in pr else None
         lines = _profile_lines(pdata)[:6] if pdata else [f"- {pr.get('description', '')}"]
         for line in lines:
-            items.append({"id": "profile:" + line[:40], "kind": "profile", "text": line[2:]})
-    for case in v2a.get("agent_cases") or []:
-        if agent_method == "agentic" or float(case.get("score") or 0) >= AGENT_MIN_SCORE:
-            items.append({"id": case.get("id"), "kind": "case", "text": _recall_text(case, "task_intent", "key_insight", " → ")})
-    for skill in v2a.get("agent_skills") or []:
-        if agent_method == "agentic" or float(skill.get("score") or 0) >= AGENT_MIN_SCORE:
-            items.append({"id": skill.get("id"), "kind": "skill", "text": _recall_text(skill, "name", "description", "：")})
-    # -1 delegates sizing to the server; Python's [:-1] would silently drop its last result.
+            add({"id": "profile:" + line[:40], "description": line[2:]}, "profile", line[2:], "v2/profile")
+    for key, kind, fields in (("agent_cases", "case", ("task_intent", "key_insight", " → ")),
+                              ("agent_skills", "skill", ("name", "description", "："))):
+        for row in v2a.get(key) or []:
+            if agent_method == "agentic" or float(row.get("score") or 0) >= AGENT_MIN_SCORE:
+                add(row, kind, _recall_text(row, *fields), "v2/" + kind)
     v1_limit = None if v1_episodes == -1 else v1_episodes
-    for ep in (v1.get("episodes") or [])[:v1_limit]:  # v1 没有得分，条数由调用方按提问是否有实际内容决定
-        items.append({"id": ep.get("id"), "kind": "episode", "date": str(ep.get("timestamp", ""))[:10],
-                      "text": _recall_text(ep, "summary", "subject"), "src": "v1"})
+    for ep in (v1.get("episodes") or [])[:v1_limit]:
+        add(ep, "episode", _recall_text(ep, "summary", "subject"), "v1/episode",
+            date=str(ep.get("timestamp", ""))[:10], src="v1")
     agent = v1.get("agent_memory") or {}
-    for case in agent.get("cases") or []:
-        if float(case.get("score") or 0) >= AGENT_MIN_SCORE:
-            items.append({"id": case.get("id"), "kind": "case", "text": _recall_text(case, "task_intent", "key_insight", " → ")})
-    for skill in agent.get("skills") or []:
-        if float(skill.get("score") or 0) >= AGENT_MIN_SCORE:
-            items.append({"id": skill.get("id"), "kind": "skill", "text": _recall_text(skill, "name", "description", "：")})
+    for key, kind, fields in (("cases", "case", ("task_intent", "key_insight", " → ")),
+                              ("skills", "skill", ("name", "description", "："))):
+        for row in agent.get(key) or []:
+            if float(row.get("score") or 0) >= AGENT_MIN_SCORE:
+                add(row, kind, _recall_text(row, *fields), "v1/" + kind)
     out, seen = [], set()
     for it in items:
         key = re.sub(r"\s", "", str(it["text"]))[:40]
@@ -464,7 +471,9 @@ def format_items_with_ids(items: list[dict], limit: int = 4000) -> tuple[str, li
     lines, shown = [], []
     for it in items:
         head = f"[{it['date']}] " if it.get("date") else label.get(it["kind"], "")
-        line = f"- {head}{clip(it['text'], 260)}"
+        meta = (f" [id={it['ref']} source={it['source']} truncated={str(it['truncated']).lower()}]"
+                if it.get("ref") else "")
+        line = f"- {head}{clip(it['text'], 260)}{meta}"
         if sum(len(x) + 1 for x in lines) + len(line) > limit:
             break
         lines.append(line)
@@ -478,14 +487,23 @@ def format_items(items: list[dict], limit: int = 4000) -> str:
 
 
 def search_text(query: str, top_k: int = 5, kind: str = "all", method: str = "hybrid", strict: bool = False,
-                budget: float | None = None) -> str:
+                budget: float | None = None, context: str = "", session_id: str = "") -> str:
+    import recall
+    if context or session_id:
+        if session_id and not context:
+            with recall.locked(session_id) as state:
+                context = recall.context_text(state)
+        query = recall.query_text(query, context)
     notices = []
     options = {"method": method, "notices": notices, "strict": strict}
     if budget is not None:
         options["budget"] = budget
     items = search_items(query, top_k, kind, **options)
     prefix = "\n".join(notices)
-    text = format_items(items, limit=max(0, 4000 - len(prefix) - bool(prefix)))
+    text, shown = format_items_with_ids(items, limit=max(0, 4000 - len(prefix) - bool(prefix)))
+    if session_id:
+        with recall.locked(session_id) as state:
+            recall.record_coverage(state, query, items, shown)
     return prefix + "\n" + (text or "（没有相关记忆）") if prefix else text
 
 

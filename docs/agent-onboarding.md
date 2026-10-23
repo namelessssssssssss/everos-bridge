@@ -6,7 +6,7 @@
 
 | 层级 | 做什么 | 必做 | 得到什么 |
 | --- | --- | --- | --- |
-| L1 MCP | 注册 `plugin/everos/mcp_server.py`（stdio） | 是 | 6 个 `memory_*` 工具，模型可以主动读写 |
+| L1 MCP | 注册 `plugin/everos/mcp_server.py`（stdio） | 是 | 8 个 `memory_*` 工具（含正文展开和本机任务上下文），模型可以主动读写 |
 | L2 指令规则 | 把 AGENTS.md「日常读写」那段写进宿主的全局指令文件 | 是 | 没有 hook 时，靠模型自觉在每条提问前检索 |
 | L3 提问前注入 | 挂「提问前」hook（如 UserPromptSubmit），会话开始的 hook 能注入时也挂上 | 宿主支持就做 | 自动读画像，每条提问自动检索 |
 | L4 回合结束采集 | 挂「回合结束」hook（如 Stop），并给它的会话记录写解析器 | 宿主支持就做 | 对话原文自动入库 |
@@ -35,11 +35,13 @@
    - hook 输入不带会话记录路径时，像 Kimi 那样按 session_id 去定位；
    - 在 `hook.py` 里适配它的输出格式：JSON 的 `additionalContext`，或者纯文本 stdout；
    - 在 `session_name()` 里给它分配 session 前缀（cc_ / cx_ / km_ …）；
-   - 在 `install.sh` 里挂上 hook，超时按宿主自己的单位填：提问前 20 秒，回合结束 10 秒。
+   - 在 `install.sh` 里挂上 hook，超时按宿主自己的单位填：提问前默认 190 秒（大于 agentic 总预算），回合结束 10 秒。
 4. **文档**：更新 README 的覆盖表、PROTOCOL.md 的接线表、本文的速查表；新踩的坑记进 `docs/methodology.md`。
 5. **提交并推送**，再在另一台机器上按 AGENTS.md 走一遍，确认能复现。
 
 ## 验证清单（全部通过才算接入完成）
+
+任务中检索还需验证：search返回ID可通过open跨进程分页读取；新问题/正文更新/压缩后可重新注入；Claude Code/Codex工具事件只本地提醒、无网络、无权限裁决；其他宿主不得仅凭MCP可连接声称已接入工具事件。
 
 - [ ] `python3 plugin/everos/hook.py --doctor` 各项 OK 且退出码为 0；缺配置或任一 API 检查失败时退出非零。
 - [ ] `python3 -m unittest discover -s tests -v` 通过；`install.sh --dry-run` 不修改配置也不访问 API。
@@ -48,7 +50,7 @@
 - [ ] 真实会话里，让模型复述「EverOS 相关记忆」或「用户画像」，确认注入生效。
 - [ ] 一轮对话结束后，v2 里出现这个会话的 episode，`sender_ids` 归属正确（用户是 owner，同事是 `feishu_*`）。
 - [ ] 断网或填错 key 时，会话照常进行（失败放行），`state/hook.log` 里有错误记录。
-- [ ] 提问前 hook 的总预算生效：默认 18 秒，宿主上限 20 秒；Kimi 首轮画像与召回共用预算，超时只采用已经返回的结果。
+- [ ] 提问前 hook 的总预算生效：默认 180 秒（EVEROS_AGENTIC_TIMEOUT），宿主默认 190 秒；每条消息的 v2 首次请求都必须为 agentic；Kimi 首轮画像最多 6 秒并与召回共用预算，超时只采用已经返回的结果。
 - [ ] `install.sh` 重复运行不会重复追加配置（幂等）。
 - [ ] 改完代码后在新会话里验证（MCP 服务是常驻进程，旧会话里还是旧代码）。
 - [ ] `EVEROS_WRITE=0` 时自动采集和 MCP 三个写工具均不能入库；业务错误不会推进 offset 或清除 pending；多行记忆只标记真正注入的 ID。
@@ -69,3 +71,5 @@
 | Cursor、Gemini CLI | `mcp.json` / `settings.json` | `~/.gemini/GEMINI.md` | — | — | 只有 MCP |
 | Claude Code on the web | 仓库里的 `.mcp.json` | 仓库 CLAUDE.md、claude.ai 上的 skill | 仓库 `.claude/settings.json` 里的 hook | 同左 | 不装插件；要用网络密钥放行 `api.evermind.ai`，见 README「云端」 |
 | Doubao Work（豆包办公） | `bin/everos-mcp`（命令行 stdio 客户端，调原版 mcp_server） | 用户级 skill `everos-memory`（安装时同步到 `~/.doubao/.../.user_skills`） | 无 hook：模型按 skill 每轮主动调 `memory_profile` / `memory_search` | 无 hook：每轮主动跑 `everos-doubao-ingest --all` | 无 MCP 注册/插件/全局指令；trajectory.jsonl 无时间戳，用 assignment.md 标题对齐；只写 main agent 的用户原话与最终回复；session 前缀 `dw`；详见 [doubao-integration.md](doubao-integration.md) |
+
+0.8.1首次接入Cursor会创建全局MCP配置与共享skill；已安装Gemini和Claude Desktop也不再因为缺少初始配置而静默跳过。MCP状态目录必须与hook一致，不能假设父进程的EVEROS_HOME会被保留。

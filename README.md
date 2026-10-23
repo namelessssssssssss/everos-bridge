@@ -52,9 +52,9 @@ everos search "复杂的历史问题" --method agentic --timeout 240
 
 退出码：`0` 表示检索完成（包含未命中或部分轨道成功），`1` 表示配置缺失或检索全部失败，`2` 表示参数错误，`130` 表示用户取消。`everos --help` 和 `everos search --help` 无需配置，不调用 API。
 
-## 按次深检索
+## 每条消息首次深检索
 
-`memory_search` 默认 `method="hybrid"`。隐含描述或复杂历史问题未被普通召回覆盖时，可显式选择 `agentic`：
+自动 hook 和 `memory_search` 默认使用 `agentic`：每条用户消息首次检索直接深查，同一会话的后续消息也一样。本轮同一问题已有充分证据时复用；新问题或缺口仍应补查；后续补查可显式选择 hybrid。独立只读 CLI 保留默认 hybrid。示例：
 
 ```json
 {"query":"写入成功后紧接着抽取却说没有内容，那次问题的根因是什么？","kind":"episodes","top_k":5,"method":"agentic"}
@@ -72,7 +72,13 @@ everos search "复杂的历史问题" --method agentic --timeout 240
 
 MCP 客户端的外层超时需大于实际总预算。安装器会为 Codex 设置 `tool_timeout_sec`，为 MiMo 设置毫秒 `timeout`，至少达到配置预算 + 10 秒（默认 190 秒），并保留更大的现值。提高长期配置后重跑 `install.sh` 同步外层限制；按次传更大的 timeout 时也需确保宿主允许等待。其他宿主需按各自配置设置外层超时。
 
-agentic 不套用 hybrid 的得分门槛，回退结果恢复对应门槛。每次输出仍限制在 4000 字内；它是按次补查选项，hook 仍用 hybrid 和原预算。插件更新后需重连 MCP 或新开聊天加载新 schema。质量对比见 [调研报告](docs/retrieval-study-2026-10-09.md)。
+agentic 不套用 hybrid 的得分门槛，回退结果恢复对应门槛。每次输出仍限制在 4000 字内；自动 hook 使用相同深检索与回退规则，默认总预算180秒、外层190秒；旧 EVEROS_RECALL_TIMEOUT 不再限制提问检索。Kimi / TraeX / MiMo 外层由安装器按配置预算加10秒设置；Claude Code / Codex 插件和云端静态 hook 默认190秒，预算超过180秒时需同步提高 UserPromptSubmit timeout 并重新审阅、信任。插件更新后需重连 MCP 或新开聊天加载新 schema。质量对比见 [调研报告](docs/retrieval-study-2026-10-09.md)。
+
+## 任务中主动检索
+
+每条消息首轮agentic后，遇到新错误码、历史决定缺口、行动前约束或压缩恢复应继续补查。已有注入只覆盖对应问题。MCP的memory_search可带context与session_id；memory_context保存本机目标、阶段和线索；memory_open按搜索返回的em_ ID分段展开。
+
+CLI同样支持 `everos search "当前历史问题" --context "新线索" --session-id <sid>` 和 `everos open <em_id> --offset 0 --limit 4000`。结果标注来源、日期和截断；快照不是原始聊天全文或实时事实。Claude Code/Codex/新版TraeX与MiMo工具事件只做本地阶段提醒，不为每次工具调用发起网络检索。能力与评测见[检索工作流](docs/retrieval-workflow.md)。
 
 ## 新设备 / 新工作区
 
@@ -98,7 +104,7 @@ python3 ~/.everos-bridge/plugin/everos/hook.py --doctor
 Codex 插件安装或更新后，还需在新会话中审阅并信任 hook 的当前定义，自动注入和采集才会执行。启用插件与 MCP 可连接本身不能证明 hook 已生效。
 
 TraeX 可只刷新当前宿主：`./install.sh --only trae`（也支持 `--dry-run`）。配置和规则写到
-`$TRAE_HOME`（默认 `~/.trae`），六个 hook 写到 `$TRAECLI_HOME/hooks.json`（默认
+`$TRAE_HOME`（默认 `~/.trae`），六个生命周期 hook（TraeX≥0.210.1另加两个工具事件）写到 `$TRAECLI_HOME/hooks.json`（默认
 `~/.trae/cli/hooks.json`）。新会话在 `/hooks` 审阅并信任 EverOS 的当前定义；安装器不自动信任。
 自动采集保存用户和助手的文本，排除环境提示、注入记忆、工具镜像及 reasoning；不上传图片二进制。
 压缩后在下一条提问补读画像。实现与验证细节见 [TraeX 接入](docs/traex-integration.md)。
@@ -150,7 +156,7 @@ plugin/                           Claude Code 与 Codex 共用的插件目录
   everos/core.py                  核心：v2 读写（含 v1 过渡）、各宿主会话记录解析、补落盘、本地记忆同步
   everos/trae.py                  TraeX 会话定位、history_mutation / response_item 文本投影
   everos/hook.py                  hook 入口与命令行：--doctor / --dry-run / --mimo-recall / --mimo-write / --sweep / --sync-localmem
-  everos/mcp_server.py            stdio MCP 服务：6 个 memory_* 工具
+  everos/mcp_server.py            stdio MCP 服务：8 个 memory_* 工具
   everos/cli.py                   手动检索 CLI：search（与 MCP 共用配置和检索核心）
   mimo/everos.mjs                 MiMoCode Plugin API：L3 注入 + L4 trajectory 入库
   doubao/                          Doubao Work（豆包办公）：无 hook 宿主的命令行通道
@@ -170,3 +176,5 @@ cloud/                            云端 setup script 与仓库级配置片段
 ## 配置
 
 环境变量优先，其次 `$EVEROS_HOME/config.env`（默认 `~/.everos/config.env`）。完整变量表见 PROTOCOL.md §5。密钥和状态都不在仓库里，`.gitignore` 已排除。
+
+跨harness接线与验收：`python3 scripts/audit_harnesses.py --exercise` 会用实际配置的stdio入口、本地合成API核对八工具与展开链路；它不表示旧应用会话已重载。详细范围见[跨harness验收](docs/harness-activation-2026-10-22.md)。

@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import queue
+import re
 import shlex
 import shutil
 import subprocess
@@ -70,6 +71,10 @@ def validate(cli, root, home_workspace=False):
     for path in (shared, runtime, everos, workspace):
         path.mkdir(parents=True, exist_ok=True)
     calls, model_requests, collected = [], [], []
+    tool_names_called = []
+    version_text = subprocess.check_output([cli, "--version"], text=True)
+    parsed_version = re.search(r"(?:traecli|traex)\s+(\d+)\.(\d+)\.(\d+)", version_text)
+    tool_events = bool(parsed_version and tuple(map(int, parsed_version.groups())) >= (0, 210, 1))
     condition = threading.Condition()
     flushed = threading.Event()
 
@@ -84,10 +89,39 @@ def validate(cli, root, home_workspace=False):
             if self.path.endswith("/chat/completions"):
                 with condition:
                     model_requests.append(data)
+                    (root / "model-requests.json").write_text(json.dumps(model_requests, ensure_ascii=False))
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
                 self.end_headers()
-                for delta, finish in [({"role": "assistant", "content": "TRAEX_SMOKE_REPLY"}, None), ({}, "stop")]:
+                messages = data.get("messages") or []
+                available = {t["function"]["name"] for t in data.get("tools") or [] if t.get("type")=="function"}
+                search_name = next((n for n in available if n.endswith("memory_search")), None)
+                open_name = next((n for n in available if n.endswith("memory_open")), None)
+                done = [call.get("function", {}).get("name") for m in messages for call in m.get("tool_calls", [])]
+                dialogue = "TRAEX_SMOKE_QUESTION" in json.dumps(messages)
+                executed = " ".join(str(c.get("function",{}).get("arguments","")) for m in messages for c in m.get("tool_calls",[]))
+                logical = None
+                if dialogue and (search_name or "exec" in available) and not any("memory_search" in n for n in done) and "memory_search" not in executed:
+                    logical, arguments = "memory_search", {"query":"TRAEX_SMOKE_QUESTION", "method":"agentic"}
+                    name = search_name
+                elif dialogue and (open_name or "exec" in available) and not any("memory_open" in n for n in done) and "memory_open" not in executed:
+                    ref = re.search(r"em_[0-9a-f]{40}", json.dumps(messages))
+                    assert ref, "Native search result did not include an expandable ID"
+                    logical, arguments = "memory_open", {"memory_id": ref.group(0)}
+                    name = open_name
+                else:
+                    name, arguments = None, None
+                if logical and not name:
+                    target = "ALL_TOOLS.find(t=>t.name.includes('everos')&&t.name.endsWith('" + logical + "')).name"
+                    code = "const key=" + target + "; text(await tools[key](" + json.dumps(arguments) + "));"
+                    name, arguments = "exec", {"input": code}
+                if name:
+                    tool_names_called.append(logical or name)
+                    chunks = [({"role":"assistant", "tool_calls":[{"index":0,"id":"fixture-call-"+str(len(done)),
+                                "type":"function","function":{"name":name,"arguments":json.dumps(arguments)}}]}, "tool_calls")]
+                else:
+                    chunks = [({"role":"assistant","content":"TRAEX_SMOKE_REPLY"}, None), ({}, "stop")]
+                for delta, finish in chunks:
                     chunk = {"id": "fixture-completion", "object": "chat.completion.chunk", "created": int(time.time()),
                              "model": "everos-fixture", "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}
                     self.wfile.write(("data: " + json.dumps(chunk) + "\n\n").encode())
@@ -98,7 +132,7 @@ def validate(cli, root, home_workspace=False):
                 result = {"profiles": [{"profile_data": {"explicit_info": [
                     {"category": "Test", "description": "TRAEX_PROFILE_PROBE"}]}}], "total_count": 1}
             elif self.path.endswith("/memory/search"):
-                result = {"episodes": [{"id": "fixture-episode", "summary": "TRAEX_RECALL_PROBE", "score": .9}]}
+                result = {"episodes": [{"id": "fixture-episode", "summary": "TRAEX_RECALL_PROBE", "episode": "TRAEX_EXPANSION_PROBE", "score": .9}]}
             elif self.path.endswith("/memory/add"):
                 with condition:
                     collected.extend(data["messages"])
@@ -127,6 +161,7 @@ model_provider = "custom"
 approval_policy = "never"
 sandbox_mode = "read-only"
 project_doc_max_bytes = 0
+mcp_optional_startup_grace_ms = 0
 
 [[models]]
 name = "everos-fixture"
@@ -144,6 +179,20 @@ use_memories = false
 [projects.{json.dumps(str(workspace))}]
 trust_level = "trusted"
 '''
+    bridge = Path(__file__).resolve().parents[1] / "plugin/everos/hook.py"
+    config += f'\n[mcp_servers.everos]\nrequired = true\ncommand = {json.dumps(sys.executable)}\nargs = {json.dumps([str(bridge.with_name("mcp_server.py"))])}\n'
+    guard = root / "network-guard"
+    guard.mkdir()
+    (guard / "sitecustomize.py").write_text("import urllib.request,urllib.parse\n"
+        "_open=urllib.request.urlopen\n"
+        "def local_only(r,*a,**k):\n"
+        " u=r.full_url if hasattr(r,'full_url') else r\n"
+        " if urllib.parse.urlsplit(u).hostname not in ('127.0.0.1','localhost'): raise RuntimeError('fixture disallows non-loopback EverOS')\n"
+        " return _open(r,*a,**k)\n"
+        "urllib.request.urlopen=local_only\n")
+    config += '[mcp_servers.everos.env]\n' + ''.join(f'{k} = {json.dumps(v)}\n' for k,v in {
+        "EVEROS_HOME":str(everos), "EVEROS_API_BASE":base, "EVEROS_API_KEY":"fixture-only",
+        "EVEROS_USER_ID":"fixture-owner", "EVEROS_API_VERSION":"v2", "EVEROS_READ_V1":"0", "PYTHONPATH":str(guard)}.items())
     (shared / "traecli.toml").write_text(config)
     (everos / "config.env").write_text(f"EVEROS_API_BASE={base}\nEVEROS_API_KEY=fixture-only\n"
                                       "EVEROS_USER_ID=fixture-owner\nEVEROS_API_VERSION=v2\nEVEROS_READ_V1=0\n")
@@ -155,7 +204,7 @@ trust_level = "trusted"
                        "data=sys.stdin.read()\n"
                        "with Path(os.environ['PROBE_PAYLOADS']).open('a') as f: f.write(data.strip()+'\\n')\n"
                        f"sys.exit(subprocess.run([sys.executable,{str(bridge)!r}],input=data,text=True).returncode)\n")
-    data = json.loads(trae_hooks("", bridge, runtime))
+    data = json.loads(trae_hooks("", bridge, runtime, tool_events=tool_events))
     for groups in data["hooks"].values():
         for group in groups:
             for handler in group["hooks"]:
@@ -163,7 +212,7 @@ trust_level = "trusted"
     (runtime / "hooks.json").write_text(json.dumps(data))
     env = {k: v for k, v in os.environ.items() if not k.startswith(("TRAE", "EVEROS", "CODEX", "CLAUDE"))}
     env.update(TRAE_HOME=str(shared), TRAECLI_HOME=str(runtime), EVEROS_HOME=str(everos),
-               PROBE_PAYLOADS=str(root / "payloads.jsonl"))
+               PROBE_PAYLOADS=str(root / "payloads.jsonl"), PYTHONPATH=str(guard))
     # Disable automatic sweep/local-memory sync in this fixture only.
     mark = everos / "state/last_sweep"
     mark.parent.mkdir(parents=True, exist_ok=True)
@@ -176,7 +225,7 @@ trust_level = "trusted"
             assert not listing["errors"], listing["errors"]
             owned = list({h["key"]: h for h in listing["hooks"]
                           if str(capture) in (h.get("command") or "")}.values())
-            assert len(owned) == 6, owned
+            assert len(owned) == (8 if tool_events else 6), owned
             # Trust only these six freshly-created, reviewed fixture commands,
             # using the host's own hash and config API (no trust bypass flag).
             edits = [{"keyPath": "hooks.state", "value": {
@@ -193,6 +242,9 @@ trust_level = "trusted"
             proc = subprocess.run(command, env=env, stdout=out, stderr=err, timeout=60)
         assert proc.returncode == 0, f"TraeX exited {proc.returncode}; see {root / 'exec.log'}"
         assert model_requests, "Local model endpoint was not called"
+        assert any(n.endswith("memory_search") for n in tool_names_called), "Native client did not call memory_search"
+        assert any(n.endswith("memory_open") for n in tool_names_called), "Native client did not call memory_open"
+        assert any("TRAEX_EXPANSION_PROBE" in json.dumps(request) for request in model_requests), "Expanded text did not reach model"
         # TraeX may race an auxiliary title request ahead of the dialogue call.
         prompts = [json.dumps(request, ensure_ascii=False) for request in model_requests]
         prompt = next((p for p in prompts if "TRAEX_PROFILE_PROBE" in p and "TRAEX_SMOKE_QUESTION" in p), "")
@@ -211,7 +263,7 @@ trust_level = "trusted"
         assert collected[1]["sender_id"] == "fixture-owner_agent" and collected[1]["sender_name"] == "trae"
         payloads = [json.loads(line) for line in (root / "payloads.jsonl").read_text().splitlines()]
         report = {"trae_version": subprocess.check_output([cli, "--version"], text=True).strip(),
-                  "profile_in_model": True, "recall_in_model": True, "saved_roles": [m["role"] for m in collected],
+                  "profile_in_model": True, "recall_in_model": True, "native_tool_calls": tool_names_called, "saved_roles": [m["role"] for m in collected],
                   "hook_events": [p.get("hook_event_name") for p in payloads],
                   "transcript_path_present": any(p.get("transcript_path") for p in payloads),
                   "api_paths": calls, "hook_trust": "trusted (host config API)", "artifacts": str(root)}

@@ -76,3 +76,9 @@ Cloud 验收单独运行，沿用本机已安装且信任的 hook，用环境变
 验证边界：真实宿主测试覆盖新会话正常读写和重复加载；PreCompact / PostCompact 状态恢复、
 断网放行、重试、空 transcript_path、半行写入、并发锁与 UUIDv7 隔离由回归用例验证。
 旧 Coco 的其他格式尚未适配；TraeX 将来改变 history_mutation schema 时需重新验收。
+
+## 0.8.1 补充验收
+
+TraeX 0.210.1本机原生进程现已验证：八个hook（原六类加PreToolUse/PostToolUse）、本地固定模型网关下经Code Mode真实调用memory_search/memory_open、展开正文到达模型、采集仅保留用户与助手正文。不是仅给MCP clientInfo换名。
+
+MCP启动需在[mcp_servers.everos.env]显式绑定EVEROS_HOME；验证脚本同时显式配置本地API与凭据占位符、禁用非loopback Python API请求。此前失败隔离试跑不作为通过证据。当前默认模型服务是否可用与bridge协议验收分别记录。上述旧版本预算、路径和六hook信任状态仅保留为历史；最新配置与能力见PROTOCOL和跨harness验收。

@@ -61,6 +61,8 @@ elif args[:2] == ["plugin", "marketplace"]:
     elif args[2] == "add" and not os.environ.get("FAIL_MIGRATION"):
         sources["everos-bridge"] = args[3]
         path.write_text(json.dumps(sources))
+elif args == ["mcp", "add", "--help"]:
+    print("--env <KEY=VALUE>")
 elif args[:2] == ["mcp", "get"]:
     if os.environ.get("FAKE_MCP_PRESENT", "1") != "1":
         print("Error: No MCP server named 'everos' found.", file=sys.stderr)
@@ -293,6 +295,15 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("[features]\nhooks = true", text)
         self.assert_toml(text)
 
+    def test_prompt_hook_timeouts_allow_the_configured_deep_search_budget(self):
+        kimi = install.kimi_hooks("", Path("/example/everos/hook.py"), recall_timeout=251)
+        self.assertIn('event = "UserPromptSubmit"\ncommand = ', kimi)
+        self.assertIn('timeout = 251', kimi)
+        trae = json.loads(install.trae_hooks("{}", Path("/example/everos/hook.py"),
+                                           Path("/example/runtime"), recall_timeout=251))
+        self.assertEqual(trae["hooks"]["UserPromptSubmit"][0]["hooks"][0]["timeout"], 251)
+        self.assertEqual(trae["hooks"]["Stop"][0]["hooks"][0]["timeout"], 10)
+
     def test_codex_timeout_defaults_to_agentic_budget_with_transport_headroom(self):
         self.cli("codex")
         path = self.put(".codex/config.toml", '[mcp_servers.other]\ntool_timeout_sec = 15\n')
@@ -351,7 +362,7 @@ class InstallerTests(unittest.TestCase):
         gemini_data = json.loads(gemini.read_text())
         self.assertEqual(gemini_data["mcpServers"]["other"], {"timeout": 9000})
         for path in (gemini, cursor):
-            self.assertEqual(set(json.loads(path.read_text())["mcpServers"]["everos"]), {"command", "args"})
+            self.assertEqual(set(json.loads(path.read_text())["mcpServers"]["everos"]), {"command", "args", "env"})
 
     def test_codex_dotted_and_duplicate_hook_keys(self):
         self.assertEqual(install.enable_codex_hooks("features.hooks = false\n"), "features.hooks = true\n")
@@ -485,12 +496,41 @@ class InstallerTests(unittest.TestCase):
         rules = self.put(".trae/AGENTS.md", "Existing user rules\n")
         self.run_install()
         self.assertIn(["coco", "mcp", "remove", "everos"], self.calls())
-        self.assertIn(["coco", "mcp", "add", "everos", "--", "python3", str(self.repo / "plugin/everos/mcp_server.py")], self.calls())
+        self.assertIn(["coco", "mcp", "add", "everos", "--env", "EVEROS_HOME=" + str(self.home / ".everos"), "--", "python3", str(self.repo / "plugin/everos/mcp_server.py")], self.calls())
         self.assertEqual(next(path.parent.glob("traecli.toml.bak-everos-*")).read_text(), original)
         self.assertTrue(rules.read_text().startswith("Existing user rules"))
         previous = rules.read_text()
         self.run_install()
         self.assertEqual(rules.read_text(), previous)
+
+    def test_cursor_first_install_creates_mcp_and_shared_skill_without_clobbering_settings(self):
+        (self.home / "Applications/Cursor.app").mkdir(parents=True)
+        settings = self.put(".cursor/other.json", '{"keep":true}')
+        self.run_install()
+        data = json.loads((self.home / ".cursor/mcp.json").read_text())
+        self.assertEqual(data["mcpServers"]["everos"]["args"], [str(self.repo / "plugin/everos/mcp_server.py")])
+        self.assertEqual(data["mcpServers"]["everos"]["env"]["EVEROS_HOME"], str(self.home / ".everos"))
+        skill = self.home / ".cursor/skills/everos-memory/SKILL.md"
+        self.assertEqual(skill.read_text(), (self.repo / "plugin/skills/everos-memory/SKILL.md").read_text())
+        self.assertEqual(settings.read_text(), '{"keep":true}')
+        self.run_install()
+        self.assertEqual(skill.read_text(), "repo skill v1\n")
+
+    def test_gemini_and_desktop_first_install_bind_state_root(self):
+        self.cli("gemini")
+        (self.home / "Applications/Claude.app").mkdir(parents=True)
+        self.run_install()
+        for file in (".gemini/settings.json", "Library/Application Support/Claude/claude_desktop_config.json"):
+            data = json.loads((self.home / file).read_text())
+            self.assertEqual(data["mcpServers"]["everos"]["env"]["EVEROS_HOME"], str(self.home / ".everos"))
+
+    def test_traex_02101_installs_tool_events_with_existing_lifecycle_events(self):
+        self.cli("traecli")
+        self.env["FAKE_TRAE_VERSION"] = "traecli 0.210.1"
+        self.run_install("--only", "trae")
+        data = json.loads((self.home / ".trae/cli/hooks.json").read_text())
+        self.assertEqual(len(data["hooks"]), 8)
+        self.assertEqual(data["hooks"]["PreToolUse"][0]["hooks"][0]["timeout"], 3)
 
     def test_trae_installs_runtime_hooks_idempotently_and_preserves_other_handlers(self):
         self.cli("traecli")
