@@ -8,7 +8,7 @@ Doubao Work 是云端 Linux 会话：agent 运行在受控 VM 里，**不能自�
 
 | 层 | 能力 | Doubao Work 上的实现 |
 | --- | --- | --- |
-| L1 MCP | 8 个 `memory_*` 工具 | `bin/everos-mcp`（命令行 stdio 客户端，调未改动的 `plugin/everos/mcp_server.py`） |
+| L1 MCP | 9 个 `memory_*` 工具 | `bin/everos-mcp`（命令行 stdio 客户端，调未改动的 `plugin/everos/mcp_server.py`） |
 | L2 指令 | 每轮读写规则 | 用户级 skill `everos-memory`（`plugin/skills/everos-memory-doubao`） |
 | L3 提问前检索 | 画像/记忆注入 | 无 hook；由 agent 按 skill 每轮主动调 `memory_profile` / `memory_search`（每条消息首次 agentic），任务中按缺口补查并用 `memory_open` 展开 |
 | L4 回合结束采集 | 对话原文入库 | 无 hook；每轮回复前主动跑 `everos-doubao-ingest` |
@@ -105,7 +105,7 @@ session_id 规则：`dw_<首日>_<首句slug>_<完整sid>`，前缀与其他宿�
 
 - [ ] `bash plugin/doubao/check.sh`（或 skill 内副本）各项 OK；
 - [ ] `python3 -m unittest discover -s tests -v` 全绿，含 `tests/test_doubao.py`；
-- [ ] `everos-mcp list` 列出 8 个 `memory_*` 工具，`memory_profile` 能返回画像；
+- [ ] `everos-mcp list` 列出 9 个 `memory_*` 工具，`memory_profile` 能返回画像；
 - [ ] `memory_search` 不带 method 时走 agentic，结果行的 `em_` 标识能被 `memory_open` 展开；
 - [ ] `everos-doubao-ingest --current --dry-run` 解析出的角色只有 user/assistant 最终回复，
       不含脚手架与 key/token；

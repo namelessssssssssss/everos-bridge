@@ -14,7 +14,7 @@ Doubao Work 没有 MCP 注册入口和生命周期 hook，读写都通过本仓�
 
 ```bash
 bash <本skill目录>/scripts/check.sh   # 环境自检；缺什么会给修复提示
-everos-mcp list                       # 应列出 8 个 memory_* 工具
+everos-mcp list                       # 应列出 9 个 memory_* 工具
 ```
 
 ## 读（L3，没有 hook，每轮主动执行）
