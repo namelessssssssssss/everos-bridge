@@ -6,6 +6,14 @@ import sys
 from pathlib import Path
 
 CASES = {
+    'association': {
+        'prompt': 'Orchid组件之前为何关闭重试？给出原因和当时的适用范围，不执行改动。',
+        'runtime': 'Current task: explain the historical Orchid retry decision. No live changes are requested.',
+        'criteria': 'Must follow the LQ-73 link to a second memory, identify shared lease renewal causing duplicate execution, scope to Orchid worker version 1, and avoid claiming version 2 still has the same constraint. Do not expand irrelevant Aurora UI theme.',
+        'needle': 'orchid',
+        'summary': 'Orchid重试关闭决定：关键条件依赖租约LQ-73，细节在租约历史中；旁注是无关的Aurora UI主题。',
+        'detail': 'The decision record does not explain LQ-73. Follow the actual lease dependency to establish reason and version scope.',
+    },
     'new_error': {
         'prompt': '排查 worker 批次失败。读取现场信息后，给出应采取的下一步和不应重复的操作，不执行修复。',
         'runtime': 'Orchid worker: ORC-42 during decoder start. Current environment: canary, decoder v2.',
@@ -56,6 +64,10 @@ def setup(source, case, audit):
     def fake_api(path, body, timeout=90):
         if path.endswith('/search'):
             query = body.get('query', '').lower()
+            if case == 'association' and 'lq-73' in query:
+                linked = dict(row, id='fixture-lease-lq-73', summary='LQ-73租约与重试约束，须核实版本。',
+                              episode='Orchid worker version 1 shared its lease renewal with retries; retrying caused duplicate execution. Disable retry only for version 1. Version 2 uses independent leases and requires a fresh decision, not this historical restriction.')
+                return {'data': {'episodes': [linked] if body.get('user_id') else [], 'agent_cases': []}}
             hit = case != 'control' and (case_data['needle'].lower() in query or
                   (case == 'preference' and any(word in query for word in ('偏好', '导出', 'chart', 'print'))) or
                   (case == 'stale' and any(word in query for word in ('部署', '方案', 'version', 'worker'))))

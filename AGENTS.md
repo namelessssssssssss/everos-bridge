@@ -35,7 +35,7 @@
    - 用户在聊天里直接给了值的话，用环境变量传给安装脚本，由脚本写文件：`EVEROS_USER_ID=… EVEROS_API_KEY=… EVEROS_READ_V1=1 $REPO/install.sh`。
    - agent 不能代替用户回答交互输入；没有终端时脚本不会进入交互，而是提示后退出。
 3. **接线**：运行 `$REPO/install.sh`。脚本会检测本机装了哪些 agent，逐个接上，改动前先备份原配置；重复运行不会重复追加。
-   - 只有 MCP 的 agent（如旧 Coco、Gemini），脚本会把 `plugin/rules/everos-rules.md` 写进它的全局指令文件，让它每条提问先检索。
+   - 各宿主的原生默认指令在首次接入、更新时都同步Bridge管理块及版本（AGENTS/CLAUDE/GEMINI、Cursor常驻规则、MiMo instructions等）；用户其它内容保留。接入Agent要读 `memory_rules(section="changes")` 理解增删改，再读当前规则并回读原生入口；仅刷新规则可用 `install.sh --rules-only`。基线缺失、仅MCP宿主的原生记忆工具缺失须如实报告，见 [docs/rule-sync.md](docs/rule-sync.md)。
    - TraeX ≥ 0.209.1 已覆盖 L3/L4；只刷新它用 `install.sh --only trae`。用户级 hook 在 `$TRAECLI_HOME/hooks.json`，默认 `~/.trae/cli/hooks.json`。安装后在 `/hooks` 审阅并信任当前定义，再验收新会话的自动注入和采集。
    - Claude Desktop 运行时会用内存里的配置覆盖外部改动，脚本检测到它在运行就不写，会给出指引：退出 App 后重跑，或在 App 设置里手动加。
 4. **验证**：
@@ -62,6 +62,7 @@
   - 有 hook 的 agent 会自动注入：会话开始注入画像，每条提问先用 agentic 检索并注入相关记忆；
   - 没有 hook 的 agent，每条提问首次调 `memory_search(method="agentic")`，会话开始调 `memory_profile`；
   - 任务中发现新线索、失败或历史决定缺口时主动定向补查；摘要不足用 memory_open 展开。memory_context 可保存本机任务线索，压缩恢复后清除过期覆盖。已有注入仅覆盖对应问题。
+  - 首轮结果中的实体、旧决定或依赖若影响当前未解问题，展开正文后按“原问题＋新标识＋待核实关系”二次搜索；保留上下层证据链，充分覆盖、无新增或重复命中时停止该分支。
   - 记忆只是背景参考，和当前对话冲突时以当前为准。
 - **写**：
   - 对话原文由 hook 自动入库；

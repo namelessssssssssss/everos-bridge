@@ -56,7 +56,7 @@ class McpTests(unittest.TestCase):
         tools = self.server.respond(request("tools/list"))["result"]["tools"]
         self.assertEqual({tool["name"] for tool in tools}, {
             "memory_profile", "memory_search", "memory_recent", "memory_remember",
-            "memory_record_practice", "memory_fix_profile", "memory_open", "memory_context"})
+            "memory_record_practice", "memory_fix_profile", "memory_open", "memory_context", "memory_rules"})
 
     def test_invalid_envelopes_return_invalid_request(self):
         invalid = [None, [], 3, "text", {}, {"jsonrpc": "2.0", "id": 1},
