@@ -22,7 +22,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from install_config import Installer
 
-EXPECTED = {'memory_profile', 'memory_search', 'memory_open', 'memory_context', 'memory_recent',
+EXPECTED = {'memory_rules', 'memory_profile', 'memory_search', 'memory_open', 'memory_context', 'memory_recent',
             'memory_remember', 'memory_record_practice', 'memory_fix_profile'}
 
 
@@ -171,7 +171,9 @@ def probe(entry):
             ref = re.search(r'id=(em_[a-f0-9]{40})', text).group(1)
             opened = json.loads(client.tool('memory_open', {'memory_id': ref, 'limit': 12000}))
             context = json.loads(client.tool('memory_context', {'session_id': 'audit', 'stage': 'recover'}))
-            valid = 'HARNESS_EXPANSION_OK' in opened['text'] and context['generation']==1
+            rules = json.loads(client.tool('memory_rules', {'section': 'rules', 'limit': 12000}))
+            valid = ('HARNESS_EXPANSION_OK' in opened['text'] and context['generation']==1
+                     and '二次搜索' in rules['text'] and rules['revision'][:12] in info['instructions'])
             return dict(entry, status='adapter_passed' if valid else 'adapter_failed',
                         version=info['serverInfo']['version'], tool_count=len(names),
                         native_client_verified=False)

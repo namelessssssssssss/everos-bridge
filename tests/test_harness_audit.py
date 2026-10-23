@@ -21,7 +21,7 @@ class HarnessAuditTests(unittest.TestCase):
     def test_probe_uses_real_server_and_local_fixture_without_claiming_native_client(self):
         row = audit.probe({'host':'fixture-client', 'command':[sys.executable, str(ROOT/'plugin/everos/mcp_server.py')]})
         self.assertEqual(row['status'], 'adapter_passed', row)
-        self.assertEqual(row['tool_count'], 8)
+        self.assertEqual(row['tool_count'], 9)
         self.assertFalse(row['native_client_verified'])
 
     def test_inventory_does_not_publish_config_secrets_or_treat_missing_config_as_success(self):
