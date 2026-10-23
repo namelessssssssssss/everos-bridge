@@ -116,6 +116,39 @@ class BinEntryTests(unittest.TestCase):
             self.assertIn("usage", result.stdout.lower())
 
 
+class McpCallTimeoutTests(unittest.TestCase):
+    def setUp(self):
+        import mcp_call
+        self.m = mcp_call
+
+    def test_agentic_search_defaults_to_600s_budget_and_longer_wait(self):
+        for args in ({"query": "q"}, {"query": "q", "method": "agentic"}):
+            out, wait = self.m.prepare("memory_search", args, env={})
+            self.assertEqual(out["timeout"], 600.0)
+            self.assertEqual(wait, 630.0)
+            self.assertNotIn("timeout", args)
+
+    def test_explicit_timeout_and_hybrid_are_untouched(self):
+        out, wait = self.m.prepare("memory_search", {"query": "q", "timeout": 60}, env={})
+        self.assertEqual((out["timeout"], wait), (60, 200.0))
+        out, wait = self.m.prepare("memory_search", {"query": "q", "method": "hybrid"}, env={})
+        self.assertNotIn("timeout", out)
+        self.assertEqual(wait, 200.0)
+        out, wait = self.m.prepare("memory_profile", {}, env={})
+        self.assertEqual((out, wait), ({}, 200.0))
+
+    def test_env_overrides_budget_and_client_wait(self):
+        out, wait = self.m.prepare("memory_search", {"query": "q"}, env={"EVEROS_DOUBAO_AGENTIC_TIMEOUT": "300"})
+        self.assertEqual((out["timeout"], wait), (300.0, 330.0))
+        _, wait = self.m.prepare("memory_search", {"query": "q"}, env={"EVEROS_MCP_CLIENT_TIMEOUT": "900"})
+        self.assertEqual(wait, 900.0)
+
+    def test_invalid_env_is_rejected(self):
+        for bad in ("0", "-1", "nan", "inf", "abc"):
+            with self.assertRaises(ValueError):
+                self.m.prepare("memory_search", {"query": "q"}, env={"EVEROS_DOUBAO_AGENTIC_TIMEOUT": bad})
+
+
 class DoubaoSessionTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

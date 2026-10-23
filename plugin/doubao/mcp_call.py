@@ -11,11 +11,16 @@ parameter validation and write semantics are identical to hosts with native MCP 
 Credentials are read by the server from the environment / $EVEROS_HOME/config.env; this
 client never handles secrets.
 
+Timeouts: agentic memory_search without an explicit "timeout" gets the Doubao budget
+(EVEROS_DOUBAO_AGENTIC_TIMEOUT, default 600s, fallback included); the client waits budget + 30s.
+EVEROS_MCP_CLIENT_TIMEOUT, when set, overrides the client wait.
+
 Exit codes: 0 ok, 1 tool/RPC error, 2 usage error.
 """
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import sys
@@ -23,10 +28,38 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 SERVER = REPO / "plugin" / "everos" / "mcp_server.py"
-TIMEOUT = float(os.environ.get("EVEROS_MCP_CLIENT_TIMEOUT", "200"))  # > agentic 180s budget + margin
+DEFAULT_WAIT = 200.0
+DOUBAO_AGENTIC_BUDGET = "600"  # no hook blocks here, so the agent can run it in background
+WAIT_MARGIN = 30.0
 
 
-def call(tool: str, args: dict, server: Path = SERVER, timeout: float = TIMEOUT) -> int:
+def _positive(name: str, raw) -> float:
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} 须为正有限秒数") from None
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError(f"{name} 须为正有限秒数")
+    return value
+
+
+def prepare(tool: str, args: dict, env=None) -> tuple[dict, float]:
+    """Return call args with the Doubao agentic budget applied, plus the client wait."""
+    env = os.environ if env is None else env
+    args = dict(args)
+    if tool == "memory_search" and args.get("method", "agentic") == "agentic" and "timeout" not in args:
+        args["timeout"] = _positive("EVEROS_DOUBAO_AGENTIC_TIMEOUT",
+                                    env.get("EVEROS_DOUBAO_AGENTIC_TIMEOUT") or DOUBAO_AGENTIC_BUDGET)
+    if env.get("EVEROS_MCP_CLIENT_TIMEOUT"):
+        return args, _positive("EVEROS_MCP_CLIENT_TIMEOUT", env["EVEROS_MCP_CLIENT_TIMEOUT"])
+    budget = args.get("timeout") if tool == "memory_search" else None
+    wait = DEFAULT_WAIT
+    if isinstance(budget, (int, float)) and not isinstance(budget, bool) and math.isfinite(budget) and budget > 0:
+        wait = max(wait, float(budget) + WAIT_MARGIN)
+    return args, wait
+
+
+def call(tool: str, args: dict, server: Path = SERVER, timeout: float = DEFAULT_WAIT) -> int:
     env = {**os.environ, "EVEROS_HOST": os.environ.get("EVEROS_HOST", "doubao_work")}
     proc = subprocess.Popen([sys.executable, str(server)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True, env=env)
@@ -87,7 +120,12 @@ def main(argv: list[str]) -> int:
         except json.JSONDecodeError as exc:
             print(json.dumps({"error": f"args 不是合法 JSON: {exc}"}, ensure_ascii=False), file=sys.stderr)
             return 2
-    return call(tool, args)
+    try:
+        args, wait = prepare(tool, args)
+    except ValueError as exc:
+        print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)
+        return 2
+    return call(tool, args, timeout=wait)
 
 
 if __name__ == "__main__":

@@ -20,16 +20,27 @@ everos-mcp list                       # 应列出 8 个 memory_* 工具
 ## 读（L3，没有 hook，每轮主动执行）
 
 - 首轮先读画像：`everos-mcp memory_profile '{}'`
-- **每条用户消息的首次检索必须用 agentic**（首轮和后续轮都一样），不要先跑 hybrid 再决定是否深查：
+- **每条用户消息的首次检索必须用 agentic**（首轮和后续轮都一样），不要先跑 hybrid 再决定是否深查。
+  **一律用 Bash 后台运行**（`run_in_background: true`），拿到任务 ID 后继续干活：
   `everos-mcp memory_search '{"query":"<按当前提问改写>","kind":"all","top_k":5,"method":"agentic","session_id":"dw_<会话id>"}'`
-  - 省略 method 服务端也默认 agentic；显式写出便于自检。
-  - 默认总预算 180 秒（含按轨道回退 hybrid），`everos-mcp` 客户端等 200 秒。**Bash 工具默认 120 秒
-    超时会先打断它，调用时把 timeout 设为 240000**；输出里的降级/回退提示照常采信。
-  - 工具直接返回 `http timeout`（不是 everos 输出）属于 harness 通道错误，不等于检索失败也不等于无
-    记忆：改用 Bash 后台运行（run_in_background）再用 TaskOutput 取结果。
-  - 问“以前怎么做的”用 `"kind":"practices"`。
+  - 豆包上 agentic 总预算默认 **600 秒**（含按轨道回退 hybrid），客户端等 630 秒；可用
+    `EVEROS_DOUBAO_AGENTIC_TIMEOUT` 或按次 `"timeout"` 改。实测通常 30–60 秒返回。
+  - 省略 method 也默认 agentic；显式写出便于自检。问“以前怎么做的”用 `"kind":"practices"`。
 - `<会话id>` 取主项目目录 `~/Doubao/chats/<会话id>` 的末段；同一会话内保持不变。
 - 本轮同一问题已有充分证据时复用，不为凑调用次数重复检索。
+
+### 等还是先做（由 agent 判断）
+
+检索在后台跑时，先做**不依赖历史结论**的工作：读本地记忆仓、git fetch、读代码/文档/配置、
+定位文件、跑只读诊断。用 `TaskOutput(block=false)` 看一眼是否完成，到下面这些节点前用
+`TaskOutput(block=true, timeout=…)` 等结果：
+
+- 要定方案、改文件、提交/推送/部署，或做其他写操作和外部操作前；
+- 要向用户追问，或问题本身就是“以前怎么做/上次结论/某个决定”时；
+- 准备给出最终回复前（交付自检要说明读了什么）。
+
+拿到结果后若与已做的工作冲突，以核实过的当前事实为准，并修正先做的部分。600 秒到了仍无结果
+或报错（含 harness 返回的 `http timeout`），说明“EverOS 检索未完成”，不当作无记忆，按当前事实继续。
 
 ## 任务中补查与展开
 
@@ -76,7 +87,8 @@ everos-doubao-ingest --current    # 只写当前会话
 ## 局限
 
 - 没有平台级注入/采集钩子，读写是否每轮执行取决于 agent 是否按本 skill 行动，无法强制。
-- agentic 首查最长约 3 分钟，是 owner 认可的质量换时间；Bash 超时没调大会被误判为失败。
+- agentic 首查预算 600 秒，是 owner 认可的质量换时间；前台同步调用会被 Bash 默认 120 秒超时或
+  harness 通道打断，所以一律后台运行、按上面的节点决定何时等结果。
 - 会话记录格式是 harness 内部布局（`~/.doubao/agent_mode/workspace/.sessions/<sid>/agents/
   <main>/system/`），harness 改版可能需要同步更新 `plugin/doubao/doubao.py`。
 

@@ -52,7 +52,7 @@ python3 -c "import time;open('$HOME/.everos/state/doubao_ingest_since','w').writ
 ```bash
 bash ~/.doubao/agent_mode/workspace/.user_skills/everos-memory/scripts/check.sh  # 环境自检
 
-# L3（由 agent 每轮主动执行；每条消息首次检索用 agentic，最长约 180 秒）
+# L3（由 agent 每轮主动执行；每条消息首次检索用 agentic，后台运行，预算 600 秒）
 everos-mcp memory_profile '{}'
 everos-mcp memory_search '{"query":"…","kind":"all","top_k":5,"method":"agentic","session_id":"dw_<会话id>"}'
 # 任务中补查 / 展开 / 阶段上下文
@@ -70,10 +70,13 @@ everos-doubao-ingest --current   # 只采集当前会话
 everos-doubao-ingest --current --dry-run   # 只预览将写入的消息，不调 API
 ```
 
-`everos-mcp` 客户端等待 200 秒（`EVEROS_MCP_CLIENT_TIMEOUT`），大于 agentic 默认预算；agent 在
-Doubao Work 的 Bash 工具里调用时要把工具超时设到 240 秒以上，否则默认 120 秒会先打断检索。
+豆包上 agentic `memory_search` 不带 `timeout` 时，`everos-mcp` 自动补上 600 秒总预算（含回退，
+`EVEROS_DOUBAO_AGENTIC_TIMEOUT` 可改），客户端等待“预算 + 30 秒”；显式 `timeout`、hybrid 和其他工具
+不变，仍等 200 秒（`EVEROS_MCP_CLIENT_TIMEOUT` 可覆盖等待）。共享核心的 180 秒默认对有 hook 的宿主
+不变：hook 会阻塞提问，而豆包没有 hook，agent 可以把检索放到 Bash 后台，先做不依赖历史结论的
+只读工作，到定方案、写操作、追问用户或最终回复前再取结果（规则见 skill「等还是先做」）。
 
-退出码：`0` 成功（含无新增），`1` 写入/服务失败或参数之外的错误，`2` 参数错误。
+退出码：`0` 成功（含无新增），`1` 写入/服务失败或参数之外的错误，`2` 参数错误或超时环境变量非法。
 `EVEROS_WRITE=0` 时写工具与采集全部拒绝入库。
 
 ## 采集的会话格式与边界
@@ -117,4 +120,4 @@ session_id 规则：`dw_<首日>_<首句slug>_<完整sid>`，前缀与其他宿�
   `plugin/doubao/doubao.py` 与其测试。
 - 云端 VM 的 home 持久化范围由平台决定；`check.sh` 用于新会话快速发现缺失并给出修复提示。
 - harness 工具通道偶发直接返回 `http timeout`（不是 bridge 输出，长耗时非 everos 命令也会出现）；
-  agentic 首查遇到时改为后台运行再取结果，不把它当作无记忆。
+  agentic 首查一律后台运行规避，到时仍无结果就说明未完成，不把它当作无记忆。
