@@ -23,13 +23,13 @@
     "plugin/everos/hook.py": "07b78eea8889197caa6c897e6b4671f34bb18dcda010a1b47caf6902010c9ffd",
     "plugin/everos/mcp_server.py": "109800a5406aa931c176d4265841f4713553eee8a737a0a3afa445091809c51e",
     "plugin/everos/recall.py": "ccb08a78c228cb6479f8f1cb9143e667a3852cd842cecf3ffc826942e73f95b0",
-    "plugin/everos/rules.py": "f5f27b383b532de8505ddf92ce79288664004e0cb295c68d4830a73dcd04810b",
+    "plugin/everos/rules.py": "2299c9e1e4117afae0752bca9a271eabc5f8a4420dcc157d706b801aad38ddea",
     "plugin/everos/trae.py": "1787d3fd117dbaec8e0e34ec5ee89a4893221a50b3dc55d0eba1d6542acf15b9",
     "plugin/hooks/hooks.json": "ce36ac009560eb6a06d84287f5f7a8d278689f10cf9ecc54b3fbe757d326c20d",
     "plugin/mimo/everos.mjs": "b4fd831101ebb4ec423751f98b20d63ec721d514ac70d8ffdf11f709cdb33644",
-    "plugin/rules/everos-rules.md": "e44af3ca1b7b24b30234a5e82d0c8a202ba9e3bd569f0c7951ec55550bcb8840",
+    "plugin/rules/everos-rules.md": "d4ac0339167adb34d7960fe0fe5e83ab16121a882a9cd7271d89c63d5f49011d",
     "plugin/skills/everos-memory-doubao/SKILL.md": "cbd735cff2f1f18cd38c738827f14df8e2412c7706b5dbfb2b7fdb60978af842",
-    "plugin/skills/everos-memory/SKILL.md": "a89f2b6b8bbde7bc616493e964dea61a6d85694bd7fed4902240a45e18654a8c",
+    "plugin/skills/everos-memory/SKILL.md": "7047838f46bd84ebcc5d16602ab6eb55d3c9b49de90310f7a9012ff26cde8515",
     "scripts/audit_harnesses.py": "f5dde18e4c37dea478bb26ae8ab0bee66294717e51fa5e39b25c61cdc1fb7505",
     "scripts/eval/fixture_server.py": "834ccd6e342f7a96c3b5967539408d8fb362e0cb114299ece2e177c93f0da72a",
     "scripts/eval/judge_retrieval.py": "bf887c04b7dbb0222cc1ef0f81891287efb52004c73b836d46063db34e32d4ca",
@@ -48,5 +48,8 @@
     "tests/test_recall_workflow.py": "246b01e96ef7d7d993268655ec580a92de33e6be9ac77db151ef167b94414531",
     "tests/test_rules.py": "4eb959870a3182490eb2317cb8284c1561cdef509e27138e3636df4cd286b667",
     "tests/test_trae.py": "199bb18b9929820857f4cef9afc235aa1c7fc488433884cb446698b510657c73"
-  }
+  },
+  "reviewed_changes": [
+    "Rule update only: plugin/everos/rules.py, plugin/rules/everos-rules.md, plugin/skills/everos-memory/SKILL.md; verified-source automatic rule update, memory/API behavior unchanged"
+  ]
 }

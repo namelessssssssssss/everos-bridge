@@ -55,3 +55,14 @@ python -X utf8 -m unittest discover -s windows/tests -v
 ```
 
 Windows 测试仅使用临时目录、合成消息及本机 loopback API；将未修改的核心/MCP 测试复制到临时 Windows 副本运行，不改原测试或降低其断言。Linux 继续运行原命令 `python3 -m unittest discover -s tests -v` 和 `bash -n install.sh`，不加载 Windows 目录。宿主内新会话信任与真实采集仍须单独验收。
+
+
+## 登录后检查与恢复
+
+可将 `python -X utf8 -B windows/recover.py` 注册为当前用户的 Windows 登录任务。此可选入口需要 Python 3.11 以上；任务固定使用已核实的源码 checkout、绝对 Python 和 Codex CLI 路径，以及同一 EVEROS_HOME/CODEX_HOME。配置路径、任务定义、备份和日志保存在本机仓外，不写入源码仓。
+
+- 登录后延迟执行，隐藏窗口、普通用户权限、单实例；不启动独立 MCP 守护进程。
+- 比较原生规则、协议副本、插件市场、MCP、hook 开关和 CLI launcher。正常时不重装；仅规则差异刷新管理块和协议，接线/运行快照差异调用完整 Windows 安装器，再回读验证。
+- `windows/recover.py --check` 只报告差异；不执行修复。检查结果保存到 `$EVEROS_HOME/state/autostart/last-result.json`，不包含凭据或记忆正文。
+- 任务不自动拉取源码、不升级宿主、不授予 hook 信任；损坏规则边界和未确认源码错误会保留现场并返回非零。源码 checkout 必须保留，不能归档或删除仍被任务引用的 worktree。
+- 注册后手动触发同一任务，核验返回码和结果文件。这个测试验证任务动作，实际下次登录触发仍须单独观察；新插件的加载与 hook 信任也须分别验证。
