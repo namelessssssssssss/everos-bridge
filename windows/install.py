@@ -21,10 +21,11 @@ def ps_quote(value):
     return "'" + str(value).replace("'", "''") + "'"
 
 
-def hook_command(python, hook, home):
+def hook_command(python, hook, home, host_name=None):
     # EncodedCommand avoids nested cmd/PowerShell quoting and preserves Unicode,
     # spaces, apostrophes and shell metacharacters without executing their text.
-    script = "$env:EVEROS_HOME={}; & {} -X utf8 {}; exit $LASTEXITCODE".format(
+    host = "$env:EVEROS_HOST={}; ".format(ps_quote(host_name)) if host_name else ""
+    script = host + "$env:EVEROS_HOME={}; & {} -X utf8 {}; exit $LASTEXITCODE".format(
         ps_quote(home), ps_quote(python), ps_quote(hook))
     encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
     return "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand " + encoded
@@ -185,10 +186,36 @@ class WindowsInstaller(WindowsHost):
         self.hook = runtime / "plugin/everos/hook.py"
         self.finish()
 
+    def kimi_host(self, runtime=None):
+        from kimi_desktop import KimiDesktopHost
+        host = KimiDesktopHost(runtime or self.repo, self.dry)
+        host.environment = self.environment
+        host.python = self.python
+        return host
+
+    def sync_kimi_desktop_rules(self):
+        self.kimi_host().sync_rules()
+
+    def install_kimi_desktop(self):
+        self.mcp_timeout_seconds()
+        if not self.kimi_host().desktop_config().is_file():
+            raise ValueError("未找到 Kimi Work 桌面端 config.toml；请先启动桌面端或设置 EVEROS_KIMI_DESKTOP_CONFIG")
+        self.private_home()
+        self.config()
+        self.protocol_link()
+        runtime = self.snapshot()
+        WindowsInstaller(runtime, self.dry).install_cli()
+        command = hook_command(self.python, runtime / "plugin/everos/hook.py", self.everos,
+                               host_name="kimi_desktop")
+        host = self.kimi_host(self.repo if self.dry else runtime)
+        host.runtime = runtime
+        host.install(command)
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--kimi-desktop", action="store_true")
     scope = parser.add_mutually_exclusive_group()
     scope.add_argument("--cli-only", action="store_true")
     scope.add_argument("--rules-only", action="store_true")
@@ -201,7 +228,12 @@ def main():
             runtime = installer.snapshot()
             WindowsInstaller(runtime, args.dry_run).install_cli()
         elif args.rules_only:
-            installer.sync_rules()
+            if args.kimi_desktop:
+                installer.sync_kimi_desktop_rules()
+            else:
+                installer.sync_rules()
+        elif args.kimi_desktop:
+            installer.install_kimi_desktop()
         else:
             installer.install()
     except (OSError, ValueError, subprocess.CalledProcessError) as error:

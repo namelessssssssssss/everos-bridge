@@ -35,7 +35,7 @@
    - 用户在聊天里直接给了值的话，用环境变量传给安装脚本，由脚本写文件：`EVEROS_USER_ID=… EVEROS_API_KEY=… EVEROS_READ_V1=1 $REPO/install.sh`。
    - agent 不能代替用户回答交互输入；没有终端时脚本不会进入交互，而是提示后退出。
 3. **接线**：运行 `$REPO/install.sh`。脚本会检测本机装了哪些 agent，逐个接上，改动前先备份原配置；重复运行不会重复追加。
-   - 原生 Windows 的 Codex 使用 `install.ps1`（先 `-DryRun`），不运行 Bash 安装器；解释器可用 `-Python` 指定。详见 [Windows 接入](docs/windows-integration.md)，其他 Windows 宿主尚未覆盖。
+   - 原生 Windows 的 Codex 使用 `install.ps1`（先 `-DryRun`），Kimi Work 桌面端使用 `install.ps1 -KimiDesktop`；都不运行 Bash 安装器，解释器可用 `-Python` 指定。详见 [Windows 接入](docs/windows-integration.md)，其他 Windows 宿主尚未覆盖。
    - 各宿主的原生默认指令在首次接入、更新时都同步Bridge管理块及版本（AGENTS/CLAUDE/GEMINI、Cursor常驻规则、MiMo instructions等）；用户其它内容保留。接入Agent要读 `memory_rules(section="changes")` 理解增删改，再读当前规则并回读原生入口；仅刷新规则可用 `install.sh --rules-only`。基线缺失、仅MCP宿主的原生记忆工具缺失须如实报告，见 [docs/rule-sync.md](docs/rule-sync.md)。
    - TraeX ≥ 0.209.1 已覆盖 L3/L4；只刷新它用 `install.sh --only trae`。用户级 hook 在 `$TRAECLI_HOME/hooks.json`，默认 `~/.trae/cli/hooks.json`。安装后在 `/hooks` 审阅并信任当前定义，再验收新会话的自动注入和采集。
    - Claude Desktop 运行时会用内存里的配置覆盖外部改动，脚本检测到它在运行就不写，会给出指引：退出 App 后重跑，或在 App 设置里手动加。

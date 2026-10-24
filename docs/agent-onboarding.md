@@ -60,7 +60,7 @@
 
 ## 已接入宿主速查
 
-原生 Windows Codex 单独使用 `install.ps1`，覆盖 L1/L2 和待信任的 L3/L4 定义；不推定其他 Windows 宿主已支持。安装、回归和验收边界见 [Windows 接入](windows-integration.md)。
+原生 Windows Codex 使用 `install.ps1`，Kimi Work 使用 `install.ps1 -KimiDesktop`，覆盖 L1/L2 和待新会话验证的 L3/L4 定义；不推定其他 Windows 宿主已支持。安装、回归和验收边界见 [Windows 接入](windows-integration.md)。
 
 | 宿主 | L1 MCP | L2 指令 | L3 提问前注入 | L4 采集 | 关键差异 |
 | --- | --- | --- | --- | --- | --- |
