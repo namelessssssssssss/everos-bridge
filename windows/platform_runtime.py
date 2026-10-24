@@ -14,7 +14,7 @@ def replace(text, old, new, count=1):
 
 def windows_rules(text):
     old = "运行源仓 `install.sh`"
-    new = old + "（原生 Windows Codex 用 `install.ps1`）"
+    new = old + "（原生 Windows 用 `install.ps1`）"
     if new in text:
         return text
     return replace(text, old, new)

@@ -2,7 +2,8 @@ param(
     [string]$Python,
     [switch]$DryRun,
     [switch]$CliOnly,
-    [switch]$RulesOnly
+    [switch]$RulesOnly,
+    [switch]$KimiDesktop
 )
 $ErrorActionPreference = 'Stop'
 
@@ -32,5 +33,6 @@ $options = @()
 if ($DryRun) { $options += '--dry-run' }
 if ($CliOnly) { $options += '--cli-only' }
 if ($RulesOnly) { $options += '--rules-only' }
+if ($KimiDesktop) { $options += '--kimi-desktop' }
 & $runtime -X utf8 (Join-Path $PSScriptRoot 'windows\install.py') @options
 exit $LASTEXITCODE

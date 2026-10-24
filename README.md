@@ -82,7 +82,7 @@ CLI同样支持 `everos search "当前历史问题" --context "新线索" --sess
 
 ## 新设备 / 新工作区
 
-**原生 Windows（Codex CLI / App）**：使用 PowerShell 运行 `install.ps1`，先用 `-DryRun` 预览；Python 不在 PATH 时通过 `-Python` 指定实际解释器。支持备份、UTF-8、原生锁和无需管理员权限的安装。Windows 的凭据权限使用 ACL；接线范围和新会话验收见 [Windows 接入](docs/windows-integration.md)。
+**原生 Windows（Codex CLI / App、Kimi Work 桌面端）**：使用 PowerShell 运行 `install.ps1`，先用 `-DryRun` 预览；Kimi Work 使用 `install.ps1 -KimiDesktop`，不要求 Codex CLI。Python 不在 PATH 时通过 `-Python` 指定实际解释器。支持备份、UTF-8、原生锁和无需管理员权限的安装。Windows 的凭据权限使用 ACL；接线范围和新会话验收见 [Windows 接入](docs/windows-integration.md)。
 
 把下面这句话发给任意 agent：
 
@@ -97,7 +97,7 @@ git clone https://github.com/namelessssssssssss/everos-bridge ~/.everos-bridge
 python3 ~/.everos-bridge/plugin/everos/hook.py --doctor
 ```
 
-更新时：先 `git -C ~/.everos-bridge pull`，再重跑 `install.sh`。Claude Code 直接从本地 clone 加载插件；Codex 是拷贝安装，所以要重跑。Kimi Work 桌面端的 `config.toml` 会被 App 升级重写，升级后同样重跑 `install.sh` 恢复。
+更新时：先 `git -C ~/.everos-bridge pull`，再重跑 `install.sh`（原生 Windows 用 `install.ps1`）。Claude Code 直接从本地 clone 加载插件；Codex 是拷贝安装，所以要重跑。Kimi Work 桌面端的 `config.toml` 会被 App 升级重写，升级后 Unix 重跑 `install.sh`，原生 Windows 重跑 `install.ps1 -KimiDesktop` 恢复。
 
 仓库不强制放在 `~/.everos-bridge`：`install.sh` 以自身所在路径为准，从任何 clone 位置运行都可以；它会把 `PROTOCOL.md` 软链到 `~/.everos/PROTOCOL.md` 作为稳定入口，并同步 Kimi Work 桌面端的 daimon skill（`skills/everos-memory`）。
 
