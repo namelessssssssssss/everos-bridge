@@ -13,12 +13,9 @@ import subprocess
 import sys
 
 from config_helpers import backup, codex_tool_timeout, enable_codex_hooks, set_codex_tool_timeout
+from cli_launcher import launcher_scripts, ps_quote
 from host import WindowsHost
 from platform_runtime import adapt, replace
-
-
-def ps_quote(value):
-    return "'" + str(value).replace("'", "''") + "'"
 
 
 def hook_command(python, hook, home):
@@ -80,34 +77,7 @@ class WindowsInstaller(WindowsHost):
     def install_cli(self):
         target = self.repo / "plugin/everos/cli.py"
         # These managed launchers can be refreshed, but unrelated commands survive.
-        scripts = {
-            # ASCII-only batch source; %~dp0 is expanded as Unicode by cmd.exe.
-            "everos.cmd": '@rem everos-bridge managed launcher\n@echo off\n@setlocal DisableDelayedExpansion\npowershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0everos.ps1" %*\n@exit /b %ERRORLEVEL%\n',
-            # Windows PowerShell 5.1 needs a BOM to decode Unicode script paths.
-            "everos.ps1": "\ufeff# everos-bridge managed launcher\n" + r'''
-$ErrorActionPreference = 'Stop'
-function Quote-WindowsArgument([string]$value) {
-    $value = [regex]::Replace($value, '(\\*)"', '$1$1\"')
-    $value = [regex]::Replace($value, '(\\+)$', '$1$1')
-    return '"' + $value + '"'
-}
-$start = New-Object System.Diagnostics.ProcessStartInfo
-$start.UseShellExecute = $false
-$start.CreateNoWindow = $true
-$start.RedirectStandardOutput = $true
-$start.RedirectStandardError = $true
-''' + "$start.FileName = {}\n$arguments = @('-X', 'utf8', {}) + $args\n".format(
-                ps_quote(self.python), ps_quote(target)) + r'''
-$start.Arguments = ($arguments | ForEach-Object { Quote-WindowsArgument ([string]$_) }) -join ' '
-$process = [System.Diagnostics.Process]::Start($start)
-$stdout = $process.StandardOutput.BaseStream.CopyToAsync([Console]::OpenStandardOutput())
-$stderr = $process.StandardError.BaseStream.CopyToAsync([Console]::OpenStandardError())
-$process.WaitForExit()
-[void]$stdout.GetAwaiter().GetResult()
-[void]$stderr.GetAwaiter().GetResult()
-exit $process.ExitCode
-''',
-        }
+        scripts = launcher_scripts(self.python, target)
         for name, text in scripts.items():
             path = self.home / ".local/bin" / name
             lines = path.read_text(encoding="utf-8").splitlines() if path.is_file() else []

@@ -21,7 +21,7 @@ Set-Location "$env:USERPROFILE\.everos-bridge"
 - Windows 独立实现唯一备份、原子替换与 EverOS 原生规则管理块；同步后回读 Codex 全局入口，只管理当前宿主。
 - 将插件生成到 `.everos/runtime/windows-<内容摘要>/`，以该快照注册本地插件市场。hook 的 `commandWindows` 使用编码的 PowerShell 命令，绑定绝对 Python、hook 和数据路径；所有 Python 入口启用 UTF-8。每个快照版本独立，旧快照和旧插件缓存保留给正在运行的聊天。
 - MCP 使用同一快照和同一 `EVEROS_HOME`。提问 hook 与 MCP 的外层超时至少为 `EVEROS_AGENTIC_TIMEOUT + 10` 秒，保留更大的现有 MCP 值。
-- `PROTOCOL.md` 以普通文件副本提供稳定入口；只读 CLI 安装为 ASCII `everos.cmd` 与 UTF-8 BOM `everos.ps1`，不需要符号链接。batch 用 `%~dp0` 定位同目录脚本，避免代码页解码非 ASCII 路径；PowerShell 使用明确的 Windows argv 引用保留空参数、引号和末尾反斜杠。命令目录未在 PATH 时可以使用完整路径。
+- `PROTOCOL.md` 以普通文件副本提供稳定入口；只读 CLI 安装为 ASCII `everos.cmd` 与 UTF-8 BOM PowerShell 脚本，不需要符号链接。batch 用 `%~dp0` 定位同目录 `everos-native.ps1`，在独立进程边界按原始字节转发 stdout/stderr；直接调用 `everos.ps1` 时按 UTF-8 解码，分别写入 PowerShell success/error 流，支持变量捕获、管道和文件重定向。两种入口共用明确的 Windows argv 引用，保留空参数、引号、末尾反斜杠和退出码；Python 与调用者共享控制台以接收 Ctrl+C。命令目录未在 PATH 时可以使用完整路径。
 - 运行真实只读 doctor；失败返回非零。没有凭据、没有加载新会话或尚未信任 hook 时，不能将接线完成等同于完整验收。
 
 ```powershell

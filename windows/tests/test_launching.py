@@ -62,15 +62,17 @@ class AbsolutePathTests(unittest.TestCase):
 @unittest.skipUnless(os.name == "nt", "native Windows command parsing")
 class WindowsLaunchingTests(unittest.TestCase):
     def test_shim_only_codex_preserves_arguments_and_does_not_expand_shell_data(self):
-        with tempfile.TemporaryDirectory(prefix="everos-shim-") as temporary:
+        with tempfile.TemporaryDirectory(prefix="everos-shim-路径 α ") as temporary:
             root = Path(temporary)
             binary = root / "命令 shim & test"; binary.mkdir()
             script = root / "echo.py"
             script.write_text('import json,sys; print(json.dumps(sys.argv[1:]))\n', encoding="ascii")
             shim = binary / "codex.cmd"
-            shim.write_text('@"{}" -X utf8 "{}" %*\n'.format(sys.executable, script), encoding="ascii")
+            shim.write_text('@"%EVEROS_TEST_PYTHON%" -X utf8 "%EVEROS_TEST_SCRIPT%" %*\n', encoding="ascii")
             host = WindowsHost(ROOT)
             host.environment["PATH"] = str(binary)
+            host.environment["EVEROS_TEST_PYTHON"] = sys.executable
+            host.environment["EVEROS_TEST_SCRIPT"] = str(script)
             arguments = ["space value", "a&b", "percent%PATH%", "bang!caret^", "(paren)", "中文α", "x>fixture"]
             output = host.run(["codex", *arguments], capture=True)
             self.assertEqual(json.loads(output), arguments)
@@ -100,7 +102,7 @@ class WindowsLaunchingTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(json.loads(result.stdout), arguments)
             result = subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-                                     str(powershell_script), "fail"], text=True, encoding="utf-8", capture_output=True, timeout=20)
+                                     str(powershell_script.with_name("everos-native.ps1")), "fail"], text=True, encoding="utf-8", capture_output=True, timeout=20)
             self.assertEqual(result.returncode, 7)
             self.assertEqual(result.stderr.strip(), "error α")
             arguments = ["search", 'value "quoted" text', "", "trail" + chr(92)]
