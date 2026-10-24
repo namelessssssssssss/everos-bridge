@@ -70,7 +70,7 @@ everos search "复杂的历史问题" --method agentic --timeout 240
 
 优先级是按次 `timeout` / CLI `--timeout` > 环境变量 > config.env > 默认 180 秒。必须为正有限数值；非法配置明确报错。默认先给 agentic 约 168 秒，给回退预留至多 12 秒，整次调用仍受同一个 deadline 约束。
 
-MCP 客户端的外层超时需大于实际总预算。安装器会为 Codex 设置 `tool_timeout_sec`，为 MiMo 设置毫秒 `timeout`，至少达到配置预算 + 10 秒（默认 190 秒），并保留更大的现值。提高长期配置后重跑 `install.sh` 同步外层限制；按次传更大的 timeout 时也需确保宿主允许等待。其他宿主需按各自配置设置外层超时。
+MCP 客户端的外层超时需大于实际总预算。安装器会为 Codex 设置 `tool_timeout_sec`，为 Kimi 设置毫秒 `toolTimeoutMs`，为 MiMo 设置毫秒 `timeout`，至少达到配置预算 + 10 秒（默认 190 秒），并保留更大的现值。提高长期配置后重跑对应安装器同步外层限制；按次传更大的 timeout 时也需确保宿主允许等待。其他宿主需按各自配置设置外层超时。
 
 agentic 不套用 hybrid 的得分门槛，回退结果恢复对应门槛。每次输出仍限制在 4000 字内；自动 hook 使用相同深检索与回退规则，默认总预算180秒、外层190秒；旧 EVEROS_RECALL_TIMEOUT 不再限制提问检索。Kimi / TraeX / MiMo 外层由安装器按配置预算加10秒设置；Claude Code / Codex 插件和云端静态 hook 默认190秒，预算超过180秒时需同步提高 UserPromptSubmit timeout 并重新审阅、信任。插件更新后需重连 MCP 或新开聊天加载新 schema。质量对比见 [调研报告](docs/retrieval-study-2026-10-09.md)。
 
@@ -82,7 +82,15 @@ CLI同样支持 `everos search "当前历史问题" --context "新线索" --sess
 
 ## 新设备 / 新工作区
 
-**原生 Windows（Codex CLI / App、Kimi Work 桌面端）**：使用 PowerShell 运行 `install.ps1`，先用 `-DryRun` 预览；Kimi Work 使用 `install.ps1 -KimiDesktop`，不要求 Codex CLI。Python 不在 PATH 时通过 `-Python` 指定实际解释器。支持备份、UTF-8、原生锁和无需管理员权限的安装。Windows 的凭据权限使用 ACL；接线范围和新会话验收见 [Windows 接入](docs/windows-integration.md)。
+**原生 Windows（Codex CLI / App、Kimi Code/Desktop、Kimi Work）**：使用 PowerShell 运行 `install.ps1`，先用 `-DryRun` 预览；Python 不在 PATH 时通过 `-Python` 指定实际解释器。默认只接 Codex；Kimi Code/Desktop 用 `-Only kimi`，通过 `KIMI_CODE_HOME` 或 `~/.kimi-code` 检测，没有 `kimi` CLI 也可完成 L1–L4；Kimi Work 内嵌 runtime 用独立的 `-KimiDesktop`。两个 Kimi 路径不能组合，也可显式 `-Only codex` 或用 `-RulesOnly` 限定规则刷新。支持备份、UTF-8、原生锁和无需管理员权限的安装；Windows 凭据权限使用 ACL。配置合并和新会话验收见 [Windows 接入](docs/windows-integration.md)。
+
+```powershell
+.\install.ps1 -DryRun -Only kimi
+.\install.ps1 -Only kimi
+.\install.ps1 -RulesOnly -Only kimi
+.\install.ps1 -DryRun -KimiDesktop
+.\install.ps1 -KimiDesktop
+```
 
 把下面这句话发给任意 agent：
 

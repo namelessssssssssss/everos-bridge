@@ -1,6 +1,11 @@
 {
   "source_revision": "f8fe57e5f0e5b3a7d9b00becf0ae66457121a8af",
   "sha256": {
+    "AGENTS.md": "483a9c31fa1f15f71a55054ef486dfb43fc9ae64b01078176c3960d717cf9ccf",
+    "PROTOCOL.md": "ecbe878a813d0fbd7407d0ef644bec1b8ac1dc48392193476a307671a8653a09",
+    "README.md": "c6a392a5e3957a026d4ac830eda290cfdd601e066da5ead09fc0547fd8c5d95e",
+    "docs/agent-onboarding.md": "2a4f775c8c27d70e166611391d9715bb55a294cf44d2affbdbec7af533043e46",
+    "docs/windows-integration.md": "8f8a13bba78b3c5bf697cee702e0e73ce58dcfd3bb63ce6d6543de70b44ae339",
     ".agents/plugins/marketplace.json": "b8ea166ea2b7be9b440b456735629a067dab2e179b5e49c60b3198578aefdf16",
     ".claude-plugin/marketplace.json": "da739a75bd93d089278354f195d2a70b1bb63792345e88f6b40081da84737b22",
     ".github/workflows/tests.yml": "09eef8f717f7a24ff352eb811a1179399c8b789c9e0ff4b2bb12ca4f97e18846",
