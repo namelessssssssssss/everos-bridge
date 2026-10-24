@@ -60,14 +60,14 @@
 
 ## 已接入宿主速查
 
-原生 Windows Codex 使用 `install.ps1`，Kimi Work 使用 `install.ps1 -KimiDesktop`，覆盖 L1/L2 和待新会话验证的 L3/L4 定义；不推定其他 Windows 宿主已支持。安装、回归和验收边界见 [Windows 接入](windows-integration.md)。
+原生 Windows Codex、Kimi Code/Desktop 与 Kimi Work 使用 `install.ps1`。Kimi Code/Desktop 用 `-Only kimi`，无需宿主 CLI，覆盖 `~/.kimi-code` 的 `mcp.json`、`AGENTS.md` 和 `config.toml` L1–L4；Kimi Work 用独立的 `-KimiDesktop` 接内嵌 runtime，保留 daimon skill 与专用桌面环境。Codex 保持插件与待信任 hook 定义流程。其他 Windows 宿主不因此推定支持。安装、回归和新会话验收边界见 [Windows 接入](windows-integration.md)。
 
 | 宿主 | L1 MCP | L2 指令 | L3 提问前注入 | L4 采集 | 关键差异 |
 | --- | --- | --- | --- | --- | --- |
 | Claude Code | 插件内 `claude-mcp.json` | `~/.claude/CLAUDE.md`（可选） | SessionStart（画像）+ UserPromptSubmit，输出 JSON `additionalContext` | Stop，读 transcript_path（JSONL） | 本地市场原地加载；SessionEnd 只有约 1.5 秒；注入单条上限 1 万字，对用户不可见 |
 | Codex | `codex mcp add`（绝对路径） | `~/.codex/AGENTS.md` | 同 Claude Code（Codex 也会设置 `CLAUDE_PLUGIN_ROOT`） | Stop，读 rollout JSONL（`response_item`） | 插件是拷贝安装；hooks.json 必须放在 `hooks/` 下；需要 `[features] hooks = true`，并审阅、信任当前 hook 定义 |
-| Kimi Code | `~/.kimi-code/mcp.json` | — （没有 config.toml 时安装脚本会新建） | 只有 UserPromptSubmit 能注入，输出纯文本；画像放到首条提问 | Stop，按 session_id 找 `wire.jsonl` | `[[hooks]]` 只允许 event / matcher / command / timeout 四个字段 |
-| Kimi Work 桌面端（Kimi.app） | 内嵌 home 的 `mcp.json` | —（指令层由桌面端 skill 承担） | 同 Kimi Code（输出纯文本，画像放首条提问） | Stop，按 session_id 先查 `session_index.jsonl` 再找 `wire.jsonl` | 内嵌 kimi-code 0.15.7；`config.toml` 随 App 升级重写，丢了重跑 install.sh；hook 在会话启动时加载，改配置要新开会话；`ctitle-*` 标题侧会话要排除；用户消息带 `<meta>` 前导脚手架要剥掉；hook 命令经 shell 执行，用 `EVEROS_HOST=kimi_desktop` 指定宿主 |
+| Kimi Code | `~/.kimi-code/mcp.json` | `~/.kimi-code/AGENTS.md`（安装器只替换 EverOS 管理块） | 只有 UserPromptSubmit 能注入，输出纯文本；画像放到首条提问 | Stop，按 session_id 找 `wire.jsonl` | `[[hooks]]` 只允许 event / matcher / command / timeout 四个字段；配置变更新会话生效 |
+| Kimi Work 桌面端（Kimi.app） | 内嵌 home 的 `mcp.json` | 内嵌 home 的 `AGENTS.md` 与 daimon skill | 同 Kimi Code（输出纯文本，画像放首条提问） | Stop，按 session_id 先查 `session_index.jsonl` 再找 `wire.jsonl` | 内嵌 kimi-code 0.15.7；`config.toml` 随 App 升级重写，丢了重跑对应安装器；原生 Windows 用 `install.ps1 -KimiDesktop`；hook 在会话启动时加载，改配置要新开会话；`ctitle-*` 标题侧会话要排除；用户消息带 `<meta>` 前导脚手架要剥掉；hook 命令用 `EVEROS_HOST=kimi_desktop` 指定宿主 |
 | MiMoCode / MiMo Desktop | `~/.config/mimocode/mimocode.jsonc` 的 `mcp.everos` | 同文件 `instructions` → `everos-rules.md` | Plugin `chat.message` + `experimental.chat.system.transform`（画像）→ synthetic text part | Plugin `session.post`，trajectory 内存直传 `hook.py --mimo-write` | 无 hooks.json；L3/L4 走 `@mimo-ai/plugin` 的 `session.*` / `chat.message`；MCP timeout 默认至少190s，需大于实际agentic预算；配置变更新会话生效；session 前缀 `mc_` |
 | TraeX ≥ 0.209.1（traecli / traex / coco 别名） | CLI mcp add，配置在 `$TRAE_HOME/traecli.toml` | `$TRAE_HOME/AGENTS.md` | SessionStart + UserPromptSubmit，JSON additionalContext；PostCompact 标记下轮补画像 | Stop 读 history_mutation v1 append / 旧 response_item；SessionEnd / PreCompact flush | `$TRAECLI_HOME/hooks.json`，默认 `~/.trae/cli/hooks.json`；正常信任后运行；支持 transcript_path 为空时精确定位，详见 [TraeX 验证](traex-integration.md) |
 | 旧 TraeCode CLI（Coco） | `coco mcp add` | `$TRAE_HOME/AGENTS.md` | 未适配 | 未适配 | 仅 MCP + 规则；升级 TraeX 后重跑安装器 |

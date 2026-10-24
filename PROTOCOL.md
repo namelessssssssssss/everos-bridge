@@ -25,7 +25,7 @@
 - session_id：一个 agent 会话对应一个，跨天沿用。Claude Code 用 `cc_<首日>_<标题>_<会话id前8位>`，Codex 用 `cx_…`，Kimi Code 用 `km_…`，Kimi Work 桌面端用 `kw_…`，MiMoCode 用 `mc_…`，Doubao Work 用 `dw_<首日>_<标题>_<完整会话id>`。TraeX 用 `tx_<首日>_<标题>_<完整会话id>`，避免 UUIDv7 时间前缀相同导致跨会话混写。
 - TraeX ≥ 0.209.1：`SessionStart` / `UserPromptSubmit` 注入，`Stop` 增量采集，`SessionEnd` / `PreCompact` 补写与落盘；`PostCompact` 只标记下轮补读画像。当前注入已存在时，规则不再重复调用 MCP。hook 必须启用且被信任。
 - TraeX 读取原始 rollout 的 `history_mutation` v1 append（兼容旧 `response_item`），只保存用户与助手的文本；用 `content_item_kinds` 区分用户输入与环境/规则/注入，不采集工具镜像或 reasoning。替换/压缩快照不作为新对话重新入库。`transcript_path` 为空时按精确 session_id 只读查索引或匹配 rollout 文件，找不到会记录错误且不推进采集进度。
-- Kimi Work 桌面端：hook 挂在 App 内嵌 runtime 的 `config.toml`（daimon 托管，App 升级会重写，丢了重跑 `install.sh`）；hook 命令带 `EVEROS_HOST=kimi_desktop` 显式指定宿主；`ctitle-*` 标题侧会话不采集。
+- Kimi Work 桌面端：hook 挂在 App 内嵌 runtime 的 `config.toml`（daimon 托管，App 升级会重写，Unix 丢了重跑 `install.sh`，原生 Windows 重跑 `install.ps1 -KimiDesktop`）；hook 命令带 `EVEROS_HOST=kimi_desktop` 显式指定宿主；`ctitle-*` 标题侧会话不采集。
 - MiMoCode：无 hooks.json，L3/L4 走 Plugin API；轨迹在 `session.post` 内存直传，每轮写完即 flush；配置写 `~/.config/mimocode/mimocode.jsonc`，新会话生效。
 - Doubao Work（豆包办公）：harness 不支持 agent 注册 MCP、没有 hook/全局指令/插件。L1 用命令行 stdio 客户端 `everos-mcp` 调未改动的 `mcp_server.py`；L2 是安装器同步的用户级 skill；L3/L4 靠模型按 skill 每轮主动执行（`everos-doubao-ingest --all`），不是平台强制。采集只读 main agent 的 `system/trajectory.jsonl`，消息无时间戳，按 `system/assignment.md` 的需求标题顺序对齐；只写用户原话（剥 `<system-reminder>`、同请求去重）和无 `tool_calls` 的最终回复，不写工具镜像/工具结果/reasoning；当轮最终回复在下一轮补写。接入细节见 `docs/doubao-integration.md`。
 - botmux 转来的飞书消息按 `<sender>` 标注真实发送者：owner 本人（命中 `EVEROS_OWNER_ALIASES`）记为 owner，其他人记为 `feishu_<邮箱前缀>`。
@@ -38,7 +38,7 @@
 
 发现规则包、安装记录或宿主原生指令与已确认的当前规则源不一致时，自动执行更新流程，无需再次询问：先核实规则源与目标宿主，读取增量及当前规则，再运行对应安装器并回读版本和管理块；仅规则差异走规则刷新，接线或运行版本差异走完整安装。旧缓存不得反向覆盖较新规则；来源不明、文件冲突、权限或宿主信任受限时保留现场并报告具体阻碍，不伪称更新完成。
 
-仅规则刷新：Unix 使用 `install.sh --rules-only`，原生 Windows Codex 使用 `install.ps1 -RulesOnly`；完整接线使用对应安装器默认流程。更新前核对已配置的规则源和适用版本，先预览，保留其它系统管理块、hook、用户内容及旧运行快照，备份落在仓外。更新后分别核验文件版本、CLI/MCP/hook接线和活动会话加载状态；需要新会话或重连时明确标注，不通过安装成功推断已热更新。差异检查和更新不授权读取新数据来源、上传记忆、升级宿主CLI或绕过宿主信任。
+仅规则刷新：Unix 使用 `install.sh --rules-only`，原生 Windows 使用 `install.ps1 -RulesOnly`，并可用 `-Only codex` / `-Only kimi` / `-KimiDesktop` 限定宿主；完整接线使用对应安装器流程。更新前核对已配置的规则源和适用版本，先预览，保留其它系统管理块、hook、用户内容及旧运行快照，备份落在仓外。同 revision 下只刷新一个宿主时保留其他宿主已验证 targets。更新后分别核验文件版本、CLI/MCP/hook接线和活动会话加载状态；需要新会话或重连时明确标注，不通过安装成功推断已热更新。差异检查和更新不授权读取新数据来源、上传记忆、升级宿主CLI或绕过宿主信任。
 
 能长期复用的都写：
 - 偏好、纠错、决策及理由；
@@ -124,7 +124,7 @@
 
 ## 5. 配置与部署
 
-原生 Windows Codex 使用 `install.ps1`；配置目录由 Windows ACL 保护，规则与 CLI 使用普通文件，运行时使用 Windows 字节区间锁。安装器生成带 `commandWindows` 的不可变本机插件快照并保留旧版；MCP 与 hook 均绑定同一数据根及绝对 Python，启用 UTF-8。安装器不授予 hook 信任，仍须新会话验收。范围与命令见 [Windows 接入](docs/windows-integration.md)。
+原生 Windows Codex、Kimi Code/Desktop 与 Kimi Work 使用 `install.ps1`；默认只接 Codex。Kimi Code/Desktop 用 `-Only kimi`，宿主目录由 `KIMI_CODE_HOME` 或 `~/.kimi-code` 确定；Kimi Work 内嵌 runtime 用独立的 `-KimiDesktop`，绑定 `EVEROS_HOST=kimi_desktop` 和 `EVEROS_KIMI_DESKTOP_HOME`。两个 Kimi 路径都不要求 `kimi` 或 `codex` CLI，也不能组合开关。Kimi Code/Desktop 的 L1 合并 `mcp.json`，L2 写 `AGENTS.md`，L3/L4 合并 `config.toml` 的四个生命周期 hook；Kimi Work 保留专用 MCP、规则、daimon skill 与 hook 流程，均复用不可变 Windows 快照。配置目录由 Windows ACL 保护，规则与 CLI 使用普通文件，运行时使用 Windows 字节区间锁。Codex 插件快照带 `commandWindows` 并保留旧版，快照完整性校验、来源记录与登录恢复保持有效；MCP 与 hook 均绑定同一数据根及绝对 Python，启用 UTF-8。安装器不授予 hook 信任，仍须分别在新 Codex/Kimi 会话验收注入与采集。范围与命令见 [Windows 接入](docs/windows-integration.md)。
 
 MCP子进程可能过滤父进程环境，安装器在各客户端支持的env/environment字段或CLI --env中显式绑定EVEROS_HOME，避免hook与MCP读取不同状态目录；只写目录，不复制凭据。Claude插件按其原生继承环境运行。环境变量优先，其次 `$EVEROS_HOME/config.env`（默认 `~/.everos/config.env`，0600，永不入库）。
 
@@ -144,7 +144,7 @@ MCP子进程可能过滤父进程环境，安装器在各客户端支持的env/e
 
 状态在 `$EVEROS_HOME/state/`：`sessions/*.json` 是会话账本，`recall/*.json` 记录本会话已注入过的条目，`localmem.json` 是本地记忆同步账本，`hook.log` 是日志。
 
-MCP 客户端外层超时需大于实际检索预算。安装器为 Codex 的 `tool_timeout_sec` 和 MiMo 的毫秒 `timeout` 设置至少配置预算 + 10 秒，默认 190 秒，并保留更大的现值。调大配置后重跑 `install.sh`；Kimi / TraeX hook 和 MiMo 插件外层同样随预算更新。Claude Code / Codex 插件及云端静态 hook 定义默认 190 秒，预算超过 180 秒时须同步提高其 UserPromptSubmit timeout 并重新审阅、信任；按次增加预算时也需保证外层允许等待。其他宿主按自身协议配置，不猜测字段。`memory_record_practice` 的耗时是写入（通常 10 到 20 秒）加回读等待（与 v1 双写重叠，最多 `EVEROS_CASE_WAIT` 秒），默认值在 190 秒内；宿主外层超时更短时调小 `EVEROS_CASE_WAIT`。
+MCP 客户端外层超时需大于实际检索预算。安装器为 Codex 的 `tool_timeout_sec`、Kimi 的毫秒 `toolTimeoutMs` 和 MiMo 的毫秒 `timeout` 设置至少配置预算 + 10 秒，默认 190 秒，并保留更大的现值；Kimi 的非法现值会明确报错。调大配置后重跑对应安装器；Kimi / TraeX hook 和 MiMo 插件外层同样随预算更新。Claude Code / Codex 插件及云端静态 hook 定义默认 190 秒，预算超过 180 秒时须同步提高其 UserPromptSubmit timeout 并重新审阅、信任；按次增加预算时也需保证外层允许等待。其他宿主按自身协议配置，不猜测字段。`memory_record_practice` 的耗时是写入（通常 10 到 20 秒）加回读等待（与 v1 双写重叠，最多 `EVEROS_CASE_WAIT` 秒），默认值在 190 秒内；宿主外层超时更短时调小 `EVEROS_CASE_WAIT`。
 
 Codex 升级前必须保存已有 EverOS 插件版本缓存，CLI 操作后恢复被移除的旧目录（操作失败时也恢复）。运行中的聊天仍可能持有旧版 hook 的绝对路径；不能仅安装新版本就删除旧入口，也不能把旧版本路径指向不同内容。新聊天加载新版本，旧缓存不自动清理。
 

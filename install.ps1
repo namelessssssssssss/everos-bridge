@@ -3,9 +3,14 @@ param(
     [switch]$DryRun,
     [switch]$CliOnly,
     [switch]$RulesOnly,
-    [switch]$KimiDesktop
+    [switch]$KimiDesktop,
+    [ValidateSet('codex', 'kimi')]
+    [string]$Only
 )
 $ErrorActionPreference = 'Stop'
+if ($KimiDesktop -and $Only) {
+    throw '-KimiDesktop and -Only are mutually exclusive; use -Only kimi for ~/.kimi-code.'
+}
 
 # Probe actual interpreters; Windows Store aliases are not Python runtimes.
 $candidates = @()
@@ -34,5 +39,6 @@ if ($DryRun) { $options += '--dry-run' }
 if ($CliOnly) { $options += '--cli-only' }
 if ($RulesOnly) { $options += '--rules-only' }
 if ($KimiDesktop) { $options += '--kimi-desktop' }
+if ($Only) { $options += @('--only', $Only) }
 & $runtime -X utf8 (Join-Path $PSScriptRoot 'windows\install.py') @options
 exit $LASTEXITCODE
