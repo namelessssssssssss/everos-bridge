@@ -19,7 +19,6 @@ fail-open：生命周期事件的异常只记日志并 exit 0，绝不阻塞会�
 from __future__ import annotations
 
 import json
-import fcntl
 import hashlib
 import os
 import subprocess
@@ -29,6 +28,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import core  # noqa: E402
+import filelock as fcntl  # noqa: E402
 import recall  # noqa: E402
 
 HEADER = "（EverOS 自动注入，仅供参考；与当前对话冲突时以当前为准）"
@@ -208,7 +208,7 @@ def main() -> int:
                 # well, so duplicate handlers neither call APIs nor inject twice.
                 core.RECALL_DIR.mkdir(parents=True, exist_ok=True)
                 state_p = recall.state_path(sid0 or "nosession")
-                with open(state_p.with_suffix(".lock"), "w") as lock:
+                with open(state_p.with_suffix(".lock"), "a+b") as lock:
                     fcntl.flock(lock, fcntl.LOCK_EX)
                     st = core.load_state(state_p)
                     if event == "UserPromptSubmit":
@@ -242,10 +242,11 @@ def main() -> int:
             return 0
         if event in ("Stop", "SessionEnd", "PreCompact") and c.get("EVEROS_WRITE") != "0":
             # 转交后台子进程，自己马上退出（SessionEnd 只有约 1.5 秒预算）
-            child = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--worker"],
+            launch = ({"creationflags": subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP}
+                      if os.name == "nt" else {"start_new_session": True})
+            child = subprocess.Popen([sys.executable, "-X", "utf8", str(Path(__file__).resolve()), "--worker"],
                                      stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
-                                     stderr=subprocess.DEVNULL, start_new_session=True,
-                                     env={**os.environ})
+                                     stderr=subprocess.DEVNULL, **launch, env={**os.environ})
             child.stdin.write(raw.encode("utf-8"))
             child.stdin.close()
     except Exception as exc:  # fail-open：记忆读写永远不值得打断一次对话

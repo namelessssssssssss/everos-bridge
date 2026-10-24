@@ -27,7 +27,8 @@ class RetrievalWorkflowTests(IsolatedCore):
         self.assertIsNone(second["next_offset"])
         self.assertNotIn("must not be copied", first["text"] + second["text"])
         self.assertEqual(first["source"], "v2/episode")
-        self.assertEqual((core.STATE / "reads" / f"{item['ref']}.json").stat().st_mode & 0o777, 0o600)
+        if os.name != "nt":  # Windows access is governed by the install directory ACL.
+            self.assertEqual((core.STATE / "reads" / f"{item['ref']}.json").stat().st_mode & 0o777, 0o600)
         self.api.assert_not_called()
 
     def test_handles_cannot_read_paths_or_cross_identity_boundaries(self):
@@ -121,7 +122,8 @@ class RetrievalWorkflowTests(IsolatedCore):
         data = json.loads(mcp_server.Server().call("memory_context", {
             "session_id": "context", "goal": "task", "stage": "new_evidence", "clues": "E_FIXTURE_42"}))
         self.assertIn("E_FIXTURE_42", data["context"])
-        self.assertEqual(recall.state_path("context").stat().st_mode & 0o777, 0o600)
+        if os.name != "nt":
+            self.assertEqual(recall.state_path("context").stat().st_mode & 0o777, 0o600)
         with self.assertRaises(mcp_server.RpcError):
             mcp_server.Server().call("memory_open", {"memory_id": ref, "offset": -1})
         with self.assertRaises(mcp_server.RpcError):

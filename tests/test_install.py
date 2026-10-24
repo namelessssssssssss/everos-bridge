@@ -78,6 +78,7 @@ elif name == "codex" and args[:2] == ["plugin", "add"] and os.environ.get("FAKEC
 '''
 
 
+@unittest.skipIf(os.name == "nt", "POSIX shell/CLI fixtures; native setup is covered in test_windows")
 class InstallerTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -89,6 +90,7 @@ class InstallerTests(unittest.TestCase):
         (self.repo / "scripts").mkdir(parents=True)
         (self.repo / "plugin/everos").mkdir(parents=True)
         shutil.copy2(ROOT / "plugin/everos/core.py", self.repo / "plugin/everos/core.py")
+        shutil.copy2(ROOT / "plugin/everos/filelock.py", self.repo / "plugin/everos/filelock.py")
         shutil.copy2(ROOT / "plugin/everos/trae.py", self.repo / "plugin/everos/trae.py")
         shutil.copy2(ROOT / "plugin/everos/rules.py", self.repo / "plugin/everos/rules.py")
         (self.repo / "plugin/rules").mkdir(parents=True)

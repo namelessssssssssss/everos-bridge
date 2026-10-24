@@ -117,6 +117,8 @@
 
 ## 5. 配置与部署
 
+原生 Windows Codex 使用 `install.ps1`；配置目录由 Windows ACL 保护，规则与 CLI 使用普通文件，运行时使用 Windows 字节区间锁。安装器生成带 `commandWindows` 的不可变本机插件快照并保留旧版；MCP 与 hook 均绑定同一数据根及绝对 Python，启用 UTF-8。安装器不授予 hook 信任，仍须新会话验收。范围与命令见 [Windows 接入](docs/windows-integration.md)。
+
 MCP子进程可能过滤父进程环境，安装器在各客户端支持的env/environment字段或CLI --env中显式绑定EVEROS_HOME，避免hook与MCP读取不同状态目录；只写目录，不复制凭据。Claude插件按其原生继承环境运行。环境变量优先，其次 `$EVEROS_HOME/config.env`（默认 `~/.everos/config.env`，0600，永不入库）。
 
 | 变量 | 说明 |

@@ -85,7 +85,8 @@ class RuleTests(unittest.TestCase):
                 self.assertEqual((home / name).stat().st_mtime_ns, stamps[host])
             self.assertIn("alwaysApply: true", (home / native["cursor"]).read_text())
             state = home / ".everos/state/rules"
-            self.assertEqual((state / "current.json").stat().st_mode & 0o777, 0o600)
+            if os.name != "nt":
+                self.assertEqual((state / "current.json").stat().st_mode & 0o777, 0o600)
             self.assertEqual(len(json.loads((state / "targets.json").read_text())["targets"]), 7)
 
     def test_codex_override_is_active_target_and_user_rules_preserved_with_backup(self):

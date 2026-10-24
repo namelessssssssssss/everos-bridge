@@ -37,6 +37,7 @@ class HarnessAuditTests(unittest.TestCase):
             cursor = next(row for row in rows if row['host']=='cursor')
             self.assertEqual(cursor['status'], 'not_configured')
 
+    @unittest.skipIf(os.name == 'nt', 'Unix cloud Bash hook template')
     def test_cloud_hook_template_and_mcp_share_expandable_snapshot(self):
         with tempfile.TemporaryDirectory() as tmp:
             server = audit.ThreadingHTTPServer(('127.0.0.1', 0), audit.Fixture)

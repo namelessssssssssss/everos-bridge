@@ -11,7 +11,7 @@ import json
 import os
 from pathlib import Path
 import re
-import selectors
+import queue
 import subprocess
 import sys
 import tempfile
@@ -109,8 +109,15 @@ class Client:
     def __init__(self, command, env, cwd):
         self.proc = subprocess.Popen(command, env=env, cwd=cwd, stdin=subprocess.PIPE,
                                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
-        self.selector = selectors.DefaultSelector()
-        self.selector.register(self.proc.stdout, selectors.EVENT_READ)
+        # select() cannot wait on Windows anonymous pipes. A bounded queue wait
+        # keeps the same request deadline on every platform.
+        self.lines = queue.Queue()
+        def read_lines():
+            for line in self.proc.stdout:
+                self.lines.put(line)
+            self.lines.put(None)
+        self.reader = threading.Thread(target=read_lines, daemon=True)
+        self.reader.start()
         self.mid = 0
 
     def call(self, method, params=None):
@@ -120,9 +127,10 @@ class Client:
         self.proc.stdin.flush()
         deadline = time.monotonic()+15
         while time.monotonic() < deadline:
-            if not self.selector.select(max(0, deadline-time.monotonic())):
+            try:
+                line = self.lines.get(timeout=max(0, deadline-time.monotonic()))
+            except queue.Empty:
                 break
-            line = self.proc.stdout.readline()
             if not line:
                 raise RuntimeError('stdio_server_exited')
             data = json.loads(line)
@@ -139,19 +147,19 @@ class Client:
         return '\n'.join(block.get('text', '') for block in result.get('content', []) if block.get('type')=='text')
 
     def close(self):
-        self.selector.close()
         self.proc.terminate()
         try:
             self.proc.wait(timeout=3)
         except subprocess.TimeoutExpired:
             self.proc.kill(); self.proc.wait()
+        self.reader.join(timeout=3)
         self.proc.stdin.close()
         self.proc.stdout.close()
 
 
 def probe(entry):
     command = entry.get('command') or []
-    if len(command) < 2 or not str(command[1]).endswith('/everos/mcp_server.py'):
+    if not any(str(arg).replace('\\', '/').endswith('/everos/mcp_server.py') for arg in command[1:]):
         return dict(entry, status=entry.get('status', 'unsupported_entrypoint'))
     with tempfile.TemporaryDirectory(prefix='everos-adapter-audit-') as tmp:
         server = ThreadingHTTPServer(('127.0.0.1', 0), Fixture)

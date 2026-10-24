@@ -15,7 +15,7 @@ description: 用户跨 agent、跨设备共用的 EverOS 长期记忆。会话�
 
 ## 读
 
-- 首次接入或Bridge规则版本变化时，先读 `memory_rules(section="changes")` 对照新增、修改、删除，再读 `rules` 及需要的 `skill`，next_offset非空继续。执行接入/更新的Agent运行源仓 `install.sh`（仅规则用 `--rules-only`），回读宿主原生指令的EverOS管理块与版本；不重复追加，不改用户其他规则。没有可写全局文件但有原生记忆工具的宿主，在本次接入授权内保存规则摘要及版本；工具不可用要报告，继续使用MCP指令。不要写Codex等宿主自动生成的记忆数据，不把安装成功当作Agent已阅读或旧会话已热更新。旧工具目录缺memory_rules时先读源仓规则/安装增量，再重连；没有文件工具的宿主需重连。
+- 首次接入或Bridge规则版本变化时，先读 `memory_rules(section="changes")` 对照新增、修改、删除，再读 `rules` 及需要的 `skill`，next_offset非空继续。执行接入/更新的Agent运行源仓 `install.sh`（原生 Windows Codex 用 `install.ps1`）（仅规则用 `--rules-only`），回读宿主原生指令的EverOS管理块与版本；不重复追加，不改用户其他规则。没有可写全局文件但有原生记忆工具的宿主，在本次接入授权内保存规则摘要及版本；工具不可用要报告，继续使用MCP指令。不要写Codex等宿主自动生成的记忆数据，不把安装成功当作Agent已阅读或旧会话已热更新。旧工具目录缺memory_rules时先读源仓规则/安装增量，再重连；没有文件工具的宿主需重连。
 
 - 会话开始读画像；每条提问前都按提问检索一次。
 - 问「以前怎么做的」时用 `kind=practices`。

@@ -13,8 +13,8 @@ PATTERN = re.compile(re.escape(BEGIN) + r".*?" + re.escape(END), re.S)
 
 
 def bundle(plugin: Path) -> dict:
-    return {"rules": (plugin / "rules/everos-rules.md").read_text().strip(),
-            "skill": (plugin / "skills/everos-memory/SKILL.md").read_text().strip()}
+    return {"rules": (plugin / "rules/everos-rules.md").read_text(encoding="utf-8").strip(),
+            "skill": (plugin / "skills/everos-memory/SKILL.md").read_text(encoding="utf-8").strip()}
 
 
 def revision(documents: dict) -> str:
@@ -23,7 +23,7 @@ def revision(documents: dict) -> str:
 
 def load(path: Path) -> dict:
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
         return {}

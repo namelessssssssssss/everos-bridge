@@ -9,7 +9,7 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
-import fcntl
+import filelock as fcntl
 import core
 
 
@@ -56,7 +56,7 @@ def save_state(path: Path, state: dict) -> None:
 def locked(sid: str):
     path = state_path(sid)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path.with_suffix(".lock"), "a") as lock:
+    with open(path.with_suffix(".lock"), "a+b") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         state = core.load_state(path)
         # Reusing a host session id after an account/backend switch must not reuse coverage.

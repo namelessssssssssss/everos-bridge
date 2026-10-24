@@ -19,7 +19,7 @@
 """
 from __future__ import annotations
 
-import fcntl
+import filelock as fcntl
 import json
 import math
 import os
@@ -1101,7 +1101,7 @@ def write_turns(payload: dict) -> None:
         return
     SESS_DIR.mkdir(parents=True, exist_ok=True)
     sp = SESS_DIR / f"{sid}.json"
-    with open(sp.with_suffix(".lock"), "w") as lk:
+    with open(sp.with_suffix(".lock"), "a+b") as lk:
         fcntl.flock(lk, fcntl.LOCK_EX)  # 同一会话的 Stop / SessionEnd 串行
         st = load_state(sp)
         offset = int(st.get("offset", 0))
@@ -1156,7 +1156,7 @@ def write_mimo_turns(payload: dict) -> None:
     msgs = messages_mimo(payload.get("trajectory") or [], host=host)
     SESS_DIR.mkdir(parents=True, exist_ok=True)
     sp = SESS_DIR / f"{sid}.json"
-    with open(sp.with_suffix(".lock"), "w") as lk:
+    with open(sp.with_suffix(".lock"), "a+b") as lk:
         fcntl.flock(lk, fcntl.LOCK_EX)
         st = load_state(sp)
         if not st.get("everos_session_id"):
@@ -1197,7 +1197,7 @@ def sync_local_memory(limit: int | None = None) -> None:
     """Claude Code 本地记忆（~/.claude/projects/*/memory/*.md）新增或改动后同步进 EverOS。"""
     ensure_writable()
     STATE.mkdir(parents=True, exist_ok=True)
-    with open(STATE / "localmem.lock", "w") as lk:
+    with open(STATE / "localmem.lock", "a+b") as lk:
         try:
             fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
@@ -1260,7 +1260,7 @@ def sweep(force: bool = False) -> None:
         return
     SWEEP_MARK.touch()
     for p in sorted(SESS_DIR.glob("*.json")):
-        with open(p.with_suffix(".lock"), "w") as lk:
+        with open(p.with_suffix(".lock"), "a+b") as lk:
             try:
                 fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except OSError:

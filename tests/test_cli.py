@@ -126,7 +126,7 @@ class CliProcessTests(unittest.TestCase):
         env = dict(self.env)
         env.update(extra_env or {})
         self.network_log.unlink(missing_ok=True)
-        return subprocess.run([str(ENTRY), *args], cwd=self.cwd, env=env,
+        return subprocess.run([sys.executable, "-X", "utf8", str(ENTRY), *args], cwd=self.cwd, env=env,
                               text=True, capture_output=True, timeout=10)
 
     def configured_env(self, api):
