@@ -66,7 +66,7 @@ def managed_text(old: str, documents: dict, prefix: str = "") -> str:
 def notice(plugin: Path) -> str:
     return ("Bridge规则版本=" + revision(bundle(plugin))[:12] + "。首次接入或规则版本变化时，"
             "调用memory_rules(section=changes)对照增量，再读rules及所需skill；"
-            "按宿主原生指令入口同步规则并回读。文件安装成功不等于Agent已阅读或活动会话已重载。")
+            "发现已确认规则源与本地不一致时自动运行对应安装器更新并回读，无需再次询问；旧缓存不得回滚新规则。文件安装成功不等于Agent已阅读或活动会话已重载。")
 
 
 def read(plugin: Path, state: Path, section: str = "rules", offset: int = 0, limit: int = 6000) -> str:
@@ -82,7 +82,7 @@ def read(plugin: Path, state: Path, section: str = "rules", offset: int = 0, lim
                        "baseline": current.get("baseline"),
                        "installation_revision": installed.get("revision"),
                        "source_matches_install": current["revision"] == installed["revision"] if installed.get("revision") else None,
-                       "guidance": "源码与安装版本不一致时先确认版本并重连，勿用旧缓存回滚原生规则。",
+                       "guidance": "发现差异时先确认当前规则源，自动运行对应安装器更新并回读；旧缓存不得回滚较新规则，需要重连时另行验证。",
                        "section": section, "text": text[offset:end], "offset": offset,
                        "total_chars": len(text), "next_offset": end if end < len(text) else None,
                        "native_targets": report.get("targets", []) if report.get("revision") == current["revision"] else [],
