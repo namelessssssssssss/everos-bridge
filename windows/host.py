@@ -18,11 +18,15 @@ import win_rules as rulebook
 class WindowsHost:
     def __init__(self, repo, dry=False):
         self.repo, self.dry = Path(repo).resolve(), dry
-        self.home = Path(os.environ.get("EVEROS_INSTALL_HOME", str(Path.home())))
-        self.everos = Path(os.environ.get("EVEROS_HOME", str(self.home / ".everos")))
+        # absolute() keeps lexical reparse-point components for private_home's
+        # validation; resolve() here could hide a junction before it is checked.
+        self.home = Path(os.environ.get("EVEROS_INSTALL_HOME", str(Path.home()))).expanduser().absolute()
+        self.everos = Path(os.environ.get("EVEROS_HOME", str(self.home / ".everos"))).expanduser().absolute()
         self.environment = dict(os.environ, EVEROS_HOME=str(self.everos), PYTHONUTF8="1")
         if "EVEROS_INSTALL_HOME" in os.environ:
             self.environment.setdefault("CODEX_HOME", str(self.home / ".codex"))
+        if self.environment.get("CODEX_HOME"):
+            self.environment["CODEX_HOME"] = str(Path(self.environment["CODEX_HOME"]).expanduser().absolute())
         self.hook = self.repo / "plugin/everos/hook.py"
 
     def mcp_timeout_seconds(self):
@@ -68,9 +72,32 @@ class WindowsHost:
         if self.dry:
             print("  [dry-run] " + shlex.join([str(arg) for arg in args]))
             return ""
-        result = subprocess.run([str(arg) for arg in args], env=self.environment, text=True,
+        command = [str(arg) for arg in args]
+        environment = self.environment
+        if command[0] == "codex":
+            command[0] = self.codex_path()
+            if Path(command[0]).suffix.lower() in (".cmd", ".bat"):
+                # cmd expands these variables once. Data stays inside quotes;
+                # percent signs are not recursively expanded and delayed !
+                # expansion is disabled. Installer arguments cannot contain
+                # quotes/newlines (neither can Windows paths).
+                environment = dict(self.environment)
+                for index, argument in enumerate(command):
+                    if any(char in argument for char in ('"', '\r', '\n', '\0')):
+                        raise ValueError("Unsupported quote/newline in Codex batch argument")
+                    environment["EVEROS_CLI_ARG_" + str(index)] = argument
+                quoted = ' '.join('"%EVEROS_CLI_ARG_{}%"'.format(i) for i in range(len(command)))
+                shell = str(Path(os.environ["SystemRoot"]) / "System32/cmd.exe")
+                command = '"{}" /d /v:off /s /c "{}"'.format(shell, quoted)
+        result = subprocess.run(command, env=environment, text=True,
                                 stdout=subprocess.PIPE if capture else None, check=True)
         return result.stdout if capture else ""
+
+    def codex_path(self):
+        path = shutil.which("codex", path=self.environment.get("PATH"))
+        if not path:
+            raise ValueError("Codex CLI is required on PATH")
+        return str(Path(path).absolute())
 
     def edit(self, path, text, mode=None):
         if self.dry:

@@ -13,12 +13,9 @@ import subprocess
 import sys
 
 from config_helpers import backup, codex_tool_timeout, enable_codex_hooks, set_codex_tool_timeout
+from cli_launcher import launcher_scripts, ps_quote
 from host import WindowsHost
 from platform_runtime import adapt, replace
-
-
-def ps_quote(value):
-    return "'" + str(value).replace("'", "''") + "'"
 
 
 def hook_command(python, hook, home):
@@ -80,13 +77,7 @@ class WindowsInstaller(WindowsHost):
     def install_cli(self):
         target = self.repo / "plugin/everos/cli.py"
         # These managed launchers can be refreshed, but unrelated commands survive.
-        command = '@"{}" -X utf8 "{}" %*\n'.format(
-            str(self.python).replace("%", "%%"), str(target).replace("%", "%%"))
-        scripts = {
-            "everos.cmd": "@rem everos-bridge managed launcher\n@setlocal DisableDelayedExpansion\n" + command,
-            "everos.ps1": "# everos-bridge managed launcher\n& {} -X utf8 {} @args\nexit $LASTEXITCODE\n".format(
-                ps_quote(self.python), ps_quote(target)),
-        }
+        scripts = launcher_scripts(self.python, target)
         for name, text in scripts.items():
             path = self.home / ".local/bin" / name
             lines = path.read_text(encoding="utf-8").splitlines() if path.is_file() else []
@@ -158,8 +149,7 @@ class WindowsInstaller(WindowsHost):
         return target
 
     def install(self):
-        if not shutil.which("codex"):
-            raise ValueError("Codex CLI is required on PATH")
+        self.codex_path()  # Resolve .exe/.cmd before writing any configuration.
         self.mcp_timeout_seconds()  # Validate before writing credentials/config.
         self.private_home()
         self.config()
