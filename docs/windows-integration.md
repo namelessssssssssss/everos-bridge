@@ -11,15 +11,17 @@ Set-Location "$env:USERPROFILE\.everos-bridge"
 
 未自动找到 Python 时，给 `-Python` 传实际 `python.exe` 的绝对路径；安装器会探测解释器版本并跳过 Windows Store 的占位入口。凭据沿用环境变量或 `$EVEROS_HOME/config.env`；缺失时在交互终端输入，API key 隐藏输入。不要在提交、文档或命令示例里填实际值。
 
-平台隔离：Windows 安装、配置编辑、锁、运行快照生成和测试全部位于 `windows/`，不导入 Unix 安装器。`install.sh`、`scripts/`、`plugin/`、`bin/`、`cloud/`、原有测试与 CI 保持主干版本；`windows/linux-baseline.json` 为 40 个现有文件保存源码指纹，测试逐项比对。Windows 只读复用检索和写入算法，在仓外生成自己的运行副本；平台适配只应用到这个副本。每个适配点校验原文锚点和出现次数，上游结构变化时拒绝构建，要求重新审阅。Windows 不会修改 Linux 的源码、hook 定义或安装配置。
+平台隔离：Windows 安装、配置编辑、锁、运行快照生成和测试全部位于 `windows/`，不导入 Unix 安装器。`install.sh`、`scripts/`、`plugin/`、`bin/`、`cloud/`、原有测试与 CI 保持主干版本；`windows/linux-baseline.json` 为 47 个现有文件保存源码指纹，测试逐项比对。Linux 主干有主动变更时，须审阅后显式更新 Windows 指纹基线；本次基线包含已合并的 Doubao 接入。Windows 只读复用检索和写入算法，在仓外生成自己的运行副本；平台适配只应用到这个副本。每个适配点校验原文锚点和出现次数，上游结构变化时拒绝构建，要求重新审阅。Windows 不会修改 Linux 的源码、hook 定义或安装配置。
 
 安装动作：
 
 - 创建或复用 `%USERPROFILE%\.everos`（可用 `EVEROS_HOME` 覆盖），移除目录的继承 ACL，并为当前用户和 SYSTEM 授权；拒绝数据根位于源码 checkout 内或穿过 reparse point。
+- 生成配置前固定 `EVEROS_HOME`、`EVEROS_INSTALL_HOME` 和显式 `CODEX_HOME` 的绝对路径；绝对化保留 reparse point 的词面组件，检查前不调用 `resolve()` 隐藏 junction。跨工作目录启动时仍使用同一数据根。
+- Codex 命令先解析实际 CLI 路径；支持 `.exe` 与 npm `.cmd`/`.bat` shim。批处理参数经独立环境槽一次展开，关闭 delayed expansion，不把路径或参数拼入 shell 程序正文。
 - Windows 独立实现唯一备份、原子替换与 EverOS 原生规则管理块；同步后回读 Codex 全局入口，只管理当前宿主。
 - 将插件生成到 `.everos/runtime/windows-<内容摘要>/`，以该快照注册本地插件市场。hook 的 `commandWindows` 使用编码的 PowerShell 命令，绑定绝对 Python、hook 和数据路径；所有 Python 入口启用 UTF-8。每个快照版本独立，旧快照和旧插件缓存保留给正在运行的聊天。
 - MCP 使用同一快照和同一 `EVEROS_HOME`。提问 hook 与 MCP 的外层超时至少为 `EVEROS_AGENTIC_TIMEOUT + 10` 秒，保留更大的现有 MCP 值。
-- `PROTOCOL.md` 以普通文件副本提供稳定入口；只读 CLI 安装为 `.local/bin/everos.cmd` 和 `everos.ps1`，不需要符号链接。命令目录未在 PATH 时可以使用完整路径。
+- `PROTOCOL.md` 以普通文件副本提供稳定入口；只读 CLI 安装为 ASCII `everos.cmd` 与 UTF-8 BOM `everos.ps1`，不需要符号链接。batch 用 `%~dp0` 定位同目录脚本，避免代码页解码非 ASCII 路径；PowerShell 使用明确的 Windows argv 引用保留空参数、引号和末尾反斜杠。命令目录未在 PATH 时可以使用完整路径。
 - 运行真实只读 doctor；失败返回非零。没有凭据、没有加载新会话或尚未信任 hook 时，不能将接线完成等同于完整验收。
 
 ```powershell

@@ -80,12 +80,33 @@ class WindowsInstaller(WindowsHost):
     def install_cli(self):
         target = self.repo / "plugin/everos/cli.py"
         # These managed launchers can be refreshed, but unrelated commands survive.
-        command = '@"{}" -X utf8 "{}" %*\n'.format(
-            str(self.python).replace("%", "%%"), str(target).replace("%", "%%"))
         scripts = {
-            "everos.cmd": "@rem everos-bridge managed launcher\n@setlocal DisableDelayedExpansion\n" + command,
-            "everos.ps1": "# everos-bridge managed launcher\n& {} -X utf8 {} @args\nexit $LASTEXITCODE\n".format(
-                ps_quote(self.python), ps_quote(target)),
+            # ASCII-only batch source; %~dp0 is expanded as Unicode by cmd.exe.
+            "everos.cmd": '@rem everos-bridge managed launcher\n@echo off\n@setlocal DisableDelayedExpansion\npowershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0everos.ps1" %*\n@exit /b %ERRORLEVEL%\n',
+            # Windows PowerShell 5.1 needs a BOM to decode Unicode script paths.
+            "everos.ps1": "\ufeff# everos-bridge managed launcher\n" + r'''
+$ErrorActionPreference = 'Stop'
+function Quote-WindowsArgument([string]$value) {
+    $value = [regex]::Replace($value, '(\\*)"', '$1$1\"')
+    $value = [regex]::Replace($value, '(\\+)$', '$1$1')
+    return '"' + $value + '"'
+}
+$start = New-Object System.Diagnostics.ProcessStartInfo
+$start.UseShellExecute = $false
+$start.CreateNoWindow = $true
+$start.RedirectStandardOutput = $true
+$start.RedirectStandardError = $true
+''' + "$start.FileName = {}\n$arguments = @('-X', 'utf8', {}) + $args\n".format(
+                ps_quote(self.python), ps_quote(target)) + r'''
+$start.Arguments = ($arguments | ForEach-Object { Quote-WindowsArgument ([string]$_) }) -join ' '
+$process = [System.Diagnostics.Process]::Start($start)
+$stdout = $process.StandardOutput.BaseStream.CopyToAsync([Console]::OpenStandardOutput())
+$stderr = $process.StandardError.BaseStream.CopyToAsync([Console]::OpenStandardError())
+$process.WaitForExit()
+[void]$stdout.GetAwaiter().GetResult()
+[void]$stderr.GetAwaiter().GetResult()
+exit $process.ExitCode
+''',
         }
         for name, text in scripts.items():
             path = self.home / ".local/bin" / name
@@ -158,8 +179,7 @@ class WindowsInstaller(WindowsHost):
         return target
 
     def install(self):
-        if not shutil.which("codex"):
-            raise ValueError("Codex CLI is required on PATH")
+        self.codex_path()  # Resolve .exe/.cmd before writing any configuration.
         self.mcp_timeout_seconds()  # Validate before writing credentials/config.
         self.private_home()
         self.config()

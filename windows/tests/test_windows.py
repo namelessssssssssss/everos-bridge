@@ -87,7 +87,8 @@ class WindowsSetupTests(unittest.TestCase):
         installer.install_cli()
         installer.install_cli()
         launcher = self.home / ".local/bin/everos.cmd"
-        self.assertIn(str(installer.python), launcher.read_text(encoding="utf-8"))
+        self.assertTrue(launcher.read_bytes().isascii())
+        self.assertTrue(launcher.with_suffix(".ps1").read_bytes().startswith(b'\xef\xbb\xbf'))
         launcher.write_text("another program\n", encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "未覆盖"):
             installer.install_cli()
