@@ -1,5 +1,5 @@
 {
-  "source_revision": "5b2311f6809ade50b166cdc137dbc2e92afd1340",
+  "source_revision": "f8fe57e5f0e5b3a7d9b00becf0ae66457121a8af",
   "sha256": {
     ".agents/plugins/marketplace.json": "b8ea166ea2b7be9b440b456735629a067dab2e179b5e49c60b3198578aefdf16",
     ".claude-plugin/marketplace.json": "da739a75bd93d089278354f195d2a70b1bb63792345e88f6b40081da84737b22",
@@ -28,13 +28,13 @@
     "scripts/eval/fixture_server.py": "834ccd6e342f7a96c3b5967539408d8fb362e0cb114299ece2e177c93f0da72a",
     "scripts/eval/judge_retrieval.py": "bf887c04b7dbb0222cc1ef0f81891287efb52004c73b836d46063db34e32d4ca",
     "scripts/eval/run_retrieval.py": "c649de270964a756a7389af6cdba1bb19d3e0c2c9221b5901362dcd8dff8735b",
-    "scripts/install_config.py": "b217044fddf579022acab15a2438a7e1b501765626d543d4ab8dbff9d9484b93",
+    "scripts/install_config.py": "af96e6124d3121c64a7919a93dc15e06120cdc58b100bd27f9d5436614ff8091",
     "scripts/validate_clients.py": "9e99de6b9495fe823d5d923146b0fb4b853f3f53f8c2f80a61264d3862b89d6b",
     "scripts/validate_trae.py": "08bcedc3f8b451dec60455e780b8ce56824ab552495a4e80bb8b1d492fddb96c",
     "tests/test_cli.py": "c3df28fce4296a50fba873d3ec586d4686e564e14794ef15db9c503bd1c85847",
     "tests/test_core_regressions.py": "eb4e05b8ef8a966684bd65df8988cf39fa5a93068887ab5dda2f07b8731bb193",
     "tests/test_harness_audit.py": "ea8f2a7fa406e04b81a7a6aef423352a172b22a4ea717d72430d0767595a5e99",
-    "tests/test_install.py": "98a506c2b79d1ff51fa35c9dcd08f3bdd5abcd8aabf2dab6f1b400a71c413a5e",
+    "tests/test_install.py": "c7dc3ded5dad7aa1220c9da4de9ca9215703227b29169e34107d6985aa51c367",
     "tests/test_mcp.py": "1c053be264bdf1788e1f1c1ceac1fbe3fe0ef6762efff7aa61f648f0e211f271",
     "tests/test_mimo.py": "45575ed7861be03659f53db4e7a63c4ca077b72971004349fbd738f3ad813cdb",
     "tests/test_mimo_workflow.py": "b9287a7e32eb5804511799c1a5182aa147d0c61c374f02c353235e5a80a617d1",
