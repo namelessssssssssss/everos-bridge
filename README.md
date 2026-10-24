@@ -82,6 +82,8 @@ CLI同样支持 `everos search "当前历史问题" --context "新线索" --sess
 
 ## 新设备 / 新工作区
 
+**原生 Windows（Codex CLI / App）**：使用 PowerShell 运行 `install.ps1`，先用 `-DryRun` 预览；Python 不在 PATH 时通过 `-Python` 指定实际解释器。支持备份、UTF-8、原生锁和无需管理员权限的安装。Windows 的凭据权限使用 ACL；接线范围和新会话验收见 [Windows 接入](docs/windows-integration.md)。
+
 把下面这句话发给任意 agent：
 
 > 用 gh 把私有仓库 namelessssssssssss/everos-bridge 拉到 ~/.everos-bridge，读里面的 AGENTS.md，按步骤把 EverOS 记忆接到你自己和这台机器上的其他 agent。

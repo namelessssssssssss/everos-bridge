@@ -60,6 +60,8 @@
 
 ## 已接入宿主速查
 
+原生 Windows Codex 单独使用 `install.ps1`，覆盖 L1/L2 和待信任的 L3/L4 定义；不推定其他 Windows 宿主已支持。安装、回归和验收边界见 [Windows 接入](windows-integration.md)。
+
 | 宿主 | L1 MCP | L2 指令 | L3 提问前注入 | L4 采集 | 关键差异 |
 | --- | --- | --- | --- | --- | --- |
 | Claude Code | 插件内 `claude-mcp.json` | `~/.claude/CLAUDE.md`（可选） | SessionStart（画像）+ UserPromptSubmit，输出 JSON `additionalContext` | Stop，读 transcript_path（JSONL） | 本地市场原地加载；SessionEnd 只有约 1.5 秒；注入单条上限 1 万字，对用户不可见 |
