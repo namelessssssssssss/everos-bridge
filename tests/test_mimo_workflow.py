@@ -12,7 +12,7 @@ import recall
 ROOT = Path(__file__).resolve().parents[1]
 
 
-@unittest.skipUnless(shutil.which('node') and os.name != 'nt', 'MiMo uses its Unix python3 launcher; Windows installer targets Codex')
+@unittest.skipUnless(shutil.which('node'), 'Node is needed for the MiMo Plugin callback contract')
 class MimoWorkflowCallbacks(IsolatedCore):
     def test_tool_output_reminder_and_compaction_reset_use_shared_core(self):
         source = f'''

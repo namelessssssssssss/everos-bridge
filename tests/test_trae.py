@@ -85,7 +85,7 @@ class TraeTests(IsolatedCore):
         self.assertEqual([len(m["content"]) for m in msgs[1:]], [15000, 15000])
 
     def test_runtime_home_respects_both_host_directories(self):
-        with patch.dict(os.environ, {"TRAE_HOME": str(self.root / "shared"), "USERPROFILE": str(self.root)}, clear=True):
+        with patch.dict(os.environ, {"TRAE_HOME": str(self.root / "shared")}, clear=True):
             self.assertEqual(trae.runtime_home(), (self.root / "shared/cli").resolve())
         self.assertEqual(trae.runtime_home(), self.runtime)
 
@@ -112,7 +112,6 @@ class TraeTests(IsolatedCore):
         with sqlite3.connect(db) as conn:
             conn.execute("CREATE TABLE threads (id TEXT, rollout_path TEXT)")
             conn.execute("INSERT INTO threads VALUES (?, ?)", ("test_session", str(path)))
-        conn.close()  # Connection context commits but does not close the Windows handle.
         self.assertEqual(trae.transcript("test_session"), path)
         db.write_text("bad index")
         self.assertEqual(trae.transcript("test_session"), path)

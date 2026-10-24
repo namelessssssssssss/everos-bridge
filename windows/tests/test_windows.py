@@ -10,11 +10,10 @@ import time
 import unittest
 from unittest.mock import patch
 
-REPO = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO / "plugin/everos"))
-sys.path.insert(0, str(REPO / "scripts"))
-import filelock
-from install_windows import WindowsInstaller, hook_command
+REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO / "windows"))
+import windows_lock as filelock
+from install import WindowsInstaller, hook_command
 
 
 class ProcessLockTests(unittest.TestCase):
@@ -22,12 +21,12 @@ class ProcessLockTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "shared.lock"
             code = (
-                "import sys; sys.path.insert(0, sys.argv[1]); import filelock; "
+                "import sys; sys.path.insert(0, sys.argv[1]); import windows_lock as filelock; "
                 "f=open(sys.argv[2], 'a+b'); filelock.flock(f, filelock.LOCK_EX); "
                 "print('locked', flush=True); sys.stdin.readline()"
             )
             process = subprocess.Popen([sys.executable, "-X", "utf8", "-c", code,
-                                        str(REPO / "plugin/everos"), str(path)],
+                                        str(REPO / "windows"), str(path)],
                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
             try:
                 self.assertEqual(process.stdout.readline().strip(), "locked")
@@ -123,8 +122,10 @@ class WindowsSetupTests(unittest.TestCase):
 
     @unittest.skipUnless(os.name == "nt", "native background worker")
     def test_stop_worker_survives_hook_exit_and_writes_to_loopback_only(self):
+        sys.path.insert(0, str(REPO / "tests"))
         from test_cli import FakeEverOS
         self.home.mkdir(parents=True)
+        runtime = WindowsInstaller(REPO).snapshot()
         transcript = self.home / "synthetic.jsonl"
         transcript.write_text(json.dumps({"type": "response_item", "payload": {
             "type": "message", "role": "user", "content": [{"type": "input_text", "text": "Synthetic Windows worker check"}]}}) + "\n", encoding="utf-8")
@@ -135,7 +136,7 @@ class WindowsSetupTests(unittest.TestCase):
                                EVEROS_USER_ID="windows-fixture", EVEROS_API_KEY="fixture-key",
                                EVEROS_API_VERSION="v2", EVEROS_READ_V1="0", EVEROS_WRITE="1", PYTHONUTF8="1")
             payload = json.dumps({"session_id": "windows-worker", "hook_event_name": "Stop", "transcript_path": str(transcript)})
-            command = hook_command(sys.executable, REPO / "plugin/everos/hook.py", self.home / ".everos")
+            command = hook_command(sys.executable, runtime / "plugin/everos/hook.py", self.home / ".everos")
             result = subprocess.run(command.split(), env=environment, input=payload, text=True,
                                     encoding="utf-8", capture_output=True, timeout=10)
             self.assertEqual(result.returncode, 0, result.stderr)

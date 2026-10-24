@@ -41,15 +41,15 @@ def backup(path):
 def write_text(path, text, mode=None):
     """Keep permissions and replace atomically; never truncate an existing file."""
     path = Path(path)
-    old = path.read_text(encoding="utf-8") if path.exists() else None
-    if old == text and (mode is None or os.name == "nt" or path.stat().st_mode & 0o777 == mode):
+    old = path.read_text() if path.exists() else None
+    if old == text and (mode is None or path.stat().st_mode & 0o777 == mode):
         return
     backup(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     permissions = mode if mode is not None else (path.stat().st_mode & 0o777 if path.exists() else 0o600)
     fd, temporary = tempfile.mkstemp(prefix=".everos-install-", dir=str(path.parent))
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as output:
+        with os.fdopen(fd, "w") as output:
             output.write(text)
         os.chmod(temporary, permissions)
         os.replace(temporary, path)
@@ -301,7 +301,7 @@ class Installer:
         config = {}
         path = self.everos / "config.env"
         if path.exists():
-            for line in path.read_text(encoding="utf-8").splitlines():
+            for line in path.read_text().splitlines():
                 if "=" in line and not line.lstrip().startswith("#"):
                     key, value = line.split("=", 1)
                     if key.strip() == "EVEROS_AGENTIC_TIMEOUT":
@@ -365,7 +365,7 @@ class Installer:
     def config(self):
         path = self.everos / "config.env"
         print("== 配置（{}）".format(self.everos))
-        old = path.read_text(encoding="utf-8") if path.exists() else ""
+        old = path.read_text() if path.exists() else ""
         values, additions = env_values(old), {}
         for key in ("EVEROS_USER_ID", "EVEROS_API_KEY"):
             if not values.get(key):
@@ -395,7 +395,7 @@ class Installer:
         path = Path(path)
         if not path.exists() and not create:
             return
-        data = json.loads(path.read_text(encoding="utf-8").strip() or "{}") if path.exists() else {}
+        data = json.loads(path.read_text().strip() or "{}") if path.exists() else {}
         data.setdefault("mcpServers", {})["everos"] = {"command": "python3", "args": [str(self.mcp)], "env": {"EVEROS_HOME": str(self.everos)}}
         self.edit(path, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
 
@@ -403,7 +403,7 @@ class Installer:
         path = Path(path)
         if path.is_symlink():
             raise ValueError("EverOS native rule file is a symlink; preserve it and resolve the intended instruction source: " + str(path))
-        old = path.read_text(encoding="utf-8") if path.exists() else ""
+        old = path.read_text() if path.exists() else ""
         if prefix and rulebook.BEGIN in old and not re.search(r"^alwaysApply:\s*true\s*$", old, re.M):
             raise ValueError("EverOS Cursor rule is not Always Apply; preserve user's header and resolve before sync: " + str(path))
         text = rulebook.managed_text(old, rulebook.bundle(self.repo / "plugin"), prefix)
@@ -414,7 +414,7 @@ class Installer:
             if body != rulebook.bundle(self.repo / "plugin")["rules"] and body not in self.legacy_rules:
                 self.legacy_rules.append(body)
         self.edit(path, text)
-        if not self.dry and path.read_text(encoding="utf-8") != text:
+        if not self.dry and path.read_text() != text:
             raise ValueError("EverOS rule readback mismatch: " + str(path))
         return {"path": str(path), "status": "preview" if self.dry else "file_verified",
                 "changed": old != text}
@@ -440,7 +440,7 @@ class Installer:
             if want("codex", shutil.which("codex") or (codex / "config.toml").exists()):
                 # Codex prefers the nonempty override over AGENTS.md at this level.
                 override = codex / "AGENTS.override.md"
-                add("codex", override if override.exists() and override.read_text(encoding="utf-8").strip() else codex / "AGENTS.md")
+                add("codex", override if override.exists() and override.read_text().strip() else codex / "AGENTS.md")
             claude = Path(self.environment.get("CLAUDE_CONFIG_DIR", str(self.home / ".claude")))
             if want("claude", shutil.which("claude") or (claude / "settings.json").exists()):
                 add("claude", claude / "CLAUDE.md")
@@ -461,7 +461,7 @@ class Installer:
                 add("cursor", cursor / "rules/everos-bridge.mdc", "---\ndescription: EverOS memory workflow\nalwaysApply: true\n---\n")
             mimo = Path(self.environment.get("XDG_CONFIG_HOME") or (self.home / ".config")) / "mimocode/mimocode.jsonc"
             if mimo.exists() and not self.rule_hosts:
-                data = json.loads(self.strip_jsonc(mimo.read_text(encoding="utf-8")))
+                data = json.loads(self.strip_jsonc(mimo.read_text()))
                 source = str(self.repo / "plugin/rules/everos-rules.md")
                 targets.append({"host": "mimocode", "path": str(mimo),
                                 "status": "instruction_reference_verified" if source in data.get("instructions", []) else "needs_install"})
@@ -527,7 +527,7 @@ class Installer:
         plugin = self.repo / "plugin/mimo/everos.mjs"
         plugin_url = "file://" + str(plugin).replace(" ", "%20")
         try:
-            data = json.loads(self.strip_jsonc(path.read_text(encoding="utf-8"))) if path.exists() else {}
+            data = json.loads(self.strip_jsonc(path.read_text())) if path.exists() else {}
         except ValueError:
             raise ValueError(f"无法解析 {path}；请手工合并 EverOS 的 mcp/plugin/instructions")
         if not isinstance(data, dict):
@@ -623,11 +623,11 @@ class Installer:
         source = self.repo / "plugin/skills/everos-memory/SKILL.md"
         target = skills_root / "everos-memory/SKILL.md"
         marker = self.everos / "state/install/everos-memory-daimon.sha256"
-        text = source.read_text(encoding="utf-8")
+        text = source.read_text()
         digest = hashlib.sha256(text.encode()).hexdigest()
-        old = target.read_text(encoding="utf-8") if target.exists() else None
+        old = target.read_text() if target.exists() else None
         old_digest = hashlib.sha256(old.encode()).hexdigest() if old is not None else None
-        last = marker.read_text(encoding="utf-8").strip() if marker.exists() else None
+        last = marker.read_text().strip() if marker.exists() else None
         if old_digest == digest:
             print("  daimon skill everos-memory 已是最新")
         elif old is None:
@@ -655,8 +655,8 @@ class Installer:
         entries = listing["marketplaces"] if cli == "codex" else listing
         existing = next((entry for entry in entries if entry["name"] == "everos-bridge"), None)
         source = (existing or {}).get("marketplaceSource", {})
-        current = (source.get("source") or (existing or {}).get("root")) if cli == "codex" else (existing or {}).get("path")
-        local = (source.get("sourceType") == "local" or bool((existing or {}).get("root"))) if cli == "codex" else (existing or {}).get("source") == "directory"
+        current = source.get("source") if cli == "codex" else (existing or {}).get("path")
+        local = source.get("sourceType") == "local" if cli == "codex" else (existing or {}).get("source") == "directory"
         if existing and local and current and Path(current).resolve() == self.repo:
             return
         if existing:
@@ -664,10 +664,9 @@ class Installer:
         self.run([cli, "plugin", "marketplace", "add", self.repo])
         if cli == "codex":
             listing = json.loads(self.run([cli, "plugin", "marketplace", "list", "--json"], capture=True))
-            entry = next((entry for entry in listing["marketplaces"] if entry["name"] == "everos-bridge"), {})
-            source = entry.get("marketplaceSource", {})
-            current = source.get("source") or entry.get("root", "")
-            if not current or Path(current).resolve() != self.repo:
+            source = next((entry.get("marketplaceSource", {}) for entry in listing["marketplaces"]
+                           if entry["name"] == "everos-bridge"), {})
+            if source.get("sourceType") != "local" or Path(source.get("source", "")).resolve() != self.repo:
                 raise ValueError("Codex everos-bridge marketplace migration did not take effect")
 
     def mcp_cli(self, cli):
@@ -710,7 +709,7 @@ class Installer:
             # registered version/cache. Explicitly refresh after install.
             self.run(["claude", "plugin", "update", "everos@everos-bridge", "--scope", "user"])
             if settings.exists():
-                data = json.loads(settings.read_text(encoding="utf-8"))
+                data = json.loads(settings.read_text())
                 for event, groups in data.get("hooks", {}).items():
                     retained = []
                     for group in groups:
@@ -724,7 +723,7 @@ class Installer:
         if self.only is None and shutil.which("codex"):
             print("== Codex")
             config = Path(self.environment.get("CODEX_HOME", str(self.home / ".codex"))) / "config.toml"
-            timeout = max(self.mcp_timeout_seconds(), codex_tool_timeout(config.read_text(encoding="utf-8") if config.exists() else ""))
+            timeout = max(self.mcp_timeout_seconds(), codex_tool_timeout(config.read_text() if config.exists() else ""))
             self.before_cli(config)
             if not self.dry:
                 config.parent.mkdir(parents=True, exist_ok=True)
@@ -733,7 +732,7 @@ class Installer:
                 self.run(["codex", "plugin", "add", "everos@everos-bridge"])
             self.mcp_cli("codex")
             self.edit(config, set_codex_tool_timeout(
-                enable_codex_hooks(config.read_text(encoding="utf-8") if config.exists() else ""), timeout))
+                enable_codex_hooks(config.read_text() if config.exists() else ""), timeout))
             print("  新或更新的 hook 定义需在新会话中按 Codex 提示审阅并信任，之后自动读写才生效。")
         for cli in ("traecli", "traex", "coco"):
             if shutil.which(cli):
@@ -748,7 +747,7 @@ class Installer:
                 match = re.search(r"(?:traecli|traex)\s+(\d+)\.(\d+)\.(\d+)", version, re.I)
                 if self.dry or (match and tuple(map(int, match.groups())) >= (0, 209, 1)):
                     path = runtime / "hooks.json"
-                    self.edit(path, trae_hooks(path.read_text(encoding="utf-8") if path.exists() else "", self.hook, runtime, self.mcp_timeout_seconds(),
+                    self.edit(path, trae_hooks(path.read_text() if path.exists() else "", self.hook, runtime, self.mcp_timeout_seconds(),
                                                tool_events=bool(match and tuple(map(int, match.groups())) >= (0, 210, 1))))
                     print("  TraeX L3/L4 已配置；新会话在 /hooks 审阅并信任 EverOS 当前定义后生效。")
                 else:
@@ -779,7 +778,7 @@ class Installer:
         self.mcp_json(cursor_home / "mcp.json", create=bool(cursor_installed))
         if cursor_installed:
             self.edit(cursor_home / "skills/everos-memory/SKILL.md",
-                      (self.repo / "plugin/skills/everos-memory/SKILL.md").read_text(encoding="utf-8"))
+                      (self.repo / "plugin/skills/everos-memory/SKILL.md").read_text())
         self.mcp_json(self.home / ".gemini/settings.json", create=bool(shutil.which("gemini")))
         kimi_home = Path(self.environment.get("KIMI_CODE_HOME", str(self.home / ".kimi-code")))
         kimi_cli = shutil.which("kimi")
@@ -793,7 +792,7 @@ class Installer:
             print("== Kimi Code")
             self.mcp_json(kimi_home / "mcp.json", create=True)
             config = kimi_home / "config.toml"
-            self.edit(config, kimi_hooks(config.read_text(encoding="utf-8") if config.exists() else "", self.hook, recall_timeout=self.mcp_timeout_seconds()))
+            self.edit(config, kimi_hooks(config.read_text() if config.exists() else "", self.hook, recall_timeout=self.mcp_timeout_seconds()))
             self.run([kimi_cli, "doctor"])
         elif kimi_home.is_dir():
             print("== Kimi Code（跳过：{} 已存在但找不到可执行的 kimi 命令；".format(kimi_home))
@@ -804,7 +803,7 @@ class Installer:
             print("== Kimi Work 桌面端")
             desktop_home = Path(os.environ.get("EVEROS_KIMI_DESKTOP_HOME", str(desktop.parent / "home")))
             self.mcp_json(desktop_home / "mcp.json", create=True)
-            self.edit(desktop, kimi_hooks(desktop.read_text(encoding="utf-8"), self.hook, desktop=True, recall_timeout=self.mcp_timeout_seconds()))
+            self.edit(desktop, kimi_hooks(desktop.read_text(), self.hook, desktop=True, recall_timeout=self.mcp_timeout_seconds()))
             self.sync_daimon_skill(desktop)
         mimo_cfg = Path(self.environment.get("XDG_CONFIG_HOME") or (self.home / ".config")) / "mimocode" / "mimocode.jsonc"
         mimo_home = self.home / "Library/Application Support/Xiaomi MiMo"

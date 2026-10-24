@@ -12,7 +12,9 @@ import stat
 import subprocess
 import sys
 
-from install_config import Installer, backup, codex_tool_timeout, enable_codex_hooks, set_codex_tool_timeout
+from config_helpers import backup, codex_tool_timeout, enable_codex_hooks, set_codex_tool_timeout
+from host import WindowsHost
+from platform_runtime import adapt, replace
 
 
 def ps_quote(value):
@@ -43,9 +45,9 @@ def private_acl(path, directory=False):
     subprocess.run(command, check=True, stdout=subprocess.DEVNULL)
 
 
-class WindowsInstaller(Installer):
+class WindowsInstaller(WindowsHost):
     def __init__(self, repo, dry=False):
-        super().__init__(repo, dry, rule_hosts=["codex"])
+        super().__init__(repo, dry)
         self.python = Path(sys.executable).resolve()
         self.environment["PYTHONUTF8"] = "1"
 
@@ -100,7 +102,8 @@ class WindowsInstaller(Installer):
                         if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc"] +
                        [self.repo / "PROTOCOL.md", self.repo / ".agents/plugins/marketplace.json"])
         digest = hashlib.sha256()
-        digest.update(Path(__file__).read_bytes())  # Hook-generation changes also need a new snapshot.
+        for source in sorted(Path(__file__).parent.glob("*.py")):
+            digest.update(source.name.encode() + b"\0" + source.read_bytes())
         for path in files:
             if path.is_symlink():
                 raise ValueError("Plugin sources must be ordinary files: " + str(path))
@@ -112,6 +115,7 @@ class WindowsInstaller(Installer):
             print("  [dry-run] 生成原生 Windows 插件快照：" + str(target))
             return target
         contents = {path.relative_to(self.repo): path.read_bytes() for path in files}
+        contents = adapt(contents, (Path(__file__).parent / "windows_lock.py").read_bytes())
         hooks_path = Path("plugin/hooks/hooks.json")
         hooks = json.loads(contents[hooks_path])
         command = hook_command(self.python, target / "plugin/everos/hook.py", self.everos)
@@ -124,8 +128,17 @@ class WindowsInstaller(Installer):
         contents[hooks_path] = (json.dumps(hooks, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
         manifest_path = Path("plugin/.codex-plugin/plugin.json")
         manifest = json.loads(contents[manifest_path])
-        manifest["version"] = manifest["version"].split("-")[0] + "-windows." + digest.hexdigest()[:12]
+        source_version = manifest["version"]
+        manifest["version"] = source_version.split("-")[0] + "-windows." + digest.hexdigest()[:12]
         contents[manifest_path] = (json.dumps(manifest, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+        claude_path = Path("plugin/.claude-plugin/plugin.json")
+        claude = json.loads(contents[claude_path])
+        claude["version"] = manifest["version"]
+        contents[claude_path] = (json.dumps(claude, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+        mcp_path = Path("plugin/everos/mcp_server.py")
+        contents[mcp_path] = replace(contents[mcp_path].decode("utf-8"),
+                                     "VERSION = " + json.dumps(source_version),
+                                     "VERSION = " + json.dumps(manifest["version"])).encode("utf-8")
         if target.exists():
             for relative, data in contents.items():
                 path = target / relative
@@ -160,7 +173,7 @@ class WindowsInstaller(Installer):
         self.before_cli(config)
         if not self.dry:
             codex.mkdir(parents=True, exist_ok=True)
-        marketplace = Installer(runtime, self.dry)
+        marketplace = WindowsHost(runtime, self.dry)
         marketplace.environment = self.environment
         with self.preserve_codex_cache():
             marketplace.marketplace("codex")
@@ -169,6 +182,7 @@ class WindowsInstaller(Installer):
                   "--env", "PYTHONUTF8=1", "--", self.python, "-X", "utf8", runtime / "plugin/everos/mcp_server.py"])
         current = config.read_text(encoding="utf-8") if config.exists() else previous
         self.edit(config, set_codex_tool_timeout(enable_codex_hooks(current), timeout))
+        self.hook = runtime / "plugin/everos/hook.py"
         self.finish()
 
 
@@ -184,7 +198,8 @@ def main():
     try:
         installer = WindowsInstaller(Path(__file__).resolve().parents[1], args.dry_run)
         if args.cli_only:
-            installer.install_cli()
+            runtime = installer.snapshot()
+            WindowsInstaller(runtime, args.dry_run).install_cli()
         elif args.rules_only:
             installer.sync_rules()
         else:

@@ -32,5 +32,5 @@ $options = @()
 if ($DryRun) { $options += '--dry-run' }
 if ($CliOnly) { $options += '--cli-only' }
 if ($RulesOnly) { $options += '--rules-only' }
-& $runtime -X utf8 (Join-Path $PSScriptRoot 'scripts\install_windows.py') @options
+& $runtime -X utf8 (Join-Path $PSScriptRoot 'windows\install.py') @options
 exit $LASTEXITCODE
