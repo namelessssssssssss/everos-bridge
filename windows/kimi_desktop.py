@@ -38,9 +38,18 @@ def _toml_command(lines, start, end):
         if re.match(r"^\s*command\s*=", line):
             raw = line.split("=", 1)[1].strip()
             try:
-                return json.loads(raw)
+                value, end = json.JSONDecoder().raw_decode(raw)
+                tail = raw[end:].strip()
+                if isinstance(value, str) and (not tail or tail.startswith("#")):
+                    return value
             except ValueError:
-                return raw.strip("\"'")
+                pass
+            if raw.startswith("'"):
+                end = raw.find("'", 1)
+                tail = raw[end + 1:].strip() if end > 0 else raw
+                if end > 0 and (not tail or tail.startswith("#")):
+                    return raw[1:end]
+            return raw.strip("\"'")
     return ""
 
 
@@ -72,15 +81,16 @@ class KimiDesktopHost(WindowsHost):
     def desktop_config(self):
         override = self.environment.get("EVEROS_KIMI_DESKTOP_CONFIG")
         if override:
-            return Path(override)
+            return Path(override).expanduser().absolute()
         share = self.environment.get("KIMI_SHARE_DIR")
         if share:
-            return Path(share) / "daimon/runtime/kimi-code/config.toml"
+            return (Path(share) / "daimon/runtime/kimi-code/config.toml").expanduser().absolute()
         appdata = Path(self.environment.get("APPDATA") or (self.home / "AppData/Roaming"))
-        return appdata / "kimi-desktop/daimon-share/daimon/runtime/kimi-code/config.toml"
+        return (appdata / "kimi-desktop/daimon-share/daimon/runtime/kimi-code/config.toml").expanduser().absolute()
 
     def desktop_home(self):
-        return Path(self.environment.get("EVEROS_KIMI_DESKTOP_HOME") or (self.desktop_config().parent / "home"))
+        return Path(self.environment.get("EVEROS_KIMI_DESKTOP_HOME") or
+                    (self.desktop_config().parent / "home")).expanduser().absolute()
 
     def install(self, command):
         config = self.desktop_config()

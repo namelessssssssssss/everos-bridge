@@ -17,7 +17,7 @@ except ImportError:
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "windows"))
 from host import WindowsHost
-from install import hook_command
+from install import WindowsInstaller, hook_command
 from kimi_desktop import KimiDesktopHost, is_everos_hook, kimi_hooks
 
 
@@ -98,6 +98,71 @@ class KimiDesktopTests(unittest.TestCase):
         self.assertEqual(kimi_hooks(first, command, 250), first)
         self.assertEqual(first.count("[[hooks]]"), 4)
         self.assertIn("timeout = 250", first)
+
+    def test_inline_toml_comment_does_not_duplicate_encoded_hook(self):
+        command = self.command()
+        first = kimi_hooks("", command, 250)
+        lines = first.splitlines()
+        for index, line in enumerate(lines):
+            if line.startswith("command = "):
+                lines[index] = line + " # native EverOS handler"
+        commented = "\n".join(lines) + "\n"
+        self.assertEqual(kimi_hooks(commented, command, 250), first)
+        self.assertEqual(kimi_hooks(commented, command, 250).count("[[hooks]]"), 4)
+
+    @unittest.skipUnless(os.name == "nt", "native encoded hook and background worker")
+    def test_stop_with_only_session_id_uses_bound_desktop_home(self):
+        import time
+        sys.path.insert(0, str(REPO / "tests"))
+        from test_cli import FakeEverOS
+
+        installer = WindowsInstaller(REPO)
+        with patch.object(WindowsInstaller, "private_home"), \
+                patch.object(WindowsInstaller, "config"), \
+                patch.object(WindowsInstaller, "protocol_link"), \
+                patch.object(WindowsInstaller, "install_cli"), \
+                patch.object(KimiDesktopHost, "run"):
+            installer.install_kimi_desktop()
+        text = self.desktop.read_text(encoding="utf-8")
+        raw = next(line.split("=", 1)[1].strip() for line in text.splitlines()
+                   if line.startswith("command = ") and "powershell.exe" in line)
+        command = json.JSONDecoder().raw_decode(raw)[0]
+        decoded = base64.b64decode(command.split()[-1]).decode("utf-16le")
+        desktop_home = self.desktop.parent / "home"
+        self.assertIn("EVEROS_KIMI_DESKTOP_HOME", decoded)
+        self.assertIn(str(desktop_home).replace("'", "''"), decoded)
+
+        session = "conv-stop-only"
+        wire = desktop_home / "sessions/wd_fixture" / session / "agents/main/wire.jsonl"
+        wire.parent.mkdir(parents=True)
+        rows = [
+            {"type": "context.append_message", "time": 1, "message": {
+                "role": "user", "origin": {"kind": "user"},
+                "content": [{"type": "text", "text": "<meta awareness=\"low\" />Stop fixture user"}]}},
+            {"type": "context.append_loop_event", "time": 2, "event": {
+                "type": "content.part", "stepUuid": "step-1",
+                "part": {"type": "text", "text": "Stop fixture assistant"}}},
+        ]
+        wire.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows), encoding="utf-8")
+
+        def respond(request):
+            return 200, {"data": {"status": "accumulated" if request["path"].endswith("/add") else "no_extraction"}}
+
+        with FakeEverOS(respond) as api:
+            environment = dict(os.environ, EVEROS_API_BASE=api.base,
+                               EVEROS_USER_ID="windows-fixture", EVEROS_API_KEY="fixture-key",
+                               EVEROS_API_VERSION="v2", EVEROS_READ_V1="0", EVEROS_WRITE="1", PYTHONUTF8="1")
+            payload = json.dumps({"session_id": session, "hook_event_name": "Stop"})
+            result = subprocess.run(command.split(), env=environment, input=payload, text=True,
+                                    encoding="utf-8", capture_output=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            ledger = self.home / ".everos/state/sessions" / (session + ".json")
+            deadline = time.monotonic() + 10
+            while not ledger.exists() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertTrue(ledger.exists(), "worker did not find the transcript using the bound desktop home")
+            self.assertEqual(json.loads(ledger.read_text(encoding="utf-8"))["messages"], 2)
+            self.assertTrue(any(row["path"].endswith("/add") for row in api.requests))
 
     def test_kimi_rule_sync_preserves_codex_target(self):
         WindowsHost(REPO).sync_rules()

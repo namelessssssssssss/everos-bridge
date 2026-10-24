@@ -6,6 +6,8 @@
     ".github/workflows/tests.yml": "09eef8f717f7a24ff352eb811a1179399c8b789c9e0ff4b2bb12ca4f97e18846",
     ".gitignore": "338125f5a062726be2a26fb750bab0a45f179d489c8c893c4a079de56b9e6013",
     "bin/everos": "ae3c1629c0cd5403d7254dd968d045997323a43cbbe2bdba35452c1c1a3980a6",
+    "bin/everos-doubao-ingest": "52758a3a40a2294a9e683c17f1d24f0ba4b55d4c2da7ee337d1c61d09200fd7f",
+    "bin/everos-mcp": "4e01e0c37157608799db19def1aef26bcecd5fa70be1ed72e2b8792ae224f701",
     "cloud/mcp.snippet.json": "a85d1f3309a0c9d878e7436e03b0d266a69e7e3f69259d38c19d151a994c50f4",
     "cloud/settings.snippet.json": "ba6bdc08d148f0992954a25ffecbeb554790b0fc60591fe3f7b2bc8b6025948e",
     "cloud/setup.sh": "c77047bb2907267beacb77066ad7daae2c2e45beaa15459d8d079b9526b5a511",
@@ -13,17 +15,21 @@
     "plugin/.claude-plugin/plugin.json": "5b97a41aed34e4a2d35b0a414f2584e9327e43e2b25db715cd89051b9600f441",
     "plugin/.codex-plugin/plugin.json": "c76af404e1dae40701b5157c42b154a0bc09ccf9c097b09dfa4ec4acb8888477",
     "plugin/claude-mcp.json": "b78545d0a9f4f76fd4bb93e271ad0601fd2989b86c5002bec89d9c0716036b56",
+    "plugin/doubao/check.sh": "760c5f2edba85c72bbe451404b3aa13a86a184aabcb97b2a747f3049218da700",
+    "plugin/doubao/doubao.py": "a5d79bde7d3a86ece72f3be5adb7ade0ac0498cca845a2e662d310a5d2d0d395",
+    "plugin/doubao/mcp_call.py": "6b950e6a4edd704e08cedfd3f39ca6093e677affdb72266519db33ad13e3a552",
     "plugin/everos/cli.py": "95b85e34eaf9c46f6b6722f93d3fd0ab797b4e90d11d067316d1a89fa5a6fd47",
     "plugin/everos/core.py": "d26a07cb12ba7cd1d9900a90bd2c8679fb4f24bad73e4d27a4ee958129588c91",
     "plugin/everos/hook.py": "07b78eea8889197caa6c897e6b4671f34bb18dcda010a1b47caf6902010c9ffd",
     "plugin/everos/mcp_server.py": "109800a5406aa931c176d4265841f4713553eee8a737a0a3afa445091809c51e",
     "plugin/everos/recall.py": "ccb08a78c228cb6479f8f1cb9143e667a3852cd842cecf3ffc826942e73f95b0",
-    "plugin/everos/rules.py": "f5f27b383b532de8505ddf92ce79288664004e0cb295c68d4830a73dcd04810b",
+    "plugin/everos/rules.py": "2299c9e1e4117afae0752bca9a271eabc5f8a4420dcc157d706b801aad38ddea",
     "plugin/everos/trae.py": "1787d3fd117dbaec8e0e34ec5ee89a4893221a50b3dc55d0eba1d6542acf15b9",
     "plugin/hooks/hooks.json": "ce36ac009560eb6a06d84287f5f7a8d278689f10cf9ecc54b3fbe757d326c20d",
     "plugin/mimo/everos.mjs": "b4fd831101ebb4ec423751f98b20d63ec721d514ac70d8ffdf11f709cdb33644",
-    "plugin/rules/everos-rules.md": "e44af3ca1b7b24b30234a5e82d0c8a202ba9e3bd569f0c7951ec55550bcb8840",
-    "plugin/skills/everos-memory/SKILL.md": "a89f2b6b8bbde7bc616493e964dea61a6d85694bd7fed4902240a45e18654a8c",
+    "plugin/rules/everos-rules.md": "d4ac0339167adb34d7960fe0fe5e83ab16121a882a9cd7271d89c63d5f49011d",
+    "plugin/skills/everos-memory-doubao/SKILL.md": "cbd735cff2f1f18cd38c738827f14df8e2412c7706b5dbfb2b7fdb60978af842",
+    "plugin/skills/everos-memory/SKILL.md": "7047838f46bd84ebcc5d16602ab6eb55d3c9b49de90310f7a9012ff26cde8515",
     "scripts/audit_harnesses.py": "f5dde18e4c37dea478bb26ae8ab0bee66294717e51fa5e39b25c61cdc1fb7505",
     "scripts/eval/fixture_server.py": "834ccd6e342f7a96c3b5967539408d8fb362e0cb114299ece2e177c93f0da72a",
     "scripts/eval/judge_retrieval.py": "bf887c04b7dbb0222cc1ef0f81891287efb52004c73b836d46063db34e32d4ca",
@@ -33,6 +39,7 @@
     "scripts/validate_trae.py": "08bcedc3f8b451dec60455e780b8ce56824ab552495a4e80bb8b1d492fddb96c",
     "tests/test_cli.py": "c3df28fce4296a50fba873d3ec586d4686e564e14794ef15db9c503bd1c85847",
     "tests/test_core_regressions.py": "eb4e05b8ef8a966684bd65df8988cf39fa5a93068887ab5dda2f07b8731bb193",
+    "tests/test_doubao.py": "0a2026399537979c7f73f66707441f49400d24d52a4fab2885a4a56ca4241b2d",
     "tests/test_harness_audit.py": "ea8f2a7fa406e04b81a7a6aef423352a172b22a4ea717d72430d0767595a5e99",
     "tests/test_install.py": "c7dc3ded5dad7aa1220c9da4de9ca9215703227b29169e34107d6985aa51c367",
     "tests/test_mcp.py": "1c053be264bdf1788e1f1c1ceac1fbe3fe0ef6762efff7aa61f648f0e211f271",
@@ -41,5 +48,8 @@
     "tests/test_recall_workflow.py": "246b01e96ef7d7d993268655ec580a92de33e6be9ac77db151ef167b94414531",
     "tests/test_rules.py": "4eb959870a3182490eb2317cb8284c1561cdef509e27138e3636df4cd286b667",
     "tests/test_trae.py": "199bb18b9929820857f4cef9afc235aa1c7fc488433884cb446698b510657c73"
-  }
+  },
+  "reviewed_changes": [
+    "Rule update only: plugin/everos/rules.py, plugin/rules/everos-rules.md, plugin/skills/everos-memory/SKILL.md; verified-source automatic rule update, memory/API behavior unchanged"
+  ]
 }

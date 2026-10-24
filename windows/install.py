@@ -13,19 +13,19 @@ import subprocess
 import sys
 
 from config_helpers import backup, codex_tool_timeout, enable_codex_hooks, set_codex_tool_timeout
+from cli_launcher import launcher_scripts, ps_quote
 from host import WindowsHost
 from platform_runtime import adapt, replace
 
 
-def ps_quote(value):
-    return "'" + str(value).replace("'", "''") + "'"
-
-
-def hook_command(python, hook, home, host_name=None):
+def hook_command(python, hook, home, host_name=None, environment=None):
     # EncodedCommand avoids nested cmd/PowerShell quoting and preserves Unicode,
     # spaces, apostrophes and shell metacharacters without executing their text.
-    host = "$env:EVEROS_HOST={}; ".format(ps_quote(host_name)) if host_name else ""
-    script = host + "$env:EVEROS_HOME={}; & {} -X utf8 {}; exit $LASTEXITCODE".format(
+    bindings = dict(environment or {})
+    if host_name:
+        bindings["EVEROS_HOST"] = host_name
+    prefix = "".join("$env:{}={}; ".format(name, ps_quote(value)) for name, value in bindings.items())
+    script = prefix + "$env:EVEROS_HOME={}; & {} -X utf8 {}; exit $LASTEXITCODE".format(
         ps_quote(home), ps_quote(python), ps_quote(hook))
     encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
     return "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand " + encoded
@@ -81,13 +81,7 @@ class WindowsInstaller(WindowsHost):
     def install_cli(self):
         target = self.repo / "plugin/everos/cli.py"
         # These managed launchers can be refreshed, but unrelated commands survive.
-        command = '@"{}" -X utf8 "{}" %*\n'.format(
-            str(self.python).replace("%", "%%"), str(target).replace("%", "%%"))
-        scripts = {
-            "everos.cmd": "@rem everos-bridge managed launcher\n@setlocal DisableDelayedExpansion\n" + command,
-            "everos.ps1": "# everos-bridge managed launcher\n& {} -X utf8 {} @args\nexit $LASTEXITCODE\n".format(
-                ps_quote(self.python), ps_quote(target)),
-        }
+        scripts = launcher_scripts(self.python, target)
         for name, text in scripts.items():
             path = self.home / ".local/bin" / name
             lines = path.read_text(encoding="utf-8").splitlines() if path.is_file() else []
@@ -97,7 +91,7 @@ class WindowsInstaller(WindowsHost):
             self.edit(self.home / ".local/bin" / name, text)
         print("  手动检索入口：" + str(self.home / ".local/bin/everos.cmd"))
 
-    def snapshot(self):
+    def snapshot(self, validate_only=False):
         """Immutable runtime/marketplace: old chats retain exact hook definitions."""
         files = sorted([path for path in (self.repo / "plugin").rglob("*")
                         if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc"] +
@@ -112,7 +106,7 @@ class WindowsInstaller(WindowsHost):
         budget = self.mcp_timeout_seconds()
         digest.update(json.dumps([str(self.python), str(self.everos), budget]).encode("utf-8"))
         target = self.everos / "runtime" / ("windows-" + digest.hexdigest()[:20])
-        if self.dry:
+        if self.dry and not validate_only:
             print("  [dry-run] 生成原生 Windows 插件快照：" + str(target))
             return target
         contents = {path.relative_to(self.repo): path.read_bytes() for path in files}
@@ -143,8 +137,10 @@ class WindowsInstaller(WindowsHost):
         if target.exists():
             for relative, data in contents.items():
                 path = target / relative
-                if not path.is_file() or path.read_bytes() != data:
+                if path.is_symlink() or not path.is_file() or path.read_bytes() != data:
                     raise ValueError("Existing runtime snapshot differs; preserve it for old chats: " + str(path))
+            return target
+        if validate_only:
             return target
         # Fully prepare before atomically making the snapshot visible.
         import tempfile
@@ -159,8 +155,7 @@ class WindowsInstaller(WindowsHost):
         return target
 
     def install(self):
-        if not shutil.which("codex"):
-            raise ValueError("Codex CLI is required on PATH")
+        self.codex_path()  # Resolve .exe/.cmd before writing any configuration.
         self.mcp_timeout_seconds()  # Validate before writing credentials/config.
         self.private_home()
         self.config()
@@ -185,6 +180,11 @@ class WindowsInstaller(WindowsHost):
         self.edit(config, set_codex_tool_timeout(enable_codex_hooks(current), timeout))
         self.hook = runtime / "plugin/everos/hook.py"
         self.finish()
+        self.record_source(runtime)
+
+    def record_source(self, runtime=None):
+        from provenance import record
+        record(self, runtime)
 
     def kimi_host(self, runtime=None):
         from kimi_desktop import KimiDesktopHost
@@ -198,15 +198,18 @@ class WindowsInstaller(WindowsHost):
 
     def install_kimi_desktop(self):
         self.mcp_timeout_seconds()
-        if not self.kimi_host().desktop_config().is_file():
+        desktop = self.kimi_host()
+        if not desktop.desktop_config().is_file():
             raise ValueError("未找到 Kimi Work 桌面端 config.toml；请先启动桌面端或设置 EVEROS_KIMI_DESKTOP_CONFIG")
+        desktop_home = desktop.desktop_home()
         self.private_home()
         self.config()
         self.protocol_link()
         runtime = self.snapshot()
         WindowsInstaller(runtime, self.dry).install_cli()
         command = hook_command(self.python, runtime / "plugin/everos/hook.py", self.everos,
-                               host_name="kimi_desktop")
+                               host_name="kimi_desktop",
+                               environment={"EVEROS_KIMI_DESKTOP_HOME": desktop_home})
         host = self.kimi_host(self.repo if self.dry else runtime)
         host.runtime = runtime
         host.install(command)
@@ -232,6 +235,7 @@ def main():
                 installer.sync_kimi_desktop_rules()
             else:
                 installer.sync_rules()
+                installer.record_source()
         elif args.kimi_desktop:
             installer.install_kimi_desktop()
         else:
