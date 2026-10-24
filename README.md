@@ -7,6 +7,7 @@
 - **方法论**：[docs/methodology.md](docs/methodology.md)。
 - **EverOS 诀窍、局限与坑点**：[docs/everos-notes.md](docs/everos-notes.md)。
 - **新 Agent 接入清单**：[docs/agent-onboarding.md](docs/agent-onboarding.md)。
+- **Doubao Work（豆包办公）接入**：[docs/doubao-integration.md](docs/doubao-integration.md)（无 MCP 注册、无 hook 的云端宿主）。
 
 ## 覆盖面
 
@@ -21,6 +22,7 @@
 | 旧 Coco、Gemini CLI | MCP + 全局规则文件 | 规则要求模型自己调用 | 同左 | — | ✅ |
 | Claude Desktop（含 Cowork）、Cursor | MCP | 由模型按说明调用 | 由模型按说明调用 | — | ✅ |
 | Claude Code on the web（云端） | setup script + 仓库级 hook + 网络密钥 | ✅ | ✅ | ✅ | ✅ |
+| Doubao Work（豆包办公云端） | 命令行 MCP 客户端 + 用户级 skill（无 hook） | ✅（模型按 skill 主动调用） | ✅（同左） | ✅（每轮主动跑 everos-doubao-ingest） | ✅（everos-mcp 调原版服务端） |
 
 Python 代码只用标准库，不用安装依赖；运行期 hook 失败放行，MCP 和安装器会明确报告失败。接口用 EverOS v2，v1 旧库在过渡期合并读取（`EVEROS_READ_V1=1`），做法轨迹仍按协议双写。
 
@@ -118,6 +120,9 @@ bash -n install.sh
 python3 scripts/validate_trae.py --out /tmp/everos-traex-validation
 ```
 
+Doubao Work 的采集器与安装步骤覆盖在 `tests/test_doubao.py` 与 `tests/test_install.py`
+（`everos-mcp` / `everos-doubao-ingest` 符号链接、用户 skill 同步），随上面的 discover 一起跑。
+
 测试使用临时配置、模拟 API 和宿主 CLI，不读取真实凭据，不修改本机 agent 配置，也不写入远端记忆。真实接入仍按 [Agent 接入清单](docs/agent-onboarding.md) 核验新会话注入、MCP 调用和写入回读；账号或 provider 缺少凭据时只说明限制，不能算通过。
 
 ## 云端（Claude Code on the web）
@@ -154,8 +159,13 @@ plugin/                           Claude Code 与 Codex 共用的插件目录
   everos/mcp_server.py            stdio MCP 服务：8 个 memory_* 工具
   everos/cli.py                   手动检索 CLI：search（与 MCP 共用配置和检索核心）
   mimo/everos.mjs                 MiMoCode Plugin API：L3 注入 + L4 trajectory 入库
+  doubao/                          Doubao Work（豆包办公）：无 hook 宿主的命令行通道
+    doubao.py                      main agent trajectory 解析 + 增量采集（复用 core 账本/写入）
+    mcp_call.py                    stdio MCP 客户端（bin/everos-mcp）
+    check.sh                       环境自检（随用户 skill 同步）
+  skills/everos-memory-doubao/     Doubao Work 用户级 skill（安装时同步为 everos-memory）
 .claude-plugin/marketplace.json   Claude Code 插件市场
-.agents/plugins/marketplace.json  Codex 插件市场
+.agents/plugins/marketplace.json   Codex 插件市场
 cloud/                            云端 setup script 与仓库级配置片段
 ```
 

@@ -1,0 +1,12 @@
+#!/usr/bin/env python3
+"""Bin entry: Doubao Work conversation capture (plugin/doubao/doubao.py)."""
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "plugin" / "everos"))
+sys.path.insert(0, str(ROOT / "plugin" / "doubao"))
+import doubao
+
+if __name__ == "__main__":
+    sys.exit(doubao.main())
