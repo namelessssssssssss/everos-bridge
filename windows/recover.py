@@ -20,12 +20,13 @@ from install import WindowsInstaller
 from platform_runtime import windows_rules
 import win_rules as rulebook
 import windows_lock
+from provenance import verify as verify_source
 
 
 def expected_runtime(installer):
     preview = WindowsInstaller(installer.repo, dry=True)
     with redirect_stdout(io.StringIO()):
-        return preview.snapshot()
+        return preview.snapshot(validate_only=True)
 
 
 def inspect(installer):
@@ -54,7 +55,7 @@ def inspect(installer):
         issues.append("plugin")
     if config.get("features", {}).get("hooks") is not True:
         issues.append("hooks")
-    if not (runtime / "plugin/everos/hook.py").is_file():
+    if not runtime.exists():
         issues.append("runtime")
     for name, text in launcher_scripts(installer.python, runtime / "plugin/everos/cli.py").items():
         target = installer.home / ".local/bin" / name
@@ -76,6 +77,7 @@ def inspect(installer):
 
 
 def recover(installer, check_only=False):
+    verify_source(installer)
     issues, runtime = inspect(installer)
     mode = "none"
     if issues and not check_only:
@@ -83,6 +85,7 @@ def recover(installer, check_only=False):
             mode = "rules"
             installer.sync_rules()
             installer.protocol_link()
+            installer.record_source(runtime)
         else:
             mode = "install"
             installer.install()

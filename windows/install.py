@@ -87,7 +87,7 @@ class WindowsInstaller(WindowsHost):
             self.edit(self.home / ".local/bin" / name, text)
         print("  手动检索入口：" + str(self.home / ".local/bin/everos.cmd"))
 
-    def snapshot(self):
+    def snapshot(self, validate_only=False):
         """Immutable runtime/marketplace: old chats retain exact hook definitions."""
         files = sorted([path for path in (self.repo / "plugin").rglob("*")
                         if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc"] +
@@ -102,7 +102,7 @@ class WindowsInstaller(WindowsHost):
         budget = self.mcp_timeout_seconds()
         digest.update(json.dumps([str(self.python), str(self.everos), budget]).encode("utf-8"))
         target = self.everos / "runtime" / ("windows-" + digest.hexdigest()[:20])
-        if self.dry:
+        if self.dry and not validate_only:
             print("  [dry-run] 生成原生 Windows 插件快照：" + str(target))
             return target
         contents = {path.relative_to(self.repo): path.read_bytes() for path in files}
@@ -133,8 +133,10 @@ class WindowsInstaller(WindowsHost):
         if target.exists():
             for relative, data in contents.items():
                 path = target / relative
-                if not path.is_file() or path.read_bytes() != data:
+                if path.is_symlink() or not path.is_file() or path.read_bytes() != data:
                     raise ValueError("Existing runtime snapshot differs; preserve it for old chats: " + str(path))
+            return target
+        if validate_only:
             return target
         # Fully prepare before atomically making the snapshot visible.
         import tempfile
@@ -174,6 +176,11 @@ class WindowsInstaller(WindowsHost):
         self.edit(config, set_codex_tool_timeout(enable_codex_hooks(current), timeout))
         self.hook = runtime / "plugin/everos/hook.py"
         self.finish()
+        self.record_source(runtime)
+
+    def record_source(self, runtime=None):
+        from provenance import record
+        record(self, runtime)
 
 
 def main():
@@ -192,6 +199,7 @@ def main():
             WindowsInstaller(runtime, args.dry_run).install_cli()
         elif args.rules_only:
             installer.sync_rules()
+            installer.record_source()
         else:
             installer.install()
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
