@@ -1,4 +1,4 @@
-"""Native Windows Codex installer. No Bash, symlinks, admin rights or pip needed."""
+"""Native Windows Codex/Kimi installer. No Bash, symlinks, admin rights or pip needed."""
 from __future__ import annotations
 
 import argparse
@@ -12,21 +12,28 @@ import stat
 import subprocess
 import sys
 
-from config_helpers import backup, codex_tool_timeout, enable_codex_hooks, set_codex_tool_timeout
+from config_helpers import (backup, codex_tool_timeout, enable_codex_hooks, merge_kimi_hooks,
+                            merge_kimi_mcp, set_codex_tool_timeout)
 from cli_launcher import launcher_scripts, ps_quote
 from host import WindowsHost
 from platform_runtime import adapt, replace
 
 
-def hook_command(python, hook, home, host_name=None, environment=None):
+def hook_command(python, hook, home, host_name=None, environment=None, host=None, kimi_home=None):
     # EncodedCommand avoids nested cmd/PowerShell quoting and preserves Unicode,
     # spaces, apostrophes and shell metacharacters without executing their text.
+    if host_name and host and host_name != host:
+        raise ValueError("Conflicting EVEROS_HOST values")
     bindings = dict(environment or {})
-    if host_name:
-        bindings["EVEROS_HOST"] = host_name
-    prefix = "".join("$env:{}={}; ".format(name, ps_quote(value)) for name, value in bindings.items())
-    script = prefix + "$env:EVEROS_HOME={}; & {} -X utf8 {}; exit $LASTEXITCODE".format(
-        ps_quote(home), ps_quote(python), ps_quote(hook))
+    bindings["PYTHONUTF8"] = "1"
+    selected_host = host_name or host
+    if selected_host:
+        bindings["EVEROS_HOST"] = selected_host
+    if kimi_home:
+        bindings["KIMI_CODE_HOME"] = str(kimi_home)
+    bindings["EVEROS_HOME"] = str(home)
+    script = "".join("$env:{}={}; ".format(name, ps_quote(value)) for name, value in bindings.items())
+    script += "& {} -X utf8 {}; exit $LASTEXITCODE".format(ps_quote(python), ps_quote(hook))
     encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
     return "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand " + encoded
 
@@ -47,8 +54,8 @@ def private_acl(path, directory=False):
 
 
 class WindowsInstaller(WindowsHost):
-    def __init__(self, repo, dry=False):
-        super().__init__(repo, dry)
+    def __init__(self, repo, dry=False, only=None):
+        super().__init__(repo, dry, only)
         self.python = Path(sys.executable).resolve()
         self.environment["PYTHONUTF8"] = "1"
 
@@ -155,6 +162,39 @@ class WindowsInstaller(WindowsHost):
         return target
 
     def install(self):
+        if self.only == "kimi":
+            self.install_kimi()
+        else:
+            self.install_codex()
+
+    def install_kimi(self):
+        if not self.kimi_detected():
+            raise ValueError("Kimi Code/Desktop was not found; set KIMI_CODE_HOME or create ~/.kimi-code")
+        timeout = self.mcp_timeout_seconds()
+        kimi = self.kimi_home()
+        mcp = kimi / "mcp.json"
+        previous = mcp.read_text(encoding="utf-8") if mcp.exists() else ""
+        merge_kimi_mcp(previous, self.python, self.repo / "plugin/everos/mcp_server.py",
+                       self.everos, kimi, timeout * 1000)
+        config = kimi / "config.toml"
+        old = config.read_text(encoding="utf-8") if config.exists() else ""
+        validation_command = hook_command(self.python, self.repo / "plugin/everos/hook.py", self.everos,
+                                          host="kimi", kimi_home=kimi)
+        merge_kimi_hooks(old, validation_command, timeout)
+        self.private_home()
+        self.config()
+        self.protocol_link()
+        runtime = self.snapshot()
+        WindowsInstaller(runtime, self.dry, only="kimi").install_cli()
+        server = runtime / "plugin/everos/mcp_server.py"
+        self.edit(mcp, merge_kimi_mcp(previous, self.python, server, self.everos, kimi, timeout * 1000))
+        command = hook_command(self.python, runtime / "plugin/everos/hook.py", self.everos,
+                               host="kimi", kimi_home=kimi)
+        self.edit(config, merge_kimi_hooks(old, command, timeout))
+        self.hook = runtime / "plugin/everos/hook.py"
+        self.finish()
+
+    def install_codex(self):
         self.codex_path()  # Resolve .exe/.cmd before writing any configuration.
         self.mcp_timeout_seconds()  # Validate before writing credentials/config.
         self.private_home()
@@ -222,11 +262,14 @@ def main():
     scope = parser.add_mutually_exclusive_group()
     scope.add_argument("--cli-only", action="store_true")
     scope.add_argument("--rules-only", action="store_true")
+    parser.add_argument("--only", choices=["codex", "kimi"], help="只接线指定宿主；也可限定 --rules-only")
     args = parser.parse_args()
+    if args.kimi_desktop and args.only:
+        parser.error("--kimi-desktop cannot be combined with --only; use --only kimi for ~/.kimi-code")
     if os.name != "nt" or sys.version_info < (3, 9):
         parser.error("Native Windows and Python >= 3.9 are required; use install.sh on Unix")
     try:
-        installer = WindowsInstaller(Path(__file__).resolve().parents[1], args.dry_run)
+        installer = WindowsInstaller(Path(__file__).resolve().parents[1], args.dry_run, args.only)
         if args.cli_only:
             runtime = installer.snapshot()
             WindowsInstaller(runtime, args.dry_run).install_cli()
@@ -235,7 +278,8 @@ def main():
                 installer.sync_kimi_desktop_rules()
             else:
                 installer.sync_rules()
-                installer.record_source()
+                if args.only != "kimi":
+                    installer.record_source()
         elif args.kimi_desktop:
             installer.install_kimi_desktop()
         else:

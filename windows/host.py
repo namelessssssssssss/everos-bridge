@@ -1,4 +1,4 @@
-"""Windows Codex host orchestration; never imports or edits the Unix installer."""
+"""Windows Codex/Kimi host orchestration; never imports or edits the Unix installer."""
 from contextlib import contextmanager
 import getpass
 import json
@@ -16,17 +16,20 @@ import win_rules as rulebook
 
 
 class WindowsHost:
-    def __init__(self, repo, dry=False):
-        self.repo, self.dry = Path(repo).resolve(), dry
+    def __init__(self, repo, dry=False, only=None):
+        self.repo, self.dry, self.only = Path(repo).resolve(), dry, only
         # absolute() keeps lexical reparse-point components for private_home's
         # validation; resolve() here could hide a junction before it is checked.
         self.home = Path(os.environ.get("EVEROS_INSTALL_HOME", str(Path.home()))).expanduser().absolute()
         self.everos = Path(os.environ.get("EVEROS_HOME", str(self.home / ".everos"))).expanduser().absolute()
+        self.explicit_kimi_home = bool(os.environ.get("KIMI_CODE_HOME"))
         self.environment = dict(os.environ, EVEROS_HOME=str(self.everos), PYTHONUTF8="1")
         if "EVEROS_INSTALL_HOME" in os.environ:
             self.environment.setdefault("CODEX_HOME", str(self.home / ".codex"))
-        if self.environment.get("CODEX_HOME"):
-            self.environment["CODEX_HOME"] = str(Path(self.environment["CODEX_HOME"]).expanduser().absolute())
+            self.environment.setdefault("KIMI_CODE_HOME", str(self.home / ".kimi-code"))
+        for key in ("CODEX_HOME", "KIMI_CODE_HOME"):
+            if self.environment.get(key):
+                self.environment[key] = str(Path(self.environment[key]).expanduser().absolute())
         self.hook = self.repo / "plugin/everos/hook.py"
 
     def mcp_timeout_seconds(self):
@@ -41,32 +44,58 @@ class WindowsHost:
             raise ValueError("EVEROS_AGENTIC_TIMEOUT must be positive and finite")
         return math.ceil(seconds + 10)
 
-    def sync_rules(self):
+    def kimi_home(self):
+        return Path(self.environment.get("KIMI_CODE_HOME", str(self.home / ".kimi-code")))
+
+    def kimi_detected(self):
+        return self.explicit_kimi_home or self.kimi_home().is_dir()
+
+    def sync_rules(self, hosts=None):
         from platform_runtime import windows_rules
         documents = rulebook.bundle(self.repo / "plugin")
         documents = {name: windows_rules(text) for name, text in documents.items()}
         state = self.everos / "state/rules"
         previous = rulebook.load(state / "current.json")
-        codex = Path(self.environment.get("CODEX_HOME", str(self.home / ".codex")))
-        override = codex / "AGENTS.override.md"
-        path = override if override.exists() and override.read_text(encoding="utf-8").strip() else codex / "AGENTS.md"
-        if path.is_symlink():
-            raise ValueError("Resolve the native instruction symlink before installing: " + str(path))
-        old = path.read_text(encoding="utf-8") if path.exists() else ""
-        text = rulebook.managed_text(old, documents)
-        self.edit(path, text)
-        if not self.dry and path.read_text(encoding="utf-8") != text:
-            raise ValueError("Native rule readback mismatch: " + str(path))
+        selected = hosts or ([self.only] if self.only else ["codex"] + (["kimi"] if self.kimi_detected() else []))
+        if "kimi" in selected and not self.kimi_detected():
+            raise ValueError("Kimi Code/Desktop was not found; set KIMI_CODE_HOME or create ~/.kimi-code")
+        paths = []
+        if "codex" in selected:
+            codex = Path(self.environment.get("CODEX_HOME", str(self.home / ".codex")))
+            override = codex / "AGENTS.override.md"
+            paths.append(("codex", override if override.exists() and override.read_text(encoding="utf-8").strip()
+                          else codex / "AGENTS.md"))
+        if "kimi" in selected:
+            paths.append(("kimi", self.kimi_home() / "AGENTS.md"))
+        reports = []
+        for host, path in paths:
+            if path.is_symlink():
+                raise ValueError("Resolve the native instruction symlink before installing: " + str(path))
+            old = path.read_text(encoding="utf-8") if path.exists() else ""
+            text = rulebook.managed_text(old, documents)
+            self.edit(path, text)
+            if not self.dry and path.read_text(encoding="utf-8") != text:
+                raise ValueError("Native rule readback mismatch: " + str(path))
+            reports.append({"host": host, "path": str(path),
+                            "status": "preview" if self.dry else "file_verified", "changed": old != text})
         current = rulebook.transition(documents, previous)
+        report = rulebook.load(state / "targets.json")
+        retained = report.get("targets", []) if report.get("revision") == current["revision"] else []
+        selected_hosts = {host for host, _ in paths}
+        merged = [row for row in retained if row.get("host") not in selected_hosts] + reports
+        targets = {"revision": current["revision"],
+                   "scope": sorted({row["host"] for row in merged if row.get("host")}), "targets": merged}
         self.edit(state / "current.json", json.dumps(current, ensure_ascii=False, indent=2) + "\n", 0o600)
-        targets = {"revision": current["revision"], "scope": ["codex"], "targets": [{"host": "codex", "path": str(path), "status": "preview" if self.dry else "file_verified", "changed": old != text}]}
         self.edit(state / "targets.json", json.dumps(targets, ensure_ascii=False, indent=2) + "\n", 0o600)
-        print("  Windows native rules " + current["revision"][:12] + "; read back " + str(path))
+        print("  Windows native rules " + current["revision"][:12] + "; read back " +
+              ", ".join(report["path"] for report in reports))
 
     def finish(self):
-        self.sync_rules()
+        self.sync_rules([self.only or "codex"])
         self.run([sys.executable, "-X", "utf8", self.hook, "--doctor"])
-        print("Preview only; no writes or API calls." if self.dry else "Installed. Review/trust hooks and validate in a new Codex chat.")
+        host = "Kimi" if self.only == "kimi" else "Codex"
+        print("Preview only; no writes or API calls." if self.dry else
+              "Installed. Review/trust hooks if prompted and validate in a new {} chat.".format(host))
 
     def run(self, args, capture=False):
         if self.dry:

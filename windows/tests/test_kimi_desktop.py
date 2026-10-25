@@ -174,6 +174,16 @@ class KimiDesktopTests(unittest.TestCase):
         self.assertEqual(report["scope"], ["codex", "kimi_desktop"])
         self.assertEqual({row["host"] for row in report["targets"]}, {"codex", "kimi_desktop"})
 
+    def test_all_three_rule_targets_survive_single_host_refresh(self):
+        with patch.dict(os.environ, {"KIMI_CODE_HOME": str(self.home / ".kimi-code")}):
+            WindowsHost(REPO).sync_rules()
+            WindowsHost(REPO, only="kimi").sync_rules()
+            KimiDesktopHost(REPO).sync_rules()
+            WindowsHost(REPO, only="kimi").sync_rules()
+        report = json.loads((self.home / ".everos/state/rules/targets.json").read_text(encoding="utf-8"))
+        self.assertEqual(report["scope"], ["codex", "kimi", "kimi_desktop"])
+        self.assertEqual({row["host"] for row in report["targets"]}, {"codex", "kimi", "kimi_desktop"})
+
     @unittest.skipUnless(os.name == "nt", "native PowerShell entrypoint")
     def test_powershell_kimi_preview_does_not_write_or_require_codex(self):
         before = {str(path.relative_to(self.home)): path.read_bytes()

@@ -1,6 +1,6 @@
-# 原生 Windows：Codex CLI / App 与 Kimi Work 桌面端
+# 原生 Windows：Codex、Kimi Code/Desktop 与 Kimi Work
 
-Windows 使用 PowerShell 安装入口，默认只配置 Codex；Kimi Work 桌面端通过 `-KimiDesktop` 显式接入，不要求 Codex CLI。其他宿主继续按各自文档接入；安装器不因为发现其目录就宣称支持。无需 WSL、Git Bash、管理员权限、符号链接或 pip 依赖。Python 需要 3.9 以上，Codex CLI 需要支持插件和 `commandWindows` hook。
+Windows 使用 PowerShell 安装入口，默认只配置 Codex；Kimi Code/Desktop 通过 `-Only kimi` 接入 `KIMI_CODE_HOME` 或 `~/.kimi-code`，Kimi Work 内嵌 runtime 通过独立的 `-KimiDesktop` 接入。两个 Kimi 路径都不要求 `kimi` 或 `codex` CLI，不能组合 `-Only` 与 `-KimiDesktop`。其他宿主继续按各自文档接入。无需 WSL、Git Bash、管理员权限、符号链接或 pip 依赖。Python 需要 3.9 以上，Codex CLI 需要支持插件和 `commandWindows` hook。
 
 ```powershell
 git clone https://github.com/namelessssssssssss/everos-bridge.git "$env:USERPROFILE\.everos-bridge"
@@ -12,32 +12,42 @@ Set-Location "$env:USERPROFILE\.everos-bridge"
 .\install.ps1 -KimiDesktop
 ```
 
-未自动找到 Python 时，给 `-Python` 传实际 `python.exe` 的绝对路径；安装器会探测解释器版本并跳过 Windows Store 的占位入口。凭据沿用环境变量或 `$EVEROS_HOME/config.env`；缺失时在交互终端输入，API key 隐藏输入。不要在提交、文档或命令示例里填实际值。
+Kimi Code/Desktop 单独接线（Desktop 不需要 CLI）：
 
-平台隔离：Windows 安装、配置编辑、锁、运行快照生成和测试全部位于 `windows/`，不导入 Unix 安装器。`install.sh`、`scripts/`、`plugin/`、`bin/`、`cloud/`、原有测试与 CI 保持主干版本；`windows/linux-baseline.json` 为 47 个现有文件保存源码指纹，测试逐项比对。Linux 主干有主动变更时，须审阅后显式更新 Windows 指纹基线；本次基线包含已合并的 Doubao 接入。Windows 只读复用检索和写入算法，在仓外生成自己的运行副本；平台适配只应用到这个副本。每个适配点校验原文锚点和出现次数，上游结构变化时拒绝构建，要求重新审阅。Windows 不会修改 Linux 的源码、hook 定义或安装配置。
+```powershell
+.\install.ps1 -DryRun -Only kimi
+.\install.ps1 -Only kimi
+```
+
+安装器优先使用显式 `KIMI_CODE_HOME`，否则检测 `~/.kimi-code`；显式 `-Only codex` 与默认 Codex 流程相同。未自动找到 Python 时，给 `-Python` 传实际 `python.exe` 的绝对路径；安装器会探测解释器版本并跳过 Windows Store 的占位入口。凭据沿用环境变量或 `$EVEROS_HOME/config.env`；缺失时在交互终端输入，API key 隐藏输入。不要在提交、文档或命令示例里填实际值。
+
+平台隔离：Windows 安装、配置编辑、锁、运行快照生成和测试全部位于 `windows/`，不导入 Unix 安装器。`install.sh`、`scripts/`、`plugin/`、`bin/`、`cloud/`、原有测试与 CI 保持主干版本；`windows/linux-baseline.json` 保存 Unix 入口、测试及本次共享文档的源码指纹，测试逐项比对。Linux 主干有主动变更时，须审阅后显式更新 Windows 指纹基线；本次基线包含已合并的 Doubao 接入。Windows 只读复用检索和写入算法，在仓外生成自己的运行副本；平台适配只应用到这个副本。每个适配点校验原文锚点和出现次数，上游结构变化时拒绝构建，要求重新审阅。Windows 不会修改 Linux 的源码、hook 定义或安装配置。
 
 安装动作：
 
 - 创建或复用 `%USERPROFILE%\.everos`（可用 `EVEROS_HOME` 覆盖），移除目录的继承 ACL，并为当前用户和 SYSTEM 授权；拒绝数据根位于源码 checkout 内或穿过 reparse point。
-- 生成配置前固定 `EVEROS_HOME`、`EVEROS_INSTALL_HOME` 和显式 `CODEX_HOME` 的绝对路径；绝对化保留 reparse point 的词面组件，检查前不调用 `resolve()` 隐藏 junction。跨工作目录启动时仍使用同一数据根。
-- Codex 命令先解析实际 CLI 路径；支持 `.exe` 与 npm `.cmd`/`.bat` shim。批处理参数经独立环境槽一次展开，关闭 delayed expansion，不把路径或参数拼入 shell 程序正文。
-- Windows 独立实现唯一备份、原子替换与 EverOS 原生规则管理块；同步后回读宿主全局入口，只管理当前宿主。
-- 将插件生成到 `.everos/runtime/windows-<内容摘要>/`，Codex 以该快照注册本地插件市场。hook 的 `commandWindows` 使用编码的 PowerShell 命令，绑定绝对 Python、hook 和数据路径；所有 Python 入口启用 UTF-8。每个快照版本独立，旧快照和旧插件缓存保留给正在运行的聊天。
-- MCP 使用同一快照和同一 `EVEROS_HOME`。提问 hook 与 MCP 的外层超时至少为 `EVEROS_AGENTIC_TIMEOUT + 10` 秒，保留更大的现有 MCP 值。
+- 生成配置前固定 `EVEROS_HOME`、`EVEROS_INSTALL_HOME` 和显式 `CODEX_HOME` / `KIMI_CODE_HOME` 的绝对路径；绝对化保留 reparse point 的词面组件，检查前不调用 `resolve()` 隐藏 junction。跨工作目录启动时仍使用同一数据根。
+- Codex 命令先解析实际 CLI 路径；支持 `.exe` 与 npm `.cmd`/`.bat` shim。批处理参数经独立环境槽一次展开，关闭 delayed expansion，不把路径或参数拼入 shell 程序正文。两个 Kimi 专用路径都不解析或调用宿主 CLI。
+- Windows 独立实现唯一备份、原子替换与 EverOS 原生规则管理块；同步后回读 Codex override/AGENTS、Kimi Code `AGENTS.md` 或 Kimi Work `home/AGENTS.md`。`state/rules/current.json` 和 `targets.json` 按当前 revision 合并目标，只刷新一个宿主不会删除其他宿主已验证目标；其他管理块和用户正文保持不变。
+- Codex 将插件生成到 `.everos/runtime/windows-<内容摘要>/` 并注册本地插件市场；两个 Kimi 路径的 MCP 和 hook 也引用同一类不可变快照。encoded PowerShell 绑定绝对 Python、hook、数据根和 `PYTHONUTF8=1`。旧 Codex 快照和插件缓存保留给正在运行的聊天；PR18 的快照校验、来源记录和登录恢复保持有效。
+- Kimi Code/Desktop L1 原子幂等合并 `~/.kimi-code/mcp.json`：保留其他字段、servers、EverOS 自有额外字段和 env；`command` 是绝对 Python，`args` 为 `-X utf8 <runtime>/plugin/everos/mcp_server.py`，env 显式绑定 `EVEROS_HOME`、`KIMI_CODE_HOME`、`PYTHONUTF8=1`。`toolTimeoutMs` 至少为 `(EVEROS_AGENTIC_TIMEOUT + 10 秒) * 1000`，保留更大现值，非法现值明确报错。
+- Kimi Code/Desktop L3/L4 原子幂等合并 `~/.kimi-code/config.toml`：只替换能安全识别的 EverOS hook（含旧 `python.exe` 入口），写入 `UserPromptSubmit=预算+10 秒`、`Stop=10`、`PreCompact=10`、`SessionEnd=5` 四个 `[[hooks]]`。保留本地 agent-memory、其他 hook、TOML 字段和多行字符串。已有内联 `hooks = [...]` 与数组表不能共存，安装器在任何写入前明确拒绝，要求先迁移为 `[[hooks]]`。encoded command 显式设置 `EVEROS_HOST=kimi`、`KIMI_CODE_HOME`、`EVEROS_HOME`、`PYTHONUTF8`。
 - Kimi Work 使用同一快照和编码 PowerShell 命令，额外绑定 `EVEROS_HOST=kimi_desktop` 与绝对化的 `EVEROS_KIMI_DESKTOP_HOME`，确保只带 session ID 的生命周期回调也能找到 Windows 会话记录。安装器只更新内嵌 runtime 的 `config.toml`、`home/mcp.json`、`home/AGENTS.md` 和 daimon skill；保留其他 MCP 与 hook，重复安装不会追加重复的 4 个生命周期 handler。
-- Kimi Work 路径默认取 `%APPDATA%\kimi-desktop\daimon-share`，也支持 `KIMI_SHARE_DIR`、`EVEROS_KIMI_DESKTOP_CONFIG` 和 `EVEROS_KIMI_DESKTOP_HOME` 覆盖。该路径只用于 `-KimiDesktop`，不改变 Codex 默认安装范围。
+- Kimi Work 路径默认取 `%APPDATA%\kimi-desktop\daimon-share`，也支持 `KIMI_SHARE_DIR`、`EVEROS_KIMI_DESKTOP_CONFIG` 和 `EVEROS_KIMI_DESKTOP_HOME` 覆盖。该路径只用于 `-KimiDesktop`，与 `-Only kimi` 的 `~/.kimi-code` 不混用，也不改变 Codex 默认安装范围。
 - `PROTOCOL.md` 以普通文件副本提供稳定入口；只读 CLI 安装为 ASCII `everos.cmd` 与 UTF-8 BOM PowerShell 脚本，不需要符号链接。batch 用 `%~dp0` 定位同目录 `everos-native.ps1`，在独立进程边界按原始字节转发 stdout/stderr；直接调用 `everos.ps1` 时按 UTF-8 解码，分别写入 PowerShell success/error 流，支持变量捕获、管道和文件重定向。两种入口共用明确的 Windows argv 引用，保留空参数、引号、末尾反斜杠和退出码；Python 与调用者共享控制台以接收 Ctrl+C。命令目录未在 PATH 时可以使用完整路径。
-- 运行真实只读 doctor；失败返回非零。没有凭据、没有加载新会话或 Codex 尚未信任 hook 时，不能将接线完成等同于完整验收。
+- 真实安装运行只读 doctor；失败返回非零。dry-run 不创建文件、不启动安装器 subprocess、不访问 API。没有凭据、没有加载新会话或 Codex 尚未信任 hook 时，不能将接线完成等同于完整验收。
 
 ```powershell
-.\install.ps1 -CliOnly          # 不改凭据/宿主，不访问 API
-.\install.ps1 -RulesOnly        # 只刷新 Codex 原生规则，不访问 API
-.\install.ps1 -RulesOnly -KimiDesktop  # 只刷新 Kimi Work 原生规则，不访问 API
-.\install.ps1 -DryRun           # 不创建文件、不启动宿主 CLI、不访问 API
+.\install.ps1 -CliOnly                       # 不改凭据/宿主，不访问 API
+.\install.ps1 -RulesOnly                     # 刷新 Codex 及检测到的 Kimi Code 规则，不访问 API
+.\install.ps1 -RulesOnly -Only kimi          # 只刷新 Kimi Code/Desktop 规则
+.\install.ps1 -RulesOnly -KimiDesktop        # 只刷新 Kimi Work 原生规则
+.\install.ps1 -DryRun -Only kimi             # 预览 ~/.kimi-code L1-L4
+.\install.ps1 -DryRun -KimiDesktop           # 预览 Kimi Work 内嵌 runtime
 & "$env:USERPROFILE\.local\bin\everos.cmd" search '历史问题' --method agentic
 ```
 
-更新源码后重跑安装器。新会话按 Codex 的提示审阅并信任当前 hook 定义；安装器不写信任记录，也不绕过信任。Kimi Work 的 hook 在会话启动时加载，同样需要新开会话。随后分别验证画像注入、每条提问检索和真实一轮对话采集。旧聊天不会自动重载新的 MCP 工具目录。
+更新源码后重跑对应安装器。Codex 新会话按提示审阅并信任当前 hook 定义；安装器不写信任记录，也不绕过信任。Kimi Code/Desktop 与 Kimi Work 都在会话启动时加载 MCP 与 hook，必须分别新开对应会话。随后验证首条提问的画像与记忆注入、后续每条提问检索，以及真实一轮对话结束后的 `wire.jsonl` 采集；旧聊天不会自动重载新的 MCP 工具目录或 hook。
 
 Linux 保持原有 `fcntl.flock` 和打开方式。Windows 生成副本使用 `windows/windows_lock.py` 的 `msvcrt.locking` 首字节排他锁和追加打开方式。非阻塞冲突统一返回 `BlockingIOError`；阻塞获取等待持有者释放；持有进程关闭文件或退出时由系统释放。
 

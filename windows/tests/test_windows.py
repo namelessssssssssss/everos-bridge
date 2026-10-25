@@ -1,5 +1,6 @@
 """Native Windows setup and process-lock checks, with no real credentials/API."""
 import base64
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -82,6 +83,93 @@ class WindowsSetupTests(unittest.TestCase):
             installer.protocol_link()
         self.assertFalse(self.home.exists())
 
+    def test_kimi_only_install_needs_no_host_cli_and_is_idempotent(self):
+        kimi = self.home / ".kimi-code"
+        environment = {"KIMI_CODE_HOME": str(kimi), "EVEROS_USER_ID": "fixture-user",
+                       "EVEROS_API_KEY": "fixture-key"}
+        with patch.dict(os.environ, environment):
+            installer = WindowsInstaller(REPO, only="kimi")
+            with patch("shutil.which", side_effect=AssertionError("no host CLI lookup")), \
+                    patch.object(installer, "private_home", lambda: installer.everos.mkdir(parents=True, exist_ok=True)), \
+                    patch.object(installer, "run", return_value="") as run:
+                installer.install()
+                mcp_path = kimi / "mcp.json"
+                config_path = kimi / "config.toml"
+                mcp = json.loads(mcp_path.read_text(encoding="utf-8"))
+                everos = mcp["mcpServers"]["everos"]
+                self.assertTrue(Path(everos["command"]).is_absolute())
+                self.assertEqual(everos["args"][:2], ["-X", "utf8"])
+                self.assertEqual(everos["env"]["KIMI_CODE_HOME"], str(kimi))
+                self.assertEqual(everos["toolTimeoutMs"], 250000)
+                config = config_path.read_text(encoding="utf-8")
+                self.assertEqual(config.count("[[hooks]]"), 4)
+                self.assertIn('event = "SessionEnd"\n', config)
+                stamps = {path: path.stat().st_mtime_ns for path in
+                          (mcp_path, config_path, kimi / "AGENTS.md")}
+                installer.install()
+                self.assertEqual(stamps, {path: path.stat().st_mtime_ns for path in stamps})
+                self.assertEqual(run.call_count, 2)
+        self.assertFalse((self.home / ".codex").exists())
+
+    def test_kimi_inline_hooks_are_rejected_before_any_write(self):
+        kimi = self.home / ".kimi-code"
+        kimi.mkdir(parents=True)
+        original_mcp = '{"mcpServers":{"other":{"command":"keep"}}}\n'
+        original_config = 'hooks = [{event = "Stop", command = "echo keep", timeout = 7}]\n'
+        (kimi / "mcp.json").write_text(original_mcp, encoding="utf-8")
+        (kimi / "config.toml").write_text(original_config, encoding="utf-8")
+        with patch.dict(os.environ, {"KIMI_CODE_HOME": str(kimi)}):
+            installer = WindowsInstaller(REPO, only="kimi")
+            with patch.object(installer, "private_home", side_effect=AssertionError("must not write")):
+                with self.assertRaisesRegex(ValueError, "inline hooks array"):
+                    installer.install()
+        self.assertEqual((kimi / "mcp.json").read_text(encoding="utf-8"), original_mcp)
+        self.assertEqual((kimi / "config.toml").read_text(encoding="utf-8"), original_config)
+        self.assertFalse((self.home / ".everos").exists())
+
+    def test_kimi_only_full_dry_run_has_no_writes_or_subprocess(self):
+        with patch.dict(os.environ, {"KIMI_CODE_HOME": str(self.home / ".kimi-code")}):
+            installer = WindowsInstaller(REPO, dry=True, only="kimi")
+            with patch.object(subprocess, "run", side_effect=AssertionError("no subprocess in preview")):
+                installer.install()
+        self.assertFalse(self.home.exists())
+
+    def test_kimi_wire_fixture_keeps_only_user_origin_and_visible_text(self):
+        runtime = WindowsInstaller(REPO).snapshot()
+        wire = self.home / "wire.jsonl"
+        self.home.mkdir(parents=True, exist_ok=True)
+        entries = [
+            {"type": "context.append_message", "time": 1000, "message": {"role": "user",
+             "origin": {"kind": "user"}, "content": [{"type": "text", "text": "visible user"},
+             {"type": "image", "text": "not text"}]}},
+            {"type": "context.append_message", "time": 2000, "message": {"role": "user",
+             "origin": {"kind": "injection"}, "content": [{"type": "text", "text": "exclude injection"}]}},
+            {"type": "context.append_message", "time": 3000, "message": {"role": "system",
+             "origin": {"kind": "user"}, "content": [{"type": "text", "text": "exclude system"}]}},
+            {"type": "context.append_loop_event", "time": 4000, "event": {"type": "content.part",
+             "stepUuid": "one", "part": {"type": "reasoning", "text": "exclude reasoning"}}},
+            {"type": "context.append_loop_event", "time": 5000, "event": {"type": "content.part",
+             "stepUuid": "one", "part": {"type": "text", "text": "visible assistant"}}},
+        ]
+        wire.write_text("".join(json.dumps(entry) + "\n" for entry in entries), encoding="utf-8")
+        source = runtime / "plugin/everos"
+        previous_path = sys.path[:]
+        previous_bytecode = sys.dont_write_bytecode
+        try:
+            sys.path.insert(0, str(source))
+            sys.dont_write_bytecode = True
+            spec = importlib.util.spec_from_file_location("windows_kimi_fixture_core", source / "core.py")
+            core = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(core)
+        finally:
+            sys.path[:] = previous_path
+            sys.dont_write_bytecode = previous_bytecode
+        with patch.dict(os.environ, {"EVEROS_USER_ID": "fixture-user"}):
+            messages = core.messages_kimi([json.loads(line) for line in wire.read_text(encoding="utf-8").splitlines()])
+        self.assertEqual([(message["role"], message["content"]) for message in messages],
+                         [("user", "visible user"), ("assistant", "visible assistant")])
+        self.assertNotIn("exclude", json.dumps(messages))
+
     def test_cli_refresh_preserves_unrelated_commands(self):
         installer = WindowsInstaller(REPO)
         installer.install_cli()
@@ -103,12 +191,38 @@ class WindowsSetupTests(unittest.TestCase):
         result = subprocess.run(command.split(), input="中文 JSON 输入", text=True, encoding="utf-8", capture_output=True, check=True)
         self.assertEqual(json.loads(result.stdout), [str(self.home), "中文 JSON 输入"])
 
+    @unittest.skipUnless(os.name == "nt", "native PowerShell command")
+    def test_kimi_encoded_hook_sets_all_host_environment(self):
+        self.home.mkdir(parents=True)
+        hook = self.home / "synthetic environment.py"
+        hook.write_text("import json, os; print(json.dumps({key: os.environ[key] for key in "
+                        "['EVEROS_HOST', 'KIMI_CODE_HOME', 'EVEROS_HOME', 'PYTHONUTF8']}, ensure_ascii=False))",
+                        encoding="utf-8")
+        kimi = self.home / ".kimi-code"
+        command = hook_command(sys.executable, hook, self.home / ".everos", host="kimi", kimi_home=kimi)
+        result = subprocess.run(command.split(), text=True, encoding="utf-8", capture_output=True, check=True)
+        self.assertEqual(json.loads(result.stdout), {"EVEROS_HOST": "kimi", "KIMI_CODE_HOME": str(kimi),
+                         "EVEROS_HOME": str(self.home / ".everos"), "PYTHONUTF8": "1"})
+
     @unittest.skipUnless(os.name == "nt", "native ACL and PowerShell wrapper")
     def test_powershell_preview_and_private_acl(self):
         result = subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(REPO / "install.ps1"),
                                  "-Python", sys.executable, "-DryRun", "-CliOnly"],
                                 capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.home.exists())
+        result = subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(REPO / "install.ps1"),
+                                 "-Python", sys.executable, "-DryRun", "-RulesOnly", "-Only", "kimi"],
+                                env=dict(os.environ, KIMI_CODE_HOME=str(self.home / ".kimi-code")),
+                                capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.home.exists())
+        result = subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(REPO / "install.ps1"),
+                                 "-Python", sys.executable, "-DryRun", "-KimiDesktop", "-Only", "kimi"],
+                                env=dict(os.environ, KIMI_CODE_HOME=str(self.home / ".kimi-code")),
+                                capture_output=True, text=True, encoding="utf-8", errors="replace")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("mutually exclusive", result.stderr)
         self.assertFalse(self.home.exists())
         installer = WindowsInstaller(REPO)
         installer.everos.mkdir(parents=True)
