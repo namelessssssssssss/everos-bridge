@@ -111,6 +111,22 @@ class WindowsSetupTests(unittest.TestCase):
                 self.assertEqual(run.call_count, 2)
         self.assertFalse((self.home / ".codex").exists())
 
+    def test_kimi_inline_hooks_are_rejected_before_any_write(self):
+        kimi = self.home / ".kimi-code"
+        kimi.mkdir(parents=True)
+        original_mcp = '{"mcpServers":{"other":{"command":"keep"}}}\n'
+        original_config = 'hooks = [{event = "Stop", command = "echo keep", timeout = 7}]\n'
+        (kimi / "mcp.json").write_text(original_mcp, encoding="utf-8")
+        (kimi / "config.toml").write_text(original_config, encoding="utf-8")
+        with patch.dict(os.environ, {"KIMI_CODE_HOME": str(kimi)}):
+            installer = WindowsInstaller(REPO, only="kimi")
+            with patch.object(installer, "private_home", side_effect=AssertionError("must not write")):
+                with self.assertRaisesRegex(ValueError, "inline hooks array"):
+                    installer.install()
+        self.assertEqual((kimi / "mcp.json").read_text(encoding="utf-8"), original_mcp)
+        self.assertEqual((kimi / "config.toml").read_text(encoding="utf-8"), original_config)
+        self.assertFalse((self.home / ".everos").exists())
+
     def test_kimi_only_full_dry_run_has_no_writes_or_subprocess(self):
         with patch.dict(os.environ, {"KIMI_CODE_HOME": str(self.home / ".kimi-code")}):
             installer = WindowsInstaller(REPO, dry=True, only="kimi")
@@ -204,7 +220,7 @@ class WindowsSetupTests(unittest.TestCase):
         result = subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(REPO / "install.ps1"),
                                  "-Python", sys.executable, "-DryRun", "-KimiDesktop", "-Only", "kimi"],
                                 env=dict(os.environ, KIMI_CODE_HOME=str(self.home / ".kimi-code")),
-                                capture_output=True, text=True, encoding="utf-8")
+                                capture_output=True, text=True, encoding="utf-8", errors="replace")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("mutually exclusive", result.stderr)
         self.assertFalse(self.home.exists())

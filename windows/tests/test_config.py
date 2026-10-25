@@ -89,6 +89,7 @@ class WindowsConfigurationTests(unittest.TestCase):
                                    host="kimi", kimi_home=root / "kimi home")
             original = ('model = "keep"\nnote = """\n[[hooks]]\ncommand = "not a table"\n"""\n\n'
                         '[[hooks]]\nevent = "Stop"\ncommand = "python3 /old/everos/hook.py" # legacy\ntimeout = 1\n\n'
+                        '[[hooks]]\nevent = "Stop"\ncommand = "python.exe /legacy/everos/hook.py"\ntimeout = 1\n\n'
                         '[[hooks]]\nevent = "Stop"\ncommand = ' + json.dumps(old) + ' # encoded legacy\ntimeout = 1\n\n'
                         '[[hooks]]\nevent = "Stop"\ncommand = ' + json.dumps(foreign) + '\ntimeout = 7\n\n'
                         '[[hooks]]\nevent = "Stop"\ncommand = "echo python3 /tmp/everos/hook.py"\ntimeout = 8\n')
@@ -98,6 +99,7 @@ class WindowsConfigurationTests(unittest.TestCase):
             self.assertIn(json.dumps(foreign), merged)
             self.assertIn('command = "echo python3 /tmp/everos/hook.py"', merged)
             self.assertNotIn("/old/everos", merged)
+            self.assertNotIn("/legacy/everos", merged)
             self.assertNotIn(json.dumps(old), merged)
             self.assertEqual(merged.count("[[hooks]]"), 7)
             self.assertIn('event = "UserPromptSubmit"\ncommand = ' + json.dumps(command) + '\ntimeout = 250', merged)
@@ -108,6 +110,13 @@ class WindowsConfigurationTests(unittest.TestCase):
                 self.assertIn("$env:" + name + "=", decoded)
             self.assertIn("$env:EVEROS_HOST='kimi'", decoded)
             self.assertEqual(merge_kimi_hooks(merged, command, 250), merged)
+
+    def test_kimi_hooks_reject_inline_arrays_without_rewriting_multiline_strings(self):
+        for original in ('hooks = []\n', 'hooks = [{event = "Stop", command = "echo keep", timeout = 7}]\n'):
+            with self.subTest(original=original), self.assertRaisesRegex(ValueError, "inline hooks array"):
+                merge_kimi_hooks(original, "unused", 190)
+        multiline = 'note = """\nhooks = []\n"""\n'
+        self.assertIn(multiline, merge_kimi_hooks(multiline, "command", 190))
 
     def test_rules_sync_codex_and_kimi_preserves_other_managed_blocks_and_override(self):
         with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, {

@@ -176,6 +176,11 @@ class WindowsInstaller(WindowsHost):
         previous = mcp.read_text(encoding="utf-8") if mcp.exists() else ""
         merge_kimi_mcp(previous, self.python, self.repo / "plugin/everos/mcp_server.py",
                        self.everos, kimi, timeout * 1000)
+        config = kimi / "config.toml"
+        old = config.read_text(encoding="utf-8") if config.exists() else ""
+        validation_command = hook_command(self.python, self.repo / "plugin/everos/hook.py", self.everos,
+                                          host="kimi", kimi_home=kimi)
+        merge_kimi_hooks(old, validation_command, timeout)
         self.private_home()
         self.config()
         self.protocol_link()
@@ -183,8 +188,6 @@ class WindowsInstaller(WindowsHost):
         WindowsInstaller(runtime, self.dry, only="kimi").install_cli()
         server = runtime / "plugin/everos/mcp_server.py"
         self.edit(mcp, merge_kimi_mcp(previous, self.python, server, self.everos, kimi, timeout * 1000))
-        config = kimi / "config.toml"
-        old = config.read_text(encoding="utf-8") if config.exists() else ""
         command = hook_command(self.python, runtime / "plugin/everos/hook.py", self.everos,
                                host="kimi", kimi_home=kimi)
         self.edit(config, merge_kimi_hooks(old, command, timeout))

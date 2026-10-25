@@ -241,7 +241,7 @@ def is_everos_hook(command):
                     re.search(r"(?is)&\s+.+?\s+-X\s+utf8\s+.+?everos[/\\]hook\.py", decoded))
     return bool(re.match(
         r"(?i)^\s*(?:(?:EVEROS_HOST|EVEROS_HOME|KIMI_CODE_HOME|PYTHONUTF8)=\S+\s+)*"
-        r"[\"']?python(?:3(?:\.exe)?)?[\"']?\s+[^\r\n]*everos[/\\]hook\.py", command))
+        r"[\"']?python(?:3)?(?:\.exe)?[\"']?\s+[^\r\n]*everos[/\\]hook\.py", command))
 
 
 def _toml_command(line):
@@ -276,6 +276,10 @@ def merge_kimi_hooks(text, command, recall_timeout):
     lines = text.splitlines(keepends=True)
     headers = table_headers(text)
     active = {index for index, _ in active_toml_lines(text)}
+    root_end = headers[0][0] if headers else len(lines)
+    inline_hooks = re.compile(r"^\s*(?:hooks|\"hooks\"|'hooks')\s*=")
+    if any(index in active and inline_hooks.match(lines[index]) for index in range(root_end)):
+        raise ValueError("Kimi config uses an inline hooks array; convert it to [[hooks]] tables before installing")
     key = re.compile(r"^\s*(?:command|\"command\"|'command')\s*=")
     remove = set()
     for offset, (start, header) in enumerate(headers):
