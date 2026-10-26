@@ -78,10 +78,13 @@ class WindowsInstaller(WindowsHost):
             path.unlink()
         self.edit(path, (self.repo / "PROTOCOL.md").read_text(encoding="utf-8"))
 
+    def cli_scripts(self):
+        """Use the same canonical runtime target for installation and health checks."""
+        return launcher_scripts(self.python, self.repo / "plugin/everos/cli.py")
+
     def install_cli(self):
-        target = self.repo / "plugin/everos/cli.py"
         # These managed launchers can be refreshed, but unrelated commands survive.
-        scripts = launcher_scripts(self.python, target)
+        scripts = self.cli_scripts()
         for name, text in scripts.items():
             path = self.home / ".local/bin" / name
             lines = path.read_text(encoding="utf-8").splitlines() if path.is_file() else []

@@ -14,7 +14,6 @@ import os
 from pathlib import Path
 import sys
 
-from cli_launcher import launcher_scripts
 from config_helpers import write_text
 from install import WindowsInstaller
 from platform_runtime import windows_rules
@@ -57,7 +56,9 @@ def inspect(installer):
         issues.append("hooks")
     if not runtime.exists():
         issues.append("runtime")
-    for name, text in launcher_scripts(installer.python, runtime / "plugin/everos/cli.py").items():
+    # install_cli resolves the runtime repo first (including Windows short paths).
+    # Reuse its generator rather than compare against a different lexical alias.
+    for name, text in WindowsInstaller(runtime, dry=True).cli_scripts().items():
         target = installer.home / ".local/bin" / name
         if not target.is_file() or target.read_text(encoding="utf-8") != text:
             issues.append("cli")
