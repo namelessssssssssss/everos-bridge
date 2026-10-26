@@ -11,6 +11,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -59,6 +60,18 @@ class IsolatedCore(unittest.TestCase):
         self.real_api = core.api
         self.api = self.stack.enter_context(patch.object(core, "api", return_value=response("extracted")))
         self.stack.enter_context(patch.object(core, "sweep"))
+        existing_threads = set(threading.enumerate())
+
+        def finish_readers():
+            # Deadline tests deliberately leave daemon reads running. Keep the
+            # temporary state and mocked API in place until their late events
+            # finish; otherwise they could append to the developer's real log.
+            for thread in threading.enumerate():
+                if thread not in existing_threads:
+                    thread.join(timeout=3)
+                    self.assertFalse(thread.is_alive(), "fixture reader did not finish")
+
+        self.addCleanup(finish_readers)
 
     def transcript(self, text="retry this message"):
         path = self.root / "transcript.jsonl"
