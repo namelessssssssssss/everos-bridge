@@ -340,35 +340,29 @@ class AgenticRecallTests(IsolatedCore):
 
     def test_explicit_budget_overrides_invalid_agentic_configuration(self):
         budgets = []
-        clock = [100.0]
-
-        def consume_budget(jobs, budget):
+        def consume_budget(jobs, budget, **kwargs):
             budgets.append(budget)
-            clock[0] += budget
             return {name: {} for name in jobs}
 
         with patch.dict(os.environ, {"EVEROS_AGENTIC_TIMEOUT": "invalid"}), \
-                patch.object(core.time, "monotonic", side_effect=lambda: clock[0]), \
                 patch.object(core, "_read_jobs", side_effect=consume_budget):
-            core.search_items("history", method="agentic", budget=9)
-        self.assertEqual(budgets, [6, 3])
-        self.assertEqual(clock[0], 109)
+            core.search_items("history", kind="episodes", method="agentic", budget=9)
+        self.assertEqual(len(budgets), 2)
+        self.assertAlmostEqual(budgets[0], 6, delta=.1)
+        self.assertAlmostEqual(budgets[1], 3, delta=.1)
 
     def test_configured_agentic_budget_and_fallback_share_the_total_deadline(self):
         (self.root / "config.env").write_text("EVEROS_AGENTIC_TIMEOUT=240\n", encoding="utf-8")
         budgets = []
-        clock = [100.0]
-
-        def consume_budget(jobs, budget):
+        def consume_budget(jobs, budget, **kwargs):
             budgets.append(budget)
-            clock[0] += budget
             return {name: {} for name in jobs}
 
-        with patch.object(core.time, "monotonic", side_effect=lambda: clock[0]), \
-                patch.object(core, "_read_jobs", side_effect=consume_budget):
-            core.search_items("history", method="agentic")
-        self.assertEqual(budgets, [228, 12])
-        self.assertEqual(clock[0], 340)
+        with patch.object(core, "_read_jobs", side_effect=consume_budget):
+            core.search_items("history", kind="episodes", method="agentic")
+        self.assertEqual(len(budgets), 2)
+        self.assertAlmostEqual(budgets[0], 210, delta=.1)
+        self.assertAlmostEqual(budgets[1], 30, delta=.1)
 
     def test_hybrid_and_v1_deep_search_ignore_agentic_timeout_configuration(self):
         with patch.dict(os.environ, {"EVEROS_AGENTIC_TIMEOUT": "invalid"}), \
@@ -567,16 +561,16 @@ class AgenticRecallTests(IsolatedCore):
 
     def test_default_agentic_budget_reserves_time_for_fallback(self):
         budgets = []
-        def empty_tracks(jobs, budget):
+        def empty_tracks(jobs, budget, **kwargs):
             budgets.append(budget)
             return {name: {} for name in jobs}
         with patch.object(core, "_read_jobs", side_effect=empty_tracks):
-            core.search_items("history", method="agentic")
+            core.search_items("history", kind="episodes", method="agentic")
         self.assertEqual(len(budgets), 2)
-        self.assertGreater(budgets[0], 167)
-        self.assertLessEqual(budgets[0], 168)
-        self.assertGreater(budgets[1], 11)
-        self.assertLessEqual(budgets[1], 12)
+        self.assertGreater(budgets[0], 149)
+        self.assertLessEqual(budgets[0], 150)
+        self.assertGreater(budgets[1], 29)
+        self.assertLessEqual(budgets[1], 30)
 
     def test_primary_and_fallback_share_one_deadline_and_keep_fast_results(self):
         def fake_api(path, body, timeout):

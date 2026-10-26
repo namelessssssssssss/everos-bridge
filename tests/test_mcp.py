@@ -378,10 +378,10 @@ class McpStdioTests(unittest.TestCase):
         lines = [json.dumps(request("tools/call", {"name": "memory_remember",
                  "arguments": {"topic": "test", "content": "test"}})),
                  json.dumps(request("ping", mid=2))]
-        responses = self.run_stdio(lines)
-        self.assertTrue(responses[0]["result"]["isError"])
-        self.assertIn("EVEROS_WRITE=0", responses[0]["result"]["content"][0]["text"])
-        self.assertEqual(responses[1], {"jsonrpc": "2.0", "id": 2, "result": {}})
+        responses = {response["id"]: response for response in self.run_stdio(lines)}
+        self.assertTrue(responses[1]["result"]["isError"])
+        self.assertIn("EVEROS_WRITE=0", responses[1]["result"]["content"][0]["text"])
+        self.assertEqual(responses[2], {"jsonrpc": "2.0", "id": 2, "result": {}})
 
 
 if __name__ == "__main__":

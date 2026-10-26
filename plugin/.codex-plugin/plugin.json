@@ -1,6 +1,6 @@
 {
   "name": "everos",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "EverOS long-term memory shared across agents and devices: profile at session start, recall on every prompt, every turn saved.",
   "author": {
     "name": "namelessssssssssss"
