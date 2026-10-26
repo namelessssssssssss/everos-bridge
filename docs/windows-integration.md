@@ -14,7 +14,7 @@ Set-Location "$env:USERPROFILE\.everos-bridge"
 
 未自动找到 Python 时，给 `-Python` 传实际 `python.exe` 的绝对路径；安装器会探测解释器版本并跳过 Windows Store 的占位入口。凭据沿用环境变量或 `$EVEROS_HOME/config.env`；缺失时在交互终端输入，API key 隐藏输入。不要在提交、文档或命令示例里填实际值。
 
-平台隔离：Windows 安装、配置编辑、锁、运行快照生成和测试全部位于 `windows/`，不导入 Unix 安装器。`install.sh`、`scripts/`、`plugin/`、`bin/`、`cloud/`、原有测试与 CI 保持主干版本；`windows/linux-baseline.json` 为 47 个现有文件保存源码指纹，测试逐项比对。Linux 主干有主动变更时，须审阅后显式更新 Windows 指纹基线；本次基线包含已合并的 Doubao 接入。Windows 只读复用检索和写入算法，在仓外生成自己的运行副本；平台适配只应用到这个副本。每个适配点校验原文锚点和出现次数，上游结构变化时拒绝构建，要求重新审阅。Windows 不会修改 Linux 的源码、hook 定义或安装配置。
+平台隔离：Windows 安装、配置编辑、锁、运行快照生成和测试全部位于 `windows/`，不导入 Unix 安装器。`install.sh`、`scripts/`、`plugin/`、`bin/`、`cloud/`、原有测试与 CI 保持主干版本；`windows/linux-baseline.json` 为 49 个现有文件保存源码指纹，测试逐项比对。Linux 主干有主动变更时，须审阅后显式更新 Windows 指纹基线；本次基线包含已合并的 Doubao 接入。Windows 只读复用检索和写入算法，在仓外生成自己的运行副本；平台适配只应用到这个副本。每个适配点校验原文锚点和出现次数，上游结构变化时拒绝构建，要求重新审阅。Windows 不会修改 Linux 的源码、hook 定义或安装配置。
 
 安装动作：
 
@@ -60,7 +60,7 @@ $env:PYTHONUTF8 = '1'
 python -X utf8 -m unittest discover -s windows/tests -v
 ```
 
-Windows 测试仅使用临时目录、合成消息及本机 loopback API；将未修改的核心/MCP 测试复制到临时 Windows 副本运行，不改原测试或降低其断言。Linux 继续运行原命令 `python3 -m unittest discover -s tests -v` 和 `bash -n install.sh`，不加载 Windows 目录。宿主内新会话信任与真实采集仍须单独验收。
+Windows 测试仅使用临时目录、合成消息及本机 loopback API；将未修改的核心/MCP、检索恢复和控制通道并发测试复制到临时 Windows 副本运行，不改原测试或降低其断言。Linux 继续运行原命令 `python3 -m unittest discover -s tests -v` 和 `bash -n install.sh`，不加载 Windows 目录。宿主内新会话信任与真实采集仍须单独验收。 `.github/workflows/windows.yml` 在 Windows 原生 runner 上执行 Python 3.11/3.13 专项与快照语义回归；原 Linux workflow 保持独立。
 
 
 ## 登录后检查与恢复

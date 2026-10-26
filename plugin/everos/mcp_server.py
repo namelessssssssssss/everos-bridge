@@ -19,7 +19,7 @@ import core  # noqa: E402
 import recall  # noqa: E402
 import rules as rulebook  # noqa: E402
 
-VERSION = "0.9.1"
+VERSION = "0.9.2"
 MAX_PENDING_TOOL_CALLS = 16
 INSTRUCTIONS = (
     "EverOS 是用户跨 agent、跨设备共用的长期记忆。会话开始调用 memory_profile 了解用户，"

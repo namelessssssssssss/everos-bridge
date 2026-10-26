@@ -32,6 +32,14 @@ class IsolationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "anchor changed"):
             adapt(contents, b"fixture lock module")
 
+    def test_snapshot_adapts_the_shared_diagnostic_log_lock(self):
+        contents = {p.relative_to(ROOT): p.read_bytes() for p in (ROOT / "plugin").rglob("*")
+                    if p.is_file() and "__pycache__" not in p.parts and p.suffix != ".pyc"}
+        generated = adapt(contents, b"fixture lock module")
+        core = generated[Path("plugin/everos/core.py")].decode("utf-8")
+        self.assertIn('open(LOG.with_suffix(".lock"), "a+b")', core)
+        self.assertNotIn('open(LOG.with_suffix(".lock"), "a")', core)
+
     @unittest.skipUnless(os.name == "nt", "exercise generated Windows runtime")
     def test_unmodified_core_and_mcp_regressions_against_the_windows_snapshot(self):
         with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, {
@@ -39,7 +47,7 @@ class IsolationTests(unittest.TestCase):
             runtime = WindowsInstaller(ROOT).snapshot()
             tests = runtime / "tests"
             tests.mkdir()
-            for name in ("test_core_regressions.py", "test_mcp.py"):
+            for name in ("test_core_regressions.py", "test_mcp.py", "test_read_resilience.py", "test_mcp_concurrency.py"):
                 shutil.copyfile(ROOT / "tests" / name, tests / name)
             result = subprocess.run([sys.executable, "-X", "utf8", "-m", "unittest", "discover", "-s", str(tests), "-v"],
                                     cwd=runtime, env=dict(os.environ, PYTHONUTF8="1"), capture_output=True,

@@ -72,7 +72,7 @@ everos search "复杂的历史问题" --method agentic --timeout 240
 
 检索故障恢复使用同一个总 deadline：用户和做法轨道独立执行，某轨道失败或未命中后立即回退，不等待其他慢轨道。安全读遇到短暂的网络错误或 HTTP 408/429/500/502/503/504 时，在剩余阶段预算内最多重试一次；HTTP 422 不盲目重试，提示保留具体状态。成功的 agentic 结果和其得分规则保持不变。
 
-`~/.everos/state/hook.log` 中的 `memory_read` JSON 事件记录 operation、track、method、attempt、elapsed_ms 和结果；同次 agentic 检索的轨道与回退共用 operation。deadline 和截止后晚到结果分别标记，错误正文只保留脱敏的 code/param/detail 和请求 ID，不记录查询、凭据或检索结果正文。日志超过 1 MB 时保留上一份 `.log.1`，跨进程锁保护轮转与追加。
+`~/.everos/state/hook.log` 中的 `memory_read` JSON 事件记录 operation、track、method、attempt、elapsed_ms 和结果；同次 agentic 检索的轨道与回退共用 operation。deadline 和截止后晚到结果分别标记，错误响应只保留白名单内的 code/param、校验类型与字段路径，以及请求 ID 的摘要；不保存服务端自由文本、查询、凭据或检索结果正文。日志超过 1 MB 时保留上一份 `.log.1`，跨进程锁保护轮转与追加；系统暂时禁止重命名时仍追加当前事件，后续再尝试轮转。
 
 MCP 工具调用保持串行，使用最多 16 个待处理请求的有界队列；ping、初始化和工具列表不会被慢检索阻塞。队列满时明确报 busy，正常 EOF 会处理完已接收请求。
 

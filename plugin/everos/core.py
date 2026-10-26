@@ -20,6 +20,8 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
+import http.client
 import json
 import math
 import os
@@ -93,7 +95,12 @@ def log(msg: str) -> None:
         with open(LOG.with_suffix(".lock"), "a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             if LOG.exists() and LOG.stat().st_size > 1_000_000:
-                LOG.replace(LOG.with_suffix(".log.1"))
+                try:
+                    LOG.replace(LOG.with_suffix(".log.1"))
+                except OSError:
+                    # Windows readers can deny rename/delete sharing. Keep the
+                    # current event and retry rotation on a later append.
+                    pass
             with open(LOG, "a", encoding="utf-8") as f:
                 f.write(f"{datetime.now(CST):%Y-%m-%d %H:%M:%S} {msg}\n")
     except Exception:
@@ -356,8 +363,79 @@ class ReadResults(dict):
         self.failures = {}
 
 
+_READ_ERROR_CODES = frozenset({
+    "InvalidParameter", "PROVIDER_NOT_CONFIGURED", "INVALID_INPUT",
+    "invalid_request", "invalid_request_error", "invalid_parameter", "validation_error",
+    "rate_limit_exceeded", "internal_error", "internal_server_error", "service_unavailable",
+    "timeout", "retrieval_error",
+})
+_READ_ERROR_TYPES = frozenset({
+    "missing", "value_error", "type_error", "string_type", "string_too_short", "string_too_long",
+    "string_pattern_mismatch", "int_type", "int_parsing", "float_type", "float_parsing",
+    "bool_type", "bool_parsing", "list_type", "dict_type", "model_type", "model_attributes_type",
+    "enum", "literal_error", "greater_than", "greater_than_equal", "less_than", "less_than_equal",
+    "finite_number", "extra_forbidden", "json_invalid",
+})
+_READ_ERROR_PARAMS = frozenset({
+    "query", "user_id", "agent_id", "method", "top_k", "include_profile", "min_score",
+    "memory_type", "memory_types", "filters", "page_size", "page", "limit", "sort_by",
+    "sort_order", "enable_llm_rerank",
+})
+_READ_ERROR_LOCATIONS = _READ_ERROR_PARAMS | {"body", "path", "header", "__root__"}
+
+
+def _read_error_location(value):
+    if not isinstance(value, (list, tuple)) or not 1 <= len(value) <= 8:
+        return None
+    location = []
+    for part in value:
+        if isinstance(part, str) and part in _READ_ERROR_LOCATIONS:
+            location.append(part)
+        elif type(part) is int and part >= 0:
+            location.append("[index]")
+        else:
+            return None
+    return location
+
+
+def _read_error_projection(raw):
+    """Only fixed diagnostic symbols survive; free text may echo private input."""
+    if not isinstance(raw, dict):
+        return {}
+    if isinstance(raw.get("error"), dict):
+        raw = raw["error"]
+    projected = {}
+    code = raw.get("code")
+    if ((isinstance(code, str) and code in _READ_ERROR_CODES)
+            or (type(code) is int and code in (400, 401, 403, 404, 408, 409, 413, 422, 429, 500, 502, 503, 504))):
+        projected["code"] = code
+    if isinstance(raw.get("type"), str) and raw["type"] in _READ_ERROR_TYPES:
+        projected["type"] = raw["type"]
+    if isinstance(raw.get("param"), str) and raw["param"] in _READ_ERROR_PARAMS:
+        projected["param"] = raw["param"]
+    location = _read_error_location(raw.get("loc"))
+    if location is not None:
+        projected["loc"] = location
+    if isinstance(raw.get("detail"), list):
+        details = []
+        for row in raw["detail"][:4]:
+            if not isinstance(row, dict):
+                continue
+            item = {}
+            if isinstance(row.get("type"), str) and row["type"] in _READ_ERROR_TYPES:
+                item["type"] = row["type"]
+            location = _read_error_location(row.get("loc"))
+            if location is not None:
+                item["loc"] = location
+            if item:
+                details.append(item)
+        if details:
+            projected["detail"] = details
+    return projected
+
+
 def read_failure(exc: Exception, body: dict) -> dict:
-    """Bounded diagnostic projection; never persist the request or echoed input."""
+    """Log allowlisted diagnostic symbols, never service messages or echoed input."""
     failure = {"kind": "error", "exception": type(exc).__name__, "retryable": False}
     reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
     if isinstance(exc, urllib.error.HTTPError):
@@ -372,31 +450,7 @@ def read_failure(exc: Exception, body: dict) -> dict:
                 exc.close()
             except Exception:
                 pass
-        forbidden = [str(v) for k, v in cfg().items() if k in (
-            "EVEROS_API_KEY", "EVEROS_USER_ID", "EVEROS_AGENT_ID") and v]
-        forbidden += [str(body[k]) for k in ("query", "user_id", "agent_id") if body.get(k)]
-
-        def safe(value):
-            text = str(value)
-            for secret in forbidden:
-                text = text.replace(secret, "[redacted]")
-            text = re.sub(r"(?i)bearer\s+\S+", "Bearer [redacted]", text)
-            return text[:400]
-
-        if isinstance(raw, dict):
-            if isinstance(raw.get("error"), dict):
-                raw = raw["error"]
-            for key in ("code", "param"):
-                if isinstance(raw.get(key), (str, int)):
-                    failure[key] = safe(raw[key])
-            detail = raw.get("detail")
-            if isinstance(detail, list):
-                failure["detail"] = [{key: safe(row[key]) for key in ("type", "loc", "msg") if key in row}
-                                     for row in detail[:4] if isinstance(row, dict)]
-            else:
-                message = detail if isinstance(detail, str) else raw.get("message") or raw.get("error")
-                if isinstance(message, str):
-                    failure["detail"] = safe(message)
+        failure.update(_read_error_projection(raw))
         if exc.headers:
             try:
                 delay = float(exc.headers.get("Retry-After", "0"))
@@ -405,11 +459,13 @@ def read_failure(exc: Exception, body: dict) -> dict:
             except ValueError:
                 pass
             request_id = exc.headers.get("x-request-id") or exc.headers.get("x-correlation-id")
-            if request_id and re.fullmatch(r"[\w.:\-]{1,160}", request_id):
-                failure["request_id"] = safe(request_id)
+            if isinstance(request_id, str) and request_id:
+                failure["request_id_sha256"] = hashlib.sha256(request_id.encode("utf-8", "replace")).hexdigest()
     elif isinstance(reason, (TimeoutError, socket.timeout)):
         failure.update(kind="timeout", retryable=True)
     elif isinstance(exc, (urllib.error.URLError, ConnectionError)):
+        failure.update(kind="network", retryable=True)
+    elif isinstance(reason, http.client.IncompleteRead):
         failure.update(kind="network", retryable=True)
     return failure
 

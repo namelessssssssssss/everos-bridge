@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import http.client
+import hashlib
 import io
 import json
 import threading
 import time
 import urllib.error
+from pathlib import Path
 from unittest.mock import patch
 
 from test_core_regressions import IsolatedCore, core
@@ -55,6 +57,25 @@ class ReadResilienceTests(IsolatedCore):
             "query": "synthetic", "method": "hybrid", "user_id": "test_owner"})}, 1)
         self.assertEqual(results["v2u"]["episodes"][0]["id"], "recovered")
         self.assertEqual(self.api.call_count, 2)
+
+    def test_truncated_200_response_retries_through_real_api_for_safe_read(self):
+        self.net.side_effect = [TruncatedErrorBody(), io.BytesIO(json.dumps(episodes()).encode())]
+        with patch.object(core, "api", self.real_api):
+            items = core.search_items("synthetic", kind="episodes", method="hybrid", budget=1, strict=True)
+        self.assertEqual([item["id"] for item in items], ["recovered"])
+        self.assertEqual(self.net.call_count, 2)
+        for call in self.net.call_args_list:
+            request = call.args[0]
+            self.assertTrue(request.full_url.endswith("/api/v2/memory/search"))
+            self.assertEqual(json.loads(request.data)["method"], "hybrid")
+        self.assertIn('"exception":"IncompleteRead"', core.LOG.read_text())
+
+    def test_truncated_200_response_does_not_retry_memory_write(self):
+        self.net.side_effect = lambda *args, **kwargs: TruncatedErrorBody()
+        with patch.object(core, "api", self.real_api), self.assertRaises(http.client.IncompleteRead):
+            core.post_messages("synthetic-write", [{"role": "user", "content": "synthetic content"}], ver="v2")
+        self.assertEqual(self.net.call_count, 1)
+        self.assertTrue(self.net.call_args.args[0].full_url.endswith("/api/v2/memory/add"))
 
     def test_422_is_not_retried_and_notice_identifies_http_error(self):
         def fake(path, body, timeout):
@@ -180,6 +201,82 @@ class ReadResilienceTests(IsolatedCore):
         core._read_jobs({"v2u": ("/api/v2/memory/search", {
             "query": "synthetic", "method": "hybrid", "user_id": "test_owner"})}, 1)
         self.assertNotIn("test_key", core.LOG.read_text())
+
+    def test_error_free_text_is_omitted_for_repr_json_escapes_and_overlapping_secrets(self):
+        query = "test_owner\nprivate_line_needle\\quoted 'payload'"
+        body = {"query": query, "user_id": "test_owner", "method": "hybrid"}
+        for echoed in (query, repr(query), json.dumps(query), query.replace("test_owner", "[redacted]")):
+            for payload in (
+                    {"message": echoed}, {"detail": echoed}, {"error": echoed},
+                    {"detail": [{"type": "value_error", "loc": ["body", "query"], "msg": echoed, "input": query}]},
+                    {"error": {"code": "InvalidParameter", "param": "query", "message": echoed}}):
+                with self.subTest(echo=echoed, payload=payload):
+                    failure = core.read_failure(http_error(422, payload), body)
+                    stored = json.dumps(failure)
+                    for private in ("private_line_needle", "test_owner", "quoted", "payload"):
+                        self.assertNotIn(private, stored)
+                    self.assertNotIn("message", failure)
+                    if isinstance(failure.get("detail"), list):
+                        self.assertEqual(failure["detail"], [{"type": "value_error", "loc": ["body", "query"]}])
+                    else:
+                        self.assertNotIn("detail", failure)
+
+    def test_unknown_diagnostic_symbols_cannot_carry_private_identifier_text(self):
+        private = "identifier_shaped_private_payload"
+        payload = {"code": private, "type": private, "param": private, "loc": ["body", private],
+                   "detail": [{"type": private, "loc": ["body", private], "msg": private}]}
+        failure = core.read_failure(http_error(422, payload), {"query": "synthetic"})
+        for key in ("code", "type", "param", "loc", "detail"):
+            self.assertNotIn(key, failure)
+        self.assertNotIn(private, json.dumps(failure))
+
+    def test_known_error_codes_and_structured_validation_fields_remain_useful(self):
+        for code in ("InvalidParameter", "PROVIDER_NOT_CONFIGURED", "INVALID_INPUT", "validation_error", 422):
+            with self.subTest(code=code):
+                payload = {"error": {"code": code, "param": "private_param_needle", "message": "private_message_needle",
+                                      "detail": [{"type": "value_error", "loc": ["body", "filters", 123456789],
+                                                  "msg": "private_message_needle"}]}}
+                failure = core.read_failure(http_error(422, payload), {"query": "synthetic"})
+                self.assertEqual(failure["code"], code)
+                self.assertNotIn("param", failure)
+                self.assertEqual(failure["detail"], [{"type": "value_error", "loc": ["body", "filters", "[index]"]}])
+                self.assertNotIn("needle", json.dumps(failure))
+                self.assertNotIn("123456789", json.dumps(failure))
+
+    def test_request_id_keeps_only_a_digest_even_for_arbitrary_echoed_text(self):
+        echoed = "private_header_needle\n" + repr("test_owner\nprivate query")
+        error = http_error(422)
+        error.headers["x-request-id"] = echoed
+        failure = core.read_failure(error, {"query": "synthetic"})
+        self.assertNotIn("request_id", failure)
+        self.assertEqual(failure["request_id_sha256"], hashlib.sha256(echoed.encode()).hexdigest())
+        for private in ("private_header_needle", "test_owner", "private query"):
+            self.assertNotIn(private, json.dumps(failure))
+
+    def test_rotation_denied_still_appends_then_recovers_on_next_write(self):
+        core.LOG.parent.mkdir(parents=True, exist_ok=True)
+        core.LOG.write_text("old record\n" + "x" * 1_000_001)
+        with patch.object(Path, "replace", side_effect=PermissionError("reader denies replacement")):
+            core.log("kept during denied rotation")
+        self.assertIn("kept during denied rotation", core.LOG.read_text())
+        core.log("rotation recovered")
+        self.assertIn("rotation recovered", core.LOG.read_text())
+        self.assertIn("kept during denied rotation", core.LOG.with_suffix(".log.1").read_text())
+
+    def test_open_log_reader_does_not_lose_current_or_following_event(self):
+        core.LOG.parent.mkdir(parents=True, exist_ok=True)
+        core.LOG.write_text("old record\n" + "x" * 1_000_001)
+        with core.LOG.open("r", encoding="utf-8") as reader:
+            core.log("event while reader holds log")
+            self.assertIn("event while reader holds log", core.LOG.read_text())
+            self.assertEqual(reader.readline(), "old record\n")
+        core.log("event after reader closes")
+        retained = core.LOG.read_text()
+        backup = core.LOG.with_suffix(".log.1")
+        if backup.exists():
+            retained += backup.read_text()
+        self.assertIn("event while reader holds log", retained)
+        self.assertIn("event after reader closes", retained)
 
     def test_long_query_never_sends_a_truncation_suffix_beyond_transport_limit(self):
         self.api.return_value = {"data": {}}
