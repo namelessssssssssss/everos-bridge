@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import json
 import math
+import queue
 import re
 import sys
+import threading
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -17,7 +19,8 @@ import core  # noqa: E402
 import recall  # noqa: E402
 import rules as rulebook  # noqa: E402
 
-VERSION = "0.9.0"
+VERSION = "0.9.2"
+MAX_PENDING_TOOL_CALLS = 16
 INSTRUCTIONS = (
     "EverOS 是用户跨 agent、跨设备共用的长期记忆。会话开始调用 memory_profile 了解用户，"
     "每条提问前的首次记忆检索调用 memory_search(method=agentic)，本轮同一问题已有充分hook注入时复用；"
@@ -330,9 +333,52 @@ def _reject_constant(value: str) -> None:
     raise ValueError(f"Invalid JSON constant: {value}")
 
 
+def _tool_request(msg) -> bool:
+    """Only request envelopes may enter the tool queue; notifications never run tools."""
+    return (isinstance(msg, dict) and msg.get("jsonrpc") == "2.0"
+            and msg.get("method") == "tools/call" and _valid_id(msg.get("id"))
+            and "result" not in msg and "error" not in msg)
+
+
 def main() -> None:
     server = Server()
+    pending = queue.Queue(maxsize=MAX_PENDING_TOOL_CALLS)
+    output_lock = threading.Lock()
+    output_closed = threading.Event()
+
+    def emit(out):
+        if out is None:
+            return
+        with output_lock:
+            if output_closed.is_set():
+                return
+            try:
+                sys.stdout.write(json.dumps(out, ensure_ascii=False) + "\n")
+                sys.stdout.flush()
+            except OSError:
+                output_closed.set()
+
+    def run_tools():
+        while True:
+            item = pending.get()
+            try:
+                if item is None:
+                    return
+                if not output_closed.is_set():
+                    msg, host = item
+                    # Keep the client identity from submission, even if another
+                    # initialize arrives while an earlier tool is still running.
+                    request_server = Server()
+                    request_server.host = host
+                    emit(request_server.respond(msg))
+            finally:
+                pending.task_done()
+
+    worker = threading.Thread(target=run_tools, name="everos-mcp-tools", daemon=True)
+    worker.start()
     for line in sys.stdin:
+        if output_closed.is_set():
+            break
         line = line.strip()
         if not line:
             continue
@@ -341,11 +387,20 @@ def main() -> None:
         except (ValueError, RecursionError):
             out = _error(None, -32700, "Parse error")
         else:
+            if _tool_request(msg):
+                # Tool calls (including writes) stay serial. Never block stdin on
+                # queue capacity: ping/list/initialize must remain responsive.
+                try:
+                    pending.put_nowait((msg, server.host))
+                except queue.Full:
+                    emit(_error(msg["id"], -32000, "Server busy: too many pending tool calls; retry later"))
+                continue
             out = server.respond(msg)
-        if out is None:
-            continue
-        sys.stdout.write(json.dumps(out, ensure_ascii=False) + "\n")
-        sys.stdout.flush()
+        emit(out)
+    # Normal EOF still completes every accepted request before exiting. Daemon
+    # status only avoids trapping process termination on an interrupted client.
+    pending.put(None)
+    worker.join()
 
 
 if __name__ == "__main__":

@@ -68,7 +68,13 @@ everos search "复杂的历史问题" --method agentic --timeout 240
 {"query":"复杂的历史问题","method":"agentic","timeout":240}
 ```
 
-优先级是按次 `timeout` / CLI `--timeout` > 环境变量 > config.env > 默认 180 秒。必须为正有限数值；非法配置明确报错。默认先给 agentic 约 168 秒，给回退预留至多 12 秒，整次调用仍受同一个 deadline 约束。
+优先级是按次 `timeout` / CLI `--timeout` > 环境变量 > config.env > 默认 180 秒。必须为正有限数值；非法配置明确报错。默认先给 agentic 约 150 秒，给回退预留至多 30 秒，整次调用仍受同一个 deadline 约束。
+
+检索故障恢复使用同一个总 deadline：用户和做法轨道独立执行，某轨道失败或未命中后立即回退，不等待其他慢轨道。安全读遇到短暂的网络错误或 HTTP 408/429/500/502/503/504 时，在剩余阶段预算内最多重试一次；HTTP 422 不盲目重试，提示保留具体状态。成功的 agentic 结果和其得分规则保持不变。
+
+`~/.everos/state/hook.log` 中的 `memory_read` JSON 事件记录 operation、track、method、attempt、elapsed_ms 和结果；同次 agentic 检索的轨道与回退共用 operation。deadline 和截止后晚到结果分别标记，错误响应只保留白名单内的 code/param、校验类型与字段路径，以及请求 ID 的摘要；不保存服务端自由文本、查询、凭据或检索结果正文。日志超过 1 MB 时保留上一份 `.log.1`，跨进程锁保护轮转与追加；系统暂时禁止重命名时仍追加当前事件，后续再尝试轮转。
+
+MCP 工具调用保持串行，使用最多 16 个待处理请求的有界队列；ping、初始化和工具列表不会被慢检索阻塞。队列满时明确报 busy，正常 EOF 会处理完已接收请求。
 
 MCP 客户端的外层超时需大于实际总预算。安装器会为 Codex 设置 `tool_timeout_sec`，为 MiMo 设置毫秒 `timeout`，至少达到配置预算 + 10 秒（默认 190 秒），并保留更大的现值。提高长期配置后重跑 `install.sh` 同步外层限制；按次传更大的 timeout 时也需确保宿主允许等待。其他宿主需按各自配置设置外层超时。
 

@@ -20,15 +20,20 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
+import http.client
 import json
 import math
 import os
 import queue
 import re
 import shlex
+import socket
 import threading
 import time
+import urllib.error
 import urllib.request
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -41,6 +46,7 @@ IDLE_FLUSH_H = 2
 SWEEP_EVERY_MIN = 30
 READ_TIMEOUT = 6               # 读侧同步注入的网络超时，宁可不注入也不拖慢会话
 AGENTIC_TIMEOUT = 180          # 自动/手动深检索的默认共同预算，包含回退
+FALLBACK_TIMEOUT = 30          # 为正常但较慢的 hybrid 请求保留恢复窗口
 AGENT_MIN_SCORE = 0.55         # 「做法」类召回的相关度门槛
 PRACTICE_MIN_STEPS = 3         # v2 少于 3 轮工具调用不提炼做法 case
 CASE_WAIT = 30                 # 写做法后等待 v2 做法 case 的默认上限（秒）
@@ -86,10 +92,17 @@ LOCALMEM_LEDGER = STATE / "localmem.json"
 def log(msg: str) -> None:
     try:
         STATE.mkdir(parents=True, exist_ok=True)
-        if LOG.exists() and LOG.stat().st_size > 1_000_000:
-            LOG.write_text("", encoding="utf-8")
-        with open(LOG, "a", encoding="utf-8") as f:
-            f.write(f"{datetime.now(CST):%Y-%m-%d %H:%M:%S} {msg}\n")
+        with open(LOG.with_suffix(".lock"), "a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if LOG.exists() and LOG.stat().st_size > 1_000_000:
+                try:
+                    LOG.replace(LOG.with_suffix(".log.1"))
+                except OSError:
+                    # Windows readers can deny rename/delete sharing. Keep the
+                    # current event and retry rotation on a later append.
+                    pass
+            with open(LOG, "a", encoding="utf-8") as f:
+                f.write(f"{datetime.now(CST):%Y-%m-%d %H:%M:%S} {msg}\n")
     except Exception:
         pass
 
@@ -273,20 +286,42 @@ def _profile_lines(pdata: dict, with_ids: bool = False) -> list[str]:
     return lines
 
 
-def _read_jobs(jobs: dict, budget: float) -> dict:
+def _read_jobs(jobs: dict, budget: float, *, operation: str | None = None) -> dict:
     """只等到共同 deadline；daemon 线程不会在 hook 退出时再等待网络。"""
     deadline = time.monotonic() + max(0.0, budget)
-    results, completed = {}, queue.Queue()
+    results, completed = ReadResults(), queue.Queue()
+    started = time.monotonic()
+    operation = operation or uuid.uuid4().hex[:16]
 
     def run(name, path, body):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             return
-        try:
-            data = _check_response(api(path, body, timeout=remaining)).get("data") or {}
-            completed.put((name, data, None))
-        except Exception as exc:
-            completed.put((name, None, exc))
+        for attempt in (1, 2):
+            request_started = time.monotonic()
+            remaining = deadline - request_started
+            if remaining <= 0:
+                return
+            try:
+                data = _check_response(api(path, body, timeout=remaining)).get("data")
+                data = {} if data is None else data
+                validate_read_data(data)
+                status = "success" if time.monotonic() <= deadline else "late_result"
+                log_read(operation, name, body, attempt, request_started, status)
+                completed.put((name, data, None))
+                return
+            except Exception as exc:
+                failure = read_failure(exc, body)
+                log_read(operation, name, body, attempt, request_started, "error", failure)
+                # Only retry safe reads with a transient transport/server error. A
+                # HTTP 422 needs its error detail investigated, not a blind retry.
+                remaining = deadline - time.monotonic()
+                delay = failure.get("retry_after", .2)
+                if attempt == 1 and failure["retryable"] and remaining > max(.5, delay):
+                    time.sleep(delay)
+                    continue
+                completed.put((name, None, failure))
+                return
 
     if budget <= 0:
         return results
@@ -301,10 +336,211 @@ def _read_jobs(jobs: dict, budget: float) -> dict:
         except queue.Empty:
             break
         if error is not None:
-            log(f"read {name} failed: {error!r}")
+            results.failures[name] = error
         else:
             results[name] = data
+    for name in jobs.keys() - results.keys() - results.failures.keys():
+        results.failures[name] = {"kind": "deadline", "retryable": True}
+        log_read(operation, name, jobs[name][1], 0, started, "deadline")
     return results
+
+
+def validate_read_data(data):
+    if not isinstance(data, dict):
+        raise APIResponseError("EverOS 返回了无效的 data 对象")
+    for key in ("episodes", "profiles", "agent_cases", "agent_skills", "cases", "skills"):
+        rows = data.get(key)
+        if rows is not None and (not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows)):
+            raise APIResponseError("EverOS 返回了无效的 " + key + " 列表")
+    if "agent_memory" in data and data["agent_memory"] is not None:
+        validate_read_data(data["agent_memory"])
+
+
+class ReadResults(dict):
+    """Keep successful empty reads distinct from failed or unfinished tracks."""
+    def __init__(self):
+        super().__init__()
+        self.failures = {}
+
+
+_READ_ERROR_CODES = frozenset({
+    "InvalidParameter", "PROVIDER_NOT_CONFIGURED", "INVALID_INPUT",
+    "invalid_request", "invalid_request_error", "invalid_parameter", "validation_error",
+    "rate_limit_exceeded", "internal_error", "internal_server_error", "service_unavailable",
+    "timeout", "retrieval_error",
+})
+_READ_ERROR_TYPES = frozenset({
+    "missing", "value_error", "type_error", "string_type", "string_too_short", "string_too_long",
+    "string_pattern_mismatch", "int_type", "int_parsing", "float_type", "float_parsing",
+    "bool_type", "bool_parsing", "list_type", "dict_type", "model_type", "model_attributes_type",
+    "enum", "literal_error", "greater_than", "greater_than_equal", "less_than", "less_than_equal",
+    "finite_number", "extra_forbidden", "json_invalid",
+})
+_READ_ERROR_PARAMS = frozenset({
+    "query", "user_id", "agent_id", "method", "top_k", "include_profile", "min_score",
+    "memory_type", "memory_types", "filters", "page_size", "page", "limit", "sort_by",
+    "sort_order", "enable_llm_rerank",
+})
+_READ_ERROR_LOCATIONS = _READ_ERROR_PARAMS | {"body", "path", "header", "__root__"}
+
+
+def _read_error_location(value):
+    if not isinstance(value, (list, tuple)) or not 1 <= len(value) <= 8:
+        return None
+    location = []
+    for part in value:
+        if isinstance(part, str) and part in _READ_ERROR_LOCATIONS:
+            location.append(part)
+        elif type(part) is int and part >= 0:
+            location.append("[index]")
+        else:
+            return None
+    return location
+
+
+def _read_error_projection(raw):
+    """Only fixed diagnostic symbols survive; free text may echo private input."""
+    if not isinstance(raw, dict):
+        return {}
+    if isinstance(raw.get("error"), dict):
+        raw = raw["error"]
+    projected = {}
+    code = raw.get("code")
+    if ((isinstance(code, str) and code in _READ_ERROR_CODES)
+            or (type(code) is int and code in (400, 401, 403, 404, 408, 409, 413, 422, 429, 500, 502, 503, 504))):
+        projected["code"] = code
+    if isinstance(raw.get("type"), str) and raw["type"] in _READ_ERROR_TYPES:
+        projected["type"] = raw["type"]
+    if isinstance(raw.get("param"), str) and raw["param"] in _READ_ERROR_PARAMS:
+        projected["param"] = raw["param"]
+    location = _read_error_location(raw.get("loc"))
+    if location is not None:
+        projected["loc"] = location
+    if isinstance(raw.get("detail"), list):
+        details = []
+        for row in raw["detail"][:4]:
+            if not isinstance(row, dict):
+                continue
+            item = {}
+            if isinstance(row.get("type"), str) and row["type"] in _READ_ERROR_TYPES:
+                item["type"] = row["type"]
+            location = _read_error_location(row.get("loc"))
+            if location is not None:
+                item["loc"] = location
+            if item:
+                details.append(item)
+        if details:
+            projected["detail"] = details
+    return projected
+
+
+def read_failure(exc: Exception, body: dict) -> dict:
+    """Log allowlisted diagnostic symbols, never service messages or echoed input."""
+    failure = {"kind": "error", "exception": type(exc).__name__, "retryable": False}
+    reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+    if isinstance(exc, urllib.error.HTTPError):
+        failure.update(kind="http", status=exc.code,
+                       retryable=exc.code in (408, 429, 500, 502, 503, 504))
+        try:
+            raw = json.loads(exc.read(16384).decode("utf-8", "replace"))
+        except Exception:
+            raw = {}
+        finally:
+            try:
+                exc.close()
+            except Exception:
+                pass
+        failure.update(_read_error_projection(raw))
+        if exc.headers:
+            try:
+                delay = float(exc.headers.get("Retry-After", "0"))
+                if math.isfinite(delay) and delay > 0:
+                    failure["retry_after"] = delay
+            except ValueError:
+                pass
+            request_id = exc.headers.get("x-request-id") or exc.headers.get("x-correlation-id")
+            if isinstance(request_id, str) and request_id:
+                failure["request_id_sha256"] = hashlib.sha256(request_id.encode("utf-8", "replace")).hexdigest()
+    elif isinstance(reason, (TimeoutError, socket.timeout)):
+        failure.update(kind="timeout", retryable=True)
+    elif isinstance(exc, (urllib.error.URLError, ConnectionError)):
+        failure.update(kind="network", retryable=True)
+    elif isinstance(reason, http.client.IncompleteRead):
+        failure.update(kind="network", retryable=True)
+    return failure
+
+
+def log_read(operation, name, body, attempt, started, status, failure=None):
+    event = {"event": "memory_read", "operation": operation, "track": name,
+             "method": body.get("method", "get"), "attempt": attempt, "status": status,
+             "elapsed_ms": round((time.monotonic() - started) * 1000)}
+    if failure:
+        event["failure"] = failure
+    log(json.dumps(event, ensure_ascii=False, separators=(",", ":")))
+
+
+def failure_label(failure):
+    kind = failure.get("kind")
+    if kind == "http":
+        return "HTTP " + str(failure["status"])
+    return {"deadline": "超过检索时限", "timeout": "网络超时", "network": "网络连接失败"}.get(kind, "请求失败")
+
+
+def _agentic_jobs(jobs, deadline, reserve, notices):
+    """Each track can recover immediately, independently of slower siblings."""
+    primary_deadline = deadline - reserve
+    completed = queue.Queue()
+    results, methods = ReadResults(), {}
+    operation = uuid.uuid4().hex[:16]
+    labels = {"v2u": "用户记忆", "v2a": "做法记忆"}
+
+    def run(name, path, body):
+        final, method, note = ReadResults(), body["method"], ""
+        try:
+            primary = _read_jobs({name: (path, body)}, max(0.0, primary_deadline - time.monotonic()), operation=operation)
+            final = primary
+            if name in labels and (name not in primary or not _has_search_hits(name, primary[name])):
+                reason = "未命中" if name in primary else failure_label(getattr(primary, "failures", {}).get(name, {}))
+                hybrid = dict(body, method="hybrid")
+                if name == "v2u":
+                    hybrid["min_score"] = _num("EVEROS_MIN_SCORE", .3)
+                recovered = _read_jobs({name: (path, hybrid)}, max(0.0, min(reserve, deadline - time.monotonic())), operation=operation)
+                if name in recovered:
+                    final, method = recovered, "hybrid"
+                    note = f"（{labels[name]}的 agentic {reason}，已回退 hybrid。）"
+                else:
+                    failure = getattr(recovered, "failures", {}).get(name, {"kind": "deadline"})
+                    note = f"（{labels[name]}的 agentic {reason}，hybrid 回退{failure_label(failure)}。）"
+        except Exception as exc:
+            final = ReadResults()
+            final.failures[name] = read_failure(exc, body)
+            note = f"（{labels.get(name, name)}检索{failure_label(final.failures[name])}。）"
+        finally:
+            completed.put((name, final, method, note))
+
+    for name, (path, body) in jobs.items():
+        threading.Thread(target=run, args=(name, path, body), daemon=True).start()
+    pending = set(jobs)
+    while pending:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            name, final, method, note = completed.get(timeout=remaining)
+        except queue.Empty:
+            break
+        pending.remove(name)
+        if name in final:
+            results[name], methods[name] = final[name], method
+        else:
+            results.failures[name] = getattr(final, "failures", {}).get(name, {"kind": "deadline"})
+        if note:
+            notices.append(note)
+    for name in pending:
+        results.failures[name] = {"kind": "deadline", "retryable": True}
+        if name in labels:
+            notices.append(f"（{labels[name]}的 agentic / hybrid 检索超过总时限。）")
+    return results, methods
 
 
 def profile_text(limit: int = 4000, with_ids: bool = False, budget: float | None = None) -> str:
@@ -369,7 +605,9 @@ def search_items(query: str, top_k: int = 5, kind: str = "all", include_profile:
     notes = notices if notices is not None else []
     if method == "agentic" and not deep:
         notes.append("（当前使用 v1，agentic 不可用，本次按 hybrid 检索。）")
-    q, k = clip(query, 500), top_k
+    # Presentation truncation appends a notice. Keep the bridge's query budget
+    # on the entire transmitted string, without adding display text to searches.
+    q, k = str(query).strip()[:500], top_k
     jobs = {}
     if version() == "v2":
         if kind in ("all", "episodes"):
@@ -387,33 +625,13 @@ def search_items(query: str, top_k: int = 5, kind: str = "all", include_profile:
             kind, ["episodic_memory", "agent_memory"])
         jobs["v1"] = ("/api/v1/memories/search", {"filters": {"user_id": owner()}, "query": q, "method": "hybrid",
                                                   "top_k": k, "memory_types": types})
-    reserve = min(READ_TIMEOUT * 2, total_budget / 3) if deep else 0.0
-    results = _read_jobs(jobs, max(0.0, deadline - time.monotonic() - reserve))
+    reserve = min(FALLBACK_TIMEOUT, total_budget / 3) if deep else 0.0
     agent_method = method
     if deep:
-        fallback = {}
-        labels = {"v2u": "用户记忆", "v2a": "做法记忆"}
-        for name, (path, body) in jobs.items():
-            if name not in labels:
-                continue
-            data = results.get(name) or {}
-            if name in results and _has_search_hits(name, data):
-                continue
-            hybrid = dict(body, method="hybrid")
-            if name == "v2u":
-                hybrid["min_score"] = _num("EVEROS_MIN_SCORE", 0.3)
-            fallback[name] = (path, hybrid)
-        if fallback:
-            recovered = _read_jobs(fallback, max(0.0, min(READ_TIMEOUT * 2, deadline - time.monotonic())))
-            for name in fallback:
-                reason = "未命中" if name in results else "失败或超时"
-                if name in recovered:
-                    results[name] = recovered[name]
-                    if name == "v2a":
-                        agent_method = "hybrid"
-                    notes.append(f"（{labels[name]}的 agentic {reason}，已回退 hybrid。）")
-                else:
-                    notes.append(f"（{labels[name]}的 agentic {reason}，hybrid 回退也失败或超时。）")
+        results, methods = _agentic_jobs(jobs, deadline, reserve, notes)
+        agent_method = methods.get("v2a", method)
+    else:
+        results = _read_jobs(jobs, max(0.0, deadline - time.monotonic()))
     if (method == "agentic" or strict) and jobs and not results:
         raise APIResponseError("记忆检索失败或超时，未获得任何成功轨道；请重试。")
     if strict and results:

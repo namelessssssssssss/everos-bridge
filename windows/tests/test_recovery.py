@@ -55,6 +55,23 @@ class RecoveryTests(unittest.TestCase):
             install.assert_not_called()
         self.assertEqual(before, (self.config.stat().st_mtime_ns, self.native.stat().st_mtime_ns))
 
+    def test_equivalent_runtime_alias_keeps_installed_cli_healthy(self):
+        alias = self.runtime / ".." / self.runtime.name
+        self.assertNotEqual(str(alias), str(self.runtime.resolve()))
+        self.assertTrue(alias.samefile(self.runtime))
+        config = self.good_config.replace(json.dumps(str(self.runtime)), json.dumps(str(alias)))
+        config = config.replace(json.dumps(str(self.runtime / "plugin/everos/mcp_server.py")),
+                                json.dumps(str(alias / "plugin/everos/mcp_server.py")))
+        self.config.write_text(config, encoding="utf-8")
+        before = self.config.read_bytes(), self.native.read_bytes()
+        with patch.object(recover, "expected_runtime", return_value=alias), \
+                patch.object(self.installer, "install") as install:
+            result = recover.recover(self.installer)
+            self.assertEqual(result["issues"], [])
+            self.assertEqual(result["repair"], "none")
+            install.assert_not_called()
+        self.assertEqual(before, (self.config.read_bytes(), self.native.read_bytes()))
+
     def test_extended_windows_marketplace_prefix_is_the_same_directory(self):
         extended = "\\\\?\\" + str(self.runtime)
         config = self.good_config.replace(json.dumps(str(self.runtime)), json.dumps(extended))

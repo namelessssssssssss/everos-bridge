@@ -1,5 +1,5 @@
 {
-  "source_revision": "f8fe57e5f0e5b3a7d9b00becf0ae66457121a8af",
+  "source_revision": "2cbfb8e4c1a526c6fb29312561a69756c709b42e",
   "sha256": {
     ".agents/plugins/marketplace.json": "b8ea166ea2b7be9b440b456735629a067dab2e179b5e49c60b3198578aefdf16",
     ".claude-plugin/marketplace.json": "da739a75bd93d089278354f195d2a70b1bb63792345e88f6b40081da84737b22",
@@ -12,16 +12,16 @@
     "cloud/settings.snippet.json": "ba6bdc08d148f0992954a25ffecbeb554790b0fc60591fe3f7b2bc8b6025948e",
     "cloud/setup.sh": "c77047bb2907267beacb77066ad7daae2c2e45beaa15459d8d079b9526b5a511",
     "install.sh": "efa48fd8d41b47738123fecac33289c04a6c9f810b2e4961404cf62cd74e4a3b",
-    "plugin/.claude-plugin/plugin.json": "5b97a41aed34e4a2d35b0a414f2584e9327e43e2b25db715cd89051b9600f441",
-    "plugin/.codex-plugin/plugin.json": "c76af404e1dae40701b5157c42b154a0bc09ccf9c097b09dfa4ec4acb8888477",
+    "plugin/.claude-plugin/plugin.json": "157720c71305c109fcc87d8318d84238fa609bd3e00f644735d48afde2293af6",
+    "plugin/.codex-plugin/plugin.json": "8c51781160d6dd1edab9f135c69c41a55f2e656570afb454406ced90accf458d",
     "plugin/claude-mcp.json": "b78545d0a9f4f76fd4bb93e271ad0601fd2989b86c5002bec89d9c0716036b56",
     "plugin/doubao/check.sh": "760c5f2edba85c72bbe451404b3aa13a86a184aabcb97b2a747f3049218da700",
     "plugin/doubao/doubao.py": "a5d79bde7d3a86ece72f3be5adb7ade0ac0498cca845a2e662d310a5d2d0d395",
     "plugin/doubao/mcp_call.py": "6b950e6a4edd704e08cedfd3f39ca6093e677affdb72266519db33ad13e3a552",
     "plugin/everos/cli.py": "95b85e34eaf9c46f6b6722f93d3fd0ab797b4e90d11d067316d1a89fa5a6fd47",
-    "plugin/everos/core.py": "d26a07cb12ba7cd1d9900a90bd2c8679fb4f24bad73e4d27a4ee958129588c91",
+    "plugin/everos/core.py": "367d560f2328c8f1c9a4d2440dc5129c4cee7316867f889da13befe9d5b5f597",
     "plugin/everos/hook.py": "07b78eea8889197caa6c897e6b4671f34bb18dcda010a1b47caf6902010c9ffd",
-    "plugin/everos/mcp_server.py": "109800a5406aa931c176d4265841f4713553eee8a737a0a3afa445091809c51e",
+    "plugin/everos/mcp_server.py": "d3311acd3976a284b5bfb0f1ed29b1e9b87cb846825410ef7d699c31ade8022f",
     "plugin/everos/recall.py": "ccb08a78c228cb6479f8f1cb9143e667a3852cd842cecf3ffc826942e73f95b0",
     "plugin/everos/rules.py": "2299c9e1e4117afae0752bca9a271eabc5f8a4420dcc157d706b801aad38ddea",
     "plugin/everos/trae.py": "1787d3fd117dbaec8e0e34ec5ee89a4893221a50b3dc55d0eba1d6542acf15b9",
@@ -38,18 +38,21 @@
     "scripts/validate_clients.py": "9e99de6b9495fe823d5d923146b0fb4b853f3f53f8c2f80a61264d3862b89d6b",
     "scripts/validate_trae.py": "08bcedc3f8b451dec60455e780b8ce56824ab552495a4e80bb8b1d492fddb96c",
     "tests/test_cli.py": "c3df28fce4296a50fba873d3ec586d4686e564e14794ef15db9c503bd1c85847",
-    "tests/test_core_regressions.py": "eb4e05b8ef8a966684bd65df8988cf39fa5a93068887ab5dda2f07b8731bb193",
+    "tests/test_core_regressions.py": "ab58e8b375826aeba1723a529397639782a06c4924fe0ccd2d3ec83e69629c69",
     "tests/test_doubao.py": "0a2026399537979c7f73f66707441f49400d24d52a4fab2885a4a56ca4241b2d",
     "tests/test_harness_audit.py": "ea8f2a7fa406e04b81a7a6aef423352a172b22a4ea717d72430d0767595a5e99",
     "tests/test_install.py": "c7dc3ded5dad7aa1220c9da4de9ca9215703227b29169e34107d6985aa51c367",
-    "tests/test_mcp.py": "1c053be264bdf1788e1f1c1ceac1fbe3fe0ef6762efff7aa61f648f0e211f271",
+    "tests/test_mcp.py": "ed211f55c1c5e23fd9ebe6aff45bc04c2f71c39462c45264bedfcc9795fdd6f0",
+    "tests/test_mcp_concurrency.py": "df9cca50a3df9ee91d3eecd51a8effee0999559873e488ce5d25c05d3a9aa7bd",
     "tests/test_mimo.py": "45575ed7861be03659f53db4e7a63c4ca077b72971004349fbd738f3ad813cdb",
     "tests/test_mimo_workflow.py": "b9287a7e32eb5804511799c1a5182aa147d0c61c374f02c353235e5a80a617d1",
+    "tests/test_read_resilience.py": "51cc75e93423bf074e434b672f1e9ee6c5e2c5e04c360d00a3a555b1d70c122c",
     "tests/test_recall_workflow.py": "246b01e96ef7d7d993268655ec580a92de33e6be9ac77db151ef167b94414531",
     "tests/test_rules.py": "4eb959870a3182490eb2317cb8284c1561cdef509e27138e3636df4cd286b667",
     "tests/test_trae.py": "199bb18b9929820857f4cef9afc235aa1c7fc488433884cb446698b510657c73"
   },
   "reviewed_changes": [
-    "Rule update only: plugin/everos/rules.py, plugin/rules/everos-rules.md, plugin/skills/everos-memory/SKILL.md; verified-source automatic rule update, memory/API behavior unchanged"
+    "Rule update only: plugin/everos/rules.py, plugin/rules/everos-rules.md, plugin/skills/everos-memory/SKILL.md; verified-source automatic rule update, memory/API behavior unchanged",
+    "PR #20 follow-up based on 2cbfb8e: reviewed shared recovery deadlines, safe-read retries, structured diagnostics, log rotation and serial MCP queue; refresh six changed canonical fingerprints, include two new shared regression suites, adapt the new diagnostic lock to a+b in the Windows copy, and exercise all shared suites in native Windows CI. Manifests and MCP version advance to 0.9.2. No Unix installer or existing Linux CI changes."
   ]
 }
