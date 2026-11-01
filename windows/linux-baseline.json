@@ -1,5 +1,5 @@
 {
-  "source_revision": "2cbfb8e4c1a526c6fb29312561a69756c709b42e",
+  "source_revision": "b4d43c1cc5085f21d4db26ff9cd4b36bfc5d2a62",
   "sha256": {
     ".agents/plugins/marketplace.json": "b8ea166ea2b7be9b440b456735629a067dab2e179b5e49c60b3198578aefdf16",
     ".claude-plugin/marketplace.json": "da739a75bd93d089278354f195d2a70b1bb63792345e88f6b40081da84737b22",
@@ -15,8 +15,8 @@
     "plugin/.claude-plugin/plugin.json": "157720c71305c109fcc87d8318d84238fa609bd3e00f644735d48afde2293af6",
     "plugin/.codex-plugin/plugin.json": "8c51781160d6dd1edab9f135c69c41a55f2e656570afb454406ced90accf458d",
     "plugin/claude-mcp.json": "b78545d0a9f4f76fd4bb93e271ad0601fd2989b86c5002bec89d9c0716036b56",
-    "plugin/doubao/check.sh": "760c5f2edba85c72bbe451404b3aa13a86a184aabcb97b2a747f3049218da700",
-    "plugin/doubao/doubao.py": "a5d79bde7d3a86ece72f3be5adb7ade0ac0498cca845a2e662d310a5d2d0d395",
+    "plugin/doubao/check.sh": "5c57add7b23d3bc1e4acc6e5ac0f7a84369633d65e59215cb85625e70095dd0a",
+    "plugin/doubao/doubao.py": "f563a8644dd6b44576720cebb1bb4e1b4da1d6ecb5f548952424a06af8f3ce84",
     "plugin/doubao/mcp_call.py": "6b950e6a4edd704e08cedfd3f39ca6093e677affdb72266519db33ad13e3a552",
     "plugin/everos/cli.py": "95b85e34eaf9c46f6b6722f93d3fd0ab797b4e90d11d067316d1a89fa5a6fd47",
     "plugin/everos/core.py": "367d560f2328c8f1c9a4d2440dc5129c4cee7316867f889da13befe9d5b5f597",
@@ -28,20 +28,21 @@
     "plugin/hooks/hooks.json": "ce36ac009560eb6a06d84287f5f7a8d278689f10cf9ecc54b3fbe757d326c20d",
     "plugin/mimo/everos.mjs": "b4fd831101ebb4ec423751f98b20d63ec721d514ac70d8ffdf11f709cdb33644",
     "plugin/rules/everos-rules.md": "d4ac0339167adb34d7960fe0fe5e83ab16121a882a9cd7271d89c63d5f49011d",
-    "plugin/skills/everos-memory-doubao/SKILL.md": "cbd735cff2f1f18cd38c738827f14df8e2412c7706b5dbfb2b7fdb60978af842",
+    "plugin/skills/everos-memory-doubao/SKILL.md": "5c5a49e18ffe3d0e745f6e913771cc8b60a4abaf5fad698bb5f1e56629663347",
     "plugin/skills/everos-memory/SKILL.md": "7047838f46bd84ebcc5d16602ab6eb55d3c9b49de90310f7a9012ff26cde8515",
     "scripts/audit_harnesses.py": "f5dde18e4c37dea478bb26ae8ab0bee66294717e51fa5e39b25c61cdc1fb7505",
     "scripts/eval/fixture_server.py": "834ccd6e342f7a96c3b5967539408d8fb362e0cb114299ece2e177c93f0da72a",
     "scripts/eval/judge_retrieval.py": "bf887c04b7dbb0222cc1ef0f81891287efb52004c73b836d46063db34e32d4ca",
     "scripts/eval/run_retrieval.py": "c649de270964a756a7389af6cdba1bb19d3e0c2c9221b5901362dcd8dff8735b",
-    "scripts/install_config.py": "af96e6124d3121c64a7919a93dc15e06120cdc58b100bd27f9d5436614ff8091",
+    "scripts/install_config.py": "dc167bba3de78965ee74836a9e3c3602efdf8c285c23aaf8777b1450c4a0b83b",
     "scripts/validate_clients.py": "9e99de6b9495fe823d5d923146b0fb4b853f3f53f8c2f80a61264d3862b89d6b",
     "scripts/validate_trae.py": "08bcedc3f8b451dec60455e780b8ce56824ab552495a4e80bb8b1d492fddb96c",
     "tests/test_cli.py": "c3df28fce4296a50fba873d3ec586d4686e564e14794ef15db9c503bd1c85847",
     "tests/test_core_regressions.py": "ab58e8b375826aeba1723a529397639782a06c4924fe0ccd2d3ec83e69629c69",
     "tests/test_doubao.py": "0a2026399537979c7f73f66707441f49400d24d52a4fab2885a4a56ca4241b2d",
     "tests/test_harness_audit.py": "ea8f2a7fa406e04b81a7a6aef423352a172b22a4ea717d72430d0767595a5e99",
-    "tests/test_install.py": "c7dc3ded5dad7aa1220c9da4de9ca9215703227b29169e34107d6985aa51c367",
+    "tests/test_install.py": "a3fdb457cde004d589fb2c278259ab342abe35a9f554888800eff3cc52b783fa",
+    "tests/test_doubao_repair.py": "bb691749f41b3000076c37a2c9604a1da2e28c1cfcc3b5096b3d853e877ca9a8",
     "tests/test_mcp.py": "ed211f55c1c5e23fd9ebe6aff45bc04c2f71c39462c45264bedfcc9795fdd6f0",
     "tests/test_mcp_concurrency.py": "df9cca50a3df9ee91d3eecd51a8effee0999559873e488ce5d25c05d3a9aa7bd",
     "tests/test_mimo.py": "45575ed7861be03659f53db4e7a63c4ca077b72971004349fbd738f3ad813cdb",
@@ -52,6 +53,7 @@
     "tests/test_trae.py": "199bb18b9929820857f4cef9afc235aa1c7fc488433884cb446698b510657c73"
   },
   "reviewed_changes": [
+    "b4d43c1: explicitly reviewed Doubao-only timestamp matching, legacy row-offset migration, scoped installation and runtime selfcheck changes; 281 Unix regressions, isolated remote write/get/search and capture idempotence passed. Refresh only five changed fingerprints and add the synthetic capture repair suite. No Windows runtime algorithm or isolation assertion changed.",
     "Rule update only: plugin/everos/rules.py, plugin/rules/everos-rules.md, plugin/skills/everos-memory/SKILL.md; verified-source automatic rule update, memory/API behavior unchanged",
     "PR #20 follow-up based on 2cbfb8e: reviewed shared recovery deadlines, safe-read retries, structured diagnostics, log rotation and serial MCP queue; refresh six changed canonical fingerprints, include two new shared regression suites, adapt the new diagnostic lock to a+b in the Windows copy, and exercise all shared suites in native Windows CI. Manifests and MCP version advance to 0.9.2. No Unix installer or existing Linux CI changes."
   ]
