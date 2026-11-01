@@ -26,6 +26,8 @@ import os
 import re
 import sys
 import time
+import uuid
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -67,48 +69,69 @@ def text_of(content) -> str:
     return ""
 
 
-def messages_doubao(rows: list[dict], user_ts: list[int], fallback_ms: int) -> list[dict]:
-    """Turn main-agent trajectory rows into EverOS messages (user + final assistant only).
-
-    ``user_ts`` is the ordered list of per-turn timestamps read from assignment.md; it aligns
-    with role=user rows in row order. Assistant finals produced before turn N+1 arrive are
-    timestamped one millisecond before that user turn; a trailing final answer (no following
-    turn yet) uses ``fallback_ms`` and must therefore be re-evaluated next run.
-    Consecutive duplicate user texts (the harness may log the same request twice) collapse.
-    """
-    out: list[tuple[int, dict]] = []
-    u_idx = -1
-    last_user = None
-    pending: list[tuple[int, str]] = []
-
+def _indexed_messages(rows: list[dict], user_ts: list[int | None], fallback_ms: int):
+    out, pending = [], []
+    u_idx, last_user = -1, None
     for i, row in enumerate(rows):
         role = row.get("role")
         if role == "user":
             u_idx += 1
-            ts = user_ts[u_idx] if 0 <= u_idx < len(user_ts) else None
-            for ai, text in pending:  # flush previous turn's finals just before this turn
-                out.append((ai, {"role": "assistant", "sender_id": HOST,
-                                 "timestamp": (ts - 1) if ts else fallback_ms, "content": core.clip(text)}))
-            pending = []
             text = clean_user(text_of(row.get("content")))
             if not text or text == last_user:
                 continue
+            ts = user_ts[u_idx] if u_idx < len(user_ts) else None
+            for ai, answer in pending:
+                out.append((ai, {"role": "assistant", "sender_id": HOST,
+                                 "timestamp": ts - 1 if ts else fallback_ms, "content": core.clip(answer)}))
+            pending = []
             last_user = text
-            out.append((i, {"role": "user", "sender_id": core.owner(), "timestamp": ts or fallback_ms,
-                            "content": core.clip(text)}))
-        elif role == "assistant" and not row.get("tool_calls"):
+            out.append((i, {"role": "user", "sender_id": core.owner(),
+                            "timestamp": ts or fallback_ms, "content": core.clip(text)}))
+        elif role == "assistant" and not row.get("tool_calls") and row.get("channel") in (None, "final"):
             text = text_of(row.get("content")).strip()
             if text:
                 pending.append((i, text))
-    for ai, text in pending:
-        out.append((ai, {"role": "assistant", "sender_id": HOST, "timestamp": fallback_ms,
-                         "content": core.clip(text)}))
-    out.sort(key=lambda x: x[0])
-    return core._monotonic([m for _, m in out])
+    for ai, answer in pending:
+        out.append((ai, {"role": "assistant", "sender_id": HOST,
+                         "timestamp": fallback_ms, "content": core.clip(answer)}))
+    return sorted(out, key=lambda item: item[0])
 
 
-def assignment_timestamps(assign_text: str) -> list[int]:
-    return [parse_ts(m) for m in ASSIGN_TS.findall(assign_text)]
+def messages_doubao(rows: list[dict], user_ts: list[int], fallback_ms: int) -> list[dict]:
+    return core._monotonic([m for _, m in _indexed_messages(rows, user_ts, fallback_ms)])
+
+
+def assignment_timestamps(assign_text: str, rows: list[dict] | None = None) -> list[int | None]:
+    headings = list(ASSIGN_TS.finditer(assign_text))
+    entries = []
+    for i, heading in enumerate(headings):
+        end = headings[i + 1].start() if i + 1 < len(headings) else len(assign_text)
+        text = clean_user(assign_text[heading.end():end])
+        if text:
+            entries.append((text, parse_ts(heading.group(1))))
+    if rows is None:
+        return [ts for _, ts in entries]
+    result, cursor, previous, previous_ts = [], 0, None, None
+    for row in rows:
+        if row.get("role") != "user":
+            continue
+        text = clean_user(text_of(row.get("content")))
+        if not text:
+            result.append(None)
+            continue
+        if text == previous:
+            result.append(previous_ts)
+            continue
+        match = next((i for i in range(cursor, len(entries)) if entries[i][0] == text), None)
+        if match is not None:
+            ts, cursor = entries[match][1], match + 1
+        else:
+            # Unknown historical times stay unknown; never borrow a different request's date.
+            ts = None
+        result.append(ts)
+        previous, previous_ts = text, ts
+    return result
+
 
 
 def main_agent_dir(sessions_root: Path, sid: str) -> Path:
@@ -116,10 +139,22 @@ def main_agent_dir(sessions_root: Path, sid: str) -> Path:
     base = sessions_root / sid / "agents"
     if not base.is_dir():
         raise FileNotFoundError(f"会话目录不存在: {base}")
+    explicit, fallback = [], []
     for d in sorted(base.iterdir()):
+        if not d.is_dir() or d.is_symlink():
+            continue
         assign = d / "system" / "assignment.md"
-        if assign.is_file() and re.search(r"^- Role:\s*main\s*$", assign.read_text(encoding="utf-8"), re.M):
-            return d
+        text = assign.read_text(encoding="utf-8") if assign.is_file() else ""
+        roles = re.findall(r"^- Role:\s*(\S+)\s*$", text, re.M)
+        if "main" in roles:
+            explicit.append(d)
+        elif not roles and d.name.startswith("m_") and (d / "system/trajectory.jsonl").is_file():
+            fallback.append(d)
+    candidates = explicit or fallback
+    if len(candidates) == 1:
+        return candidates[0]
+    if len(candidates) > 1:
+        raise ValueError(f"main agent 不唯一，保留现场：{base}")
     raise FileNotFoundError(f"未找到 main agent: {base}")
 
 
@@ -141,7 +176,7 @@ def current_session_id() -> str:
 
 def session_name(sid: str, rows: list[dict], user_ts: list[int]) -> str:
     first = next((clean_user(text_of(r.get("content"))) for r in rows if r.get("role") == "user"), "")
-    ts = user_ts[0] / 1000 if user_ts else time.time()
+    ts = user_ts[0] / 1000 if user_ts and user_ts[0] is not None else time.time()
     day = datetime.fromtimestamp(ts, core.CST)
     return f"dw_{day:%Y%m%d}_{core.slug(first) or 'session'}_{sid}"[:128]
 
@@ -154,20 +189,25 @@ def read_session(sessions_root: Path, sid: str) -> dict:
     """
     adir = main_agent_dir(sessions_root, sid)
     traj = adir / "system" / "trajectory.jsonl"
-    assign = (adir / "system" / "assignment.md").read_text(encoding="utf-8")
+    assignment = adir / "system" / "assignment.md"
+    assign = assignment.read_text(encoding="utf-8") if assignment.is_file() else ""
     raw = traj.read_bytes()
     end = raw.rfind(b"\n") + 1
     rows, offsets = [], []
     pos = 0
     for line in raw[:end].splitlines(keepends=True):
-        try:
-            rows.append(json.loads(line))
+        if line.strip():
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"trajectory 完整行 JSON 损坏，byte={pos}") from exc
+            if not isinstance(row, dict):
+                raise ValueError(f"trajectory 行不是消息对象，byte={pos}")
+            rows.append(row)
             offsets.append(pos)
-        except json.JSONDecodeError:
-            pass
         pos += len(line)
     return {"agent_dir": adir, "trajectory": traj, "rows": rows, "offsets": offsets, "length": end,
-            "user_ts": assignment_timestamps(assign),
+            "user_ts": assignment_timestamps(assign, rows),
             # First-row fingerprint: appending later turns must not invalidate it.
             "head_hash": hashlib.sha256(
                 json.dumps(rows[0], ensure_ascii=False, sort_keys=True).encode()).hexdigest() if rows else ""}
@@ -186,18 +226,31 @@ def ingest_session(sid: str, *, sessions_root: Path | None = None, dry_run: bool
     data = read_session(sessions_root, sid)
     rows, offsets, length = data["rows"], data["offsets"], data["length"]
     fallback = int(data["trajectory"].stat().st_mtime * 1000)
-    core.SESS_DIR.mkdir(parents=True, exist_ok=True)
+    if not dry_run:
+        core.ensure_writable()
+        core.SESS_DIR.mkdir(parents=True, exist_ok=True)
     sp = core.SESS_DIR / f"doubao_{sid}.json"
-    with open(sp.with_suffix(".lock"), "w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    lock_context = nullcontext(None) if dry_run else open(sp.with_suffix(".lock"), "w")
+    with lock_context as lock:
+        if lock is not None:
+            fcntl.flock(lock, fcntl.LOCK_EX)
         st = core.load_state(sp)
         offset = int(st.get("offset", 0)) if since_bytes is None else since_bytes
+        unit = st.get("offset_unit")
+        if unit not in (None, "bytes-v1"):
+            raise ValueError("未知 offset_unit；拒绝重放")
+        migrate = bool(st) and unit is None and since_bytes is None
+        if migrate:
+            if offset < 0 or offset > len(rows):
+                raise ValueError("旧行偏移越界；拒绝重放")
+            offset = offsets[offset] if offset < len(rows) else length
+        if offset < 0 or offset > length:
+            raise ValueError("字节偏移越界；拒绝重放")
         head_hash = st.get("head_hash")
-        if head_hash and (head_hash != data["head_hash"] or offset > length):
-            raise RuntimeError("trajectory 已被改写或截断（offset/首行不匹配）；为避免重复入库已停止，请人工核对")
-        new_rows = [(i, row) for i, row in enumerate(rows) if offsets[i] >= offset]
-        msgs = messages_doubao([r for _, r in new_rows], _aligned_ts(data["user_ts"], new_rows, rows),
-                               fallback) if new_rows else []
+        if head_hash and head_hash != data["head_hash"]:
+            raise RuntimeError("trajectory 已被改写或截断；为避免重复入库已停止，请人工核对")
+        indexed = _indexed_messages(rows, data["user_ts"], fallback)
+        msgs = core._monotonic([m for i, m in indexed if offsets[i] >= offset])
         result = {"session": sid, "everos_session_id":
                   st.get("everos_session_id") or session_name(sid, rows, data["user_ts"]),
                   "new_messages": len(msgs), "roles": [m["role"] for m in msgs], "dry_run": dry_run,
@@ -211,29 +264,34 @@ def ingest_session(sid: str, *, sessions_root: Path | None = None, dry_run: bool
             st.update(claude_session_id=sid, host=HOST, cwd=str(Path.home() / "Doubao" / "chats" / sid),
                       transcript_path=str(data["trajectory"]), everos_session_id=result["everos_session_id"],
                       head_hash=data["head_hash"])
-        new_offset = offsets[new_rows[-1][0]] + 1 if new_rows else (min(offset, length) if offset else 0)
+        if migrate:
+            backup = sp.with_name(sp.name + ".bak-offset-" + uuid.uuid4().hex)
+            with open(backup, "xb") as out:
+                os.chmod(backup, 0o600)
+                out.write(sp.read_bytes())
+        new_offset = length
         core.prepare_session_version(st, sp)
         if msgs:
             res = core.post_messages(st["everos_session_id"], msgs)
+            if res not in {"accumulated", "extracted", "buffered", "no_extraction"}:
+                raise core.APIResponseError("Doubao add 未确认成功")
             st.update(pending=True, api=core.version(), last_write_ms=int(time.time() * 1000),
                       last_write_status=res, writes=st.get("writes", 0) + 1,
                       messages=st.get("messages", 0) + len(msgs))
             core.log(f"doubao_work add {st['everos_session_id']} +{len(msgs)} -> {res}")
             result["add"] = res
             new_offset = length  # messages may include finals read before this byte boundary; advance to read end
-        st["offset"] = new_offset
+        st.update(offset=new_offset, offset_unit="bytes-v1")
         core.save_state(sp, st)
         if flush and st.get("pending"):
             res = core.flush(st["everos_session_id"], ver=st.get("api"))
+            if res not in {"extracted", "no_extraction"}:
+                raise core.APIResponseError("Doubao flush 未确认成功")
             st.update(pending=False, last_flush_ms=int(time.time() * 1000), last_flush_status=res)
             core.save_state(sp, st)
             core.log(f"doubao_work flush {st['everos_session_id']} -> {res}")
             result["flush"] = res
         result["offset_after"] = st["offset"]
-    try:
-        core.sweep()  # rate-limited inside; failures never undo a successful add
-    except Exception as exc:
-        core.log_error(f"doubao_work sweep failed", exc)
     return result
 
 
