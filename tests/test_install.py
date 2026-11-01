@@ -145,6 +145,29 @@ class InstallerTests(unittest.TestCase):
     def calls(self):
         return [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
 
+    def test_doubao_only_migrates_known_launchers_without_touching_hosts(self):
+        files = {name: self.put('.local/bin/' + name, '#!/bin/sh\n# everos-doubao launcher\nexec python3 ' + str(self.home / '.local/lib/everos-doubao') + '/' + module + ' "$@"\n') for name, module in [('everos-mcp', 'everos_mcp.py'), ('everos-doubao-ingest', 'doubao_ingest.py')]}
+        self.env['DOUBAO_USER_SKILLS'] = str(self.home / 'skills')
+        (self.home / 'skills').mkdir()
+        existing = self.put('.codex/config.toml', '# untouched\n')
+        self.run_install('--only', 'doubao', '--dry-run')
+        self.assertTrue(all(not p.is_symlink() for p in files.values()))
+        self.run_install('--only', 'doubao')
+        self.assertTrue(all(p.is_symlink() for p in files.values()))
+        self.assertEqual(existing.read_text(), '# untouched\n')
+        self.assertFalse((self.home / '.everos/config.env').exists())
+        skill = (self.home / 'skills/everos-memory/SKILL.md').read_text()
+        self.assertIn(str(self.repo / 'PROTOCOL.md'), skill)
+        self.assertNotIn('~/.everos/PROTOCOL.md', skill)
+        self.assertTrue(list((self.home / '.local/bin').glob('*.bak-everos-*')))
+        self.assertEqual(self.calls(), [])
+        self.run_install('--only', 'doubao')
+
+    def test_doubao_only_preserves_unknown_launcher(self):
+        existing = self.put('.local/bin/everos-mcp', '# unrelated\n')
+        self.run_install('--only', 'doubao', expect=1)
+        self.assertEqual(existing.read_text(), '# unrelated\n')
+
     def assert_toml(self, text):
         if tomllib:
             return tomllib.loads(text)
@@ -200,8 +223,9 @@ class InstallerTests(unittest.TestCase):
         skills.mkdir(parents=True)
         (skills / "scripts").mkdir()
         self.run_install()
-        self.assertEqual((skills / "SKILL.md").read_text(),
-                         (self.repo / "plugin/skills/everos-memory-doubao/SKILL.md").read_text())
+        expected = (self.repo / "plugin/skills/everos-memory-doubao/SKILL.md").read_text()
+        expected = expected.replace("~/.everos/PROTOCOL.md", str(self.repo / "PROTOCOL.md")).replace("（软链到本仓 `PROTOCOL.md`）", "（本次豆包接入的规则源）")
+        self.assertEqual((skills / "SKILL.md").read_text(), expected)
         self.assertTrue((skills / "scripts/check.sh").read_text().startswith("#!"))
         # idempotent: second run leaves files untouched
         before = (skills / "SKILL.md").lstat().st_mtime_ns

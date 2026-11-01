@@ -33,6 +33,20 @@ EVEROS_USER_ID=… EVEROS_API_KEY=… EVEROS_READ_V1=1 ~/.everos-bridge/install.
 只想装命令、不配置其他宿主、不需要凭据自检：`install.sh --cli-only`（两个 Doubao 命令也会装）。
 Doubao skill 目录可用环境变量 `DOUBAO_USER_SKILLS` 覆盖（测试用）。
 
+仅刷新豆包使用 `install.sh --only doubao`：只安装两个命令和用户 skill，不改其他客户端或凭据。
+早期独立 launcher 精确匹配已知内容时，先备份再迁移；未知文件或不同来源符号链接仍拒绝覆盖。
+自检从实际 `everos-mcp` 目标确定 runtime，要求两个命令同源并实际列出 9 个工具，不仅检查文件存在。
+
+### 采集兼容与验证
+
+需求时间按清洗后的正文匹配，空需求段与系统提醒不占用用户轮次；无匹配时使用采集时间，不借用其他需求的日期。
+无 Role 标记时仅允许唯一、含 trajectory 的 `m_` 目录作为回退；多个候选停止并报告。
+旧独立运行时无单位的 offset 是消息行索引，首次成功写入前保留 0600 备份，再转换为明确 `bytes-v1`。
+dry-run 不迁移、不创建锁或推进账本；不认识的 offset_unit、损坏完整 JSON 行、越界偏移拒绝继续。
+全会话先投影再按字节边界选新增，跨边界重复用户消息不会重放；明确 analysis/commentary 通道不采集。
+单会话采集不隐式 sweep 其他会话，补采与跨会话维护必须单独授权。真实验收使用隔离空间合成数据，不上传真实聊天作测试。
+
+
 凭据只写 `~/.everos/config.env`（0600），不进仓库、不进 skill。
 
 ## 首次建立入库时间点
