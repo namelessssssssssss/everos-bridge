@@ -226,6 +226,10 @@ class McpTests(unittest.TestCase):
         with mock.patch.object(mcp_server.core, "recent_text", return_value="recent") as recent:
             self.assertFalse(self.call_tool("memory_recent", {})["result"]["isError"])
             recent.assert_called_once_with(7, 20)
+        with mock.patch.object(mcp_server.core, "recent_text", side_effect=RuntimeError("v2 read failed")):
+            response = self.call_tool("memory_recent", {})
+        self.assertTrue(response["result"]["isError"])
+        self.assertIn("v2 read failed", response["result"]["content"][0]["text"])
 
     def test_write_arguments_validate_required_fields_and_nested_steps(self):
         ok = {"action": "act", "result": "ok"}
@@ -329,15 +333,15 @@ class McpTests(unittest.TestCase):
                 "conclusion": "done"}
         with mock.patch.object(mcp_server.core, "cfg", return_value={"EVEROS_USER_ID": "unit-owner",
                 "EVEROS_API_VERSION": "v2", "EVEROS_READ_V1": "1"}), \
-                mock.patch.object(mcp_server.core, "post_messages", side_effect=[RuntimeError("v2 down"), "accumulated"]) as post, \
+                mock.patch.object(mcp_server.core, "post_messages", side_effect=[RuntimeError("v2 down")]) as post, \
                 mock.patch.object(mcp_server.core, "flush", return_value="extracted"), \
                 mock.patch.object(mcp_server.core.time, "sleep"):
             response = self.call_tool("memory_record_practice", args)
         self.assertTrue(response["result"]["isError"])
-        self.assertEqual(post.call_count, 2)
+        self.assertEqual(post.call_count, 1)
         text = response["result"]["content"][0]["text"]
-        self.assertIn("v2", text)
-        self.assertIn("v1", text)
+        self.assertIn("v2 failed", text)
+        self.assertNotIn("v1", text)
 
 
 class McpStdioTests(unittest.TestCase):

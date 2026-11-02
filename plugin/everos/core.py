@@ -8,8 +8,8 @@
   EVEROS_API_BASE       默认 https://api.evermind.ai（兼容旧名 EVEROS_BASE_URL）
   EVEROS_OWNER_ALIASES  botmux <sender> 邮箱前缀命中即视为 owner，逗号分隔
   EVEROS_INJECT=0       关闭读侧注入；EVEROS_WRITE=0 关闭写侧
-  EVEROS_API_VERSION    v2（默认）或 v1；v1 即将退役，只为回退保留
-  EVEROS_READ_V1=1      过渡期：读取时同时查 v1 旧库并合并（官方迁完数据后关掉）
+  EVEROS_API_VERSION / EVEROS_READ_V1  已废弃：官方已停用 v1，账号锁定 v2 后调用 v1 返回 403
+                        VERSION_NOT_ALLOWED；只走 v2，旧值仅在 doctor 中提示清理
   EVEROS_AGENT_ID       v2 里助手消息的归属 agent，默认 <user_id>_agent；原 agent 名记在 sender_name
   EVEROS_MIN_SCORE      v2 检索的得分门槛，默认 0.3
   EVEROS_RECALL_TIMEOUT 旧版画像读取预算（秒）；不再控制提问检索
@@ -134,11 +134,19 @@ def owner() -> str:
 
 
 def version() -> str:
-    return "v1" if cfg().get("EVEROS_API_VERSION", "v2").lower() == "v1" else "v2"
+    """EverOS 只剩 v2；保留函数供账本 api 字段和旧调用方使用。"""
+    return "v2"
 
 
-def read_v1() -> bool:
-    return version() == "v1" or cfg().get("EVEROS_READ_V1") == "1"
+def legacy_api_settings() -> list[str]:
+    """仍要求 v1 的旧配置；v1 已停用，doctor 提示清理但不再请求。"""
+    c = cfg()
+    found = []
+    if c.get("EVEROS_API_VERSION", "v2").lower() == "v1":
+        found.append("EVEROS_API_VERSION=v1")
+    if c.get("EVEROS_READ_V1") == "1":
+        found.append("EVEROS_READ_V1=1")
+    return found
 
 
 def agent_id() -> str:
@@ -545,26 +553,16 @@ def _agentic_jobs(jobs, deadline, reserve, notices):
 
 def profile_text(limit: int = 4000, with_ids: bool = False, budget: float | None = None) -> str:
     lines, seen = [], set()
-    sources = []
-    if version() == "v2":
-        sources.append(("/api/v2/memory/get", {"memory_type": "profile", "user_id": owner()}))
-    if read_v1():
-        sources.append(("/api/v1/memories/get", {"filters": {"user_id": owner()}, "memory_type": "profile"}))
+    sources = [("/api/v2/memory/get", {"memory_type": "profile", "user_id": owner()})]
     results = _read_jobs({path: (path, body) for path, body in sources}, READ_TIMEOUT * 2 if budget is None else budget)
     for path, _ in sources:
         profiles = (results.get(path) or {}).get("profiles") or []
-        ids = with_ids and path.startswith("/api/v2")  # 只有 v2 的条目能编辑
-        for line in _profile_lines(profiles[0].get("profile_data") or {}, ids) if profiles else []:
+        for line in _profile_lines(profiles[0].get("profile_data") or {}, with_ids) if profiles else []:
             key = line[:40]
             if key not in seen:
                 seen.add(key)
                 lines.append(line)
     return "\n".join(lines)[:limit]
-
-
-def substantial(query: str) -> bool:
-    """v1 没有得分没法过滤噪声，只在提问有实际内容时才带上 v1 结果。"""
-    return len(re.sub(r"\s|[，。！？、,.!?~]", "", query)) >= 6
 
 
 def _recall_text(row: dict, first: str, second: str, separator: str | None = None) -> str:
@@ -590,41 +588,31 @@ def _has_search_hits(name: str, data: dict) -> bool:
 
 
 def search_items(query: str, top_k: int = 5, kind: str = "all", include_profile: bool = False,
-                 budget: float | None = None, v1_episodes: int | None = None,
+                 budget: float | None = None,
                  method: str = "hybrid", notices: list[str] | None = None, strict: bool = False) -> list[dict]:
-    """并行查 v2 用户轨道、v2 agent 轨道、v1 旧库（过渡期），按得分门槛过滤后合并去重。"""
+    """并行查 v2 用户轨道和 v2 agent 轨道，按得分门槛过滤后合并去重。"""
     if type(top_k) is not int or (top_k != -1 and not 1 <= top_k <= 100):
         raise ValueError("top_k must be -1 or in 1..100")
     if method not in ("hybrid", "agentic"):
         raise ValueError("method must be hybrid or agentic")
-    deep = method == "agentic" and version() == "v2"
+    deep = method == "agentic"
     total_budget = max(0.0, (agentic_timeout() if deep else READ_TIMEOUT * 2) if budget is None else budget)
     deadline = time.monotonic() + total_budget
     if total_budget <= 0:
         return []
     notes = notices if notices is not None else []
-    if method == "agentic" and not deep:
-        notes.append("（当前使用 v1，agentic 不可用，本次按 hybrid 检索。）")
     # Presentation truncation appends a notice. Keep the bridge's query budget
     # on the entire transmitted string, without adding display text to searches.
     q, k = str(query).strip()[:500], top_k
     jobs = {}
-    if version() == "v2":
-        if kind in ("all", "episodes"):
-            body = {"query": q, "user_id": owner(), "method": method, "top_k": k,
-                    "include_profile": include_profile}
-            if method == "hybrid":
-                body["min_score"] = _num("EVEROS_MIN_SCORE", 0.3)
-            jobs["v2u"] = ("/api/v2/memory/search", body)
-        if kind in ("all", "practices"):
-            jobs["v2a"] = ("/api/v2/memory/search", {"query": q, "agent_id": agent_id(), "method": method, "top_k": k})
-    if v1_episodes is None:
-        v1_episodes = k
-    if read_v1():
-        types = {"episodes": ["episodic_memory"], "practices": ["agent_memory"]}.get(
-            kind, ["episodic_memory", "agent_memory"])
-        jobs["v1"] = ("/api/v1/memories/search", {"filters": {"user_id": owner()}, "query": q, "method": "hybrid",
-                                                  "top_k": k, "memory_types": types})
+    if kind in ("all", "episodes"):
+        body = {"query": q, "user_id": owner(), "method": method, "top_k": k,
+                "include_profile": include_profile}
+        if method == "hybrid":
+            body["min_score"] = _num("EVEROS_MIN_SCORE", 0.3)
+        jobs["v2u"] = ("/api/v2/memory/search", body)
+    if kind in ("all", "practices"):
+        jobs["v2a"] = ("/api/v2/memory/search", {"query": q, "agent_id": agent_id(), "method": method, "top_k": k})
     reserve = min(FALLBACK_TIMEOUT, total_budget / 3) if deep else 0.0
     agent_method = method
     if deep:
@@ -635,12 +623,12 @@ def search_items(query: str, top_k: int = 5, kind: str = "all", include_profile:
     if (method == "agentic" or strict) and jobs and not results:
         raise APIResponseError("记忆检索失败或超时，未获得任何成功轨道；请重试。")
     if strict and results:
-        labels = {"v2u": "用户记忆", "v2a": "做法记忆", "v1": "v1 旧库"}
+        labels = {"v2u": "用户记忆", "v2a": "做法记忆"}
         missing = [labels[name] for name in jobs if name not in results]
         if missing:
             notes.append(f"（{'、'.join(missing)}检索失败或超时，以下仅展示成功轨道的结果。）")
     items = []
-    v2u, v2a, v1 = results.get("v2u") or {}, results.get("v2a") or {}, results.get("v1") or {}
+    v2u, v2a = results.get("v2u") or {}, results.get("v2a") or {}
 
     def add(row, kind, text, source, **extra):
         import recall
@@ -664,16 +652,6 @@ def search_items(query: str, top_k: int = 5, kind: str = "all", include_profile:
         for row in v2a.get(key) or []:
             if agent_method == "agentic" or float(row.get("score") or 0) >= AGENT_MIN_SCORE:
                 add(row, kind, _recall_text(row, *fields), "v2/" + kind)
-    v1_limit = None if v1_episodes == -1 else v1_episodes
-    for ep in (v1.get("episodes") or [])[:v1_limit]:
-        add(ep, "episode", _recall_text(ep, "summary", "subject"), "v1/episode",
-            date=str(ep.get("timestamp", ""))[:10], src="v1")
-    agent = v1.get("agent_memory") or {}
-    for key, kind, fields in (("cases", "case", ("task_intent", "key_insight", " → ")),
-                              ("skills", "skill", ("name", "description", "："))):
-        for row in agent.get(key) or []:
-            if float(row.get("score") or 0) >= AGENT_MIN_SCORE:
-                add(row, kind, _recall_text(row, *fields), "v1/" + kind)
     out, seen = [], set()
     for it in items:
         key = re.sub(r"\s", "", str(it["text"]))[:40]
@@ -727,26 +705,12 @@ def search_text(query: str, top_k: int = 5, kind: str = "all", method: str = "hy
 
 def recent_text(days: int = 7, limit: int = 20) -> str:
     cutoff = time.time() - days * 86400
-    rows = []
-    if version() == "v2":
-        try:
-            out = api("/api/v2/memory/get", {"memory_type": "episode", "user_id": owner(), "page_size": min(limit, 100),
-                                             "sort_by": "timestamp", "sort_order": "desc",
-                                             "filters": {"timestamp": {"gte": int(cutoff * 1000)}}}, timeout=READ_TIMEOUT * 2)
-            rows += (out.get("data") or {}).get("episodes") or []
-        except Exception as exc:
-            log(f"recent v2 failed: {exc!r}")
-    if read_v1():
-        page = 1
-        while page <= 5:
-            out = api("/api/v1/memories/get", {"filters": {"user_id": owner()}, "memory_type": "episodic_memory",
-                                               "page": page, "page_size": 50}, timeout=READ_TIMEOUT * 2)
-            eps = (out.get("data") or {}).get("episodes") or []
-            fresh = [e for e in eps if ts_ms(str(e.get("timestamp"))) / 1000 >= cutoff]
-            rows += fresh
-            if len(fresh) < len(eps) or not eps:
-                break
-            page += 1
+    # 唯一数据源失败时直接抛出，不能把读取失败显示成“这段时间没有记忆”。
+    out = _check_response(api("/api/v2/memory/get", {
+        "memory_type": "episode", "user_id": owner(), "page_size": min(limit, 100),
+        "sort_by": "timestamp", "sort_order": "desc",
+        "filters": {"timestamp": {"gte": int(cutoff * 1000)}}}, timeout=READ_TIMEOUT * 2))
+    rows = list((out.get("data") or {}).get("episodes") or [])
     rows.sort(key=lambda e: str(e.get("timestamp", "")), reverse=True)
     lines, seen = [], set()
     for ep in rows:
@@ -774,9 +738,10 @@ def _v2_messages(msgs: list[dict]) -> list[dict]:
     return out
 
 
-def post_messages(session_id: str, msgs: list[dict], agent: bool = False, ver: str | None = None) -> str:
+def post_messages(session_id: str, msgs: list[dict], ver: str | None = None) -> str:
     ensure_writable()
-    ver = ver or version()
+    if ver == "v1":
+        raise RuntimeError("v1 已停用，只能写入 v2")
     batches, cur, size = [], [], 0
     for msg in msgs:
         n = len(json.dumps(msg, ensure_ascii=False).encode("utf-8"))
@@ -789,12 +754,8 @@ def post_messages(session_id: str, msgs: list[dict], agent: bool = False, ver: s
         batches.append(cur)
     status = ""
     for batch in batches:
-        if ver == "v2":
-            out = api("/api/v2/memory/add", {"session_id": session_id[:128], "async_mode": False,
-                                             "messages": _v2_messages(batch)})
-        else:
-            out = api("/api/v1/memories/agent" if agent else "/api/v1/memories",
-                      {"user_id": owner(), "session_id": session_id[:128], "async_mode": False, "messages": batch})
+        out = api("/api/v2/memory/add", {"session_id": session_id[:128], "async_mode": False,
+                                         "messages": _v2_messages(batch)})
         status = _write_status(out, {"accumulated", "extracted", "buffered", "no_extraction"}, "add")
     return status
 
@@ -808,13 +769,12 @@ def _write_status(out: dict, accepted: set[str], operation: str) -> str:
     return status
 
 
-def flush(session_id: str, agent: bool = False, ver: str | None = None) -> str:
+def flush(session_id: str, ver: str | None = None) -> str:
+    """ver 是账本里的 api 字段；v1 已停用，旧账本的 v1 缓冲无法再落盘，调用方要先排除。"""
     ensure_writable()
-    if (ver or version()) == "v2":
-        out = api("/api/v2/memory/flush", {"session_id": session_id[:128]}, timeout=180)
-    else:
-        out = api("/api/v1/memories/agent/flush" if agent else "/api/v1/memories/flush",
-                  {"user_id": owner(), "session_id": session_id[:128]}, timeout=180)
+    if ver == "v1":
+        raise RuntimeError("v1 已停用，无法 flush v1 旧缓冲")
+    out = api("/api/v2/memory/flush", {"session_id": session_id[:128]}, timeout=180)
     return _write_status(out, {"extracted", "no_extraction"}, "flush")
 
 
@@ -934,39 +894,27 @@ def practice_case_note(session_id: str, since_ms: int, started: float) -> str:
 
 
 def record_practice(host: str, topic: str, task: str, steps: list[dict], conclusion: str) -> str:
-    """做法轨迹：需求 → 每步动作与结果 → 结论。过渡期双写 v1 agent 轨道；写完回读 v2 是否生成做法 case。"""
+    """做法轨迹：需求 → 每步动作与结果 → 结论；写完回读 v2 是否生成做法 case。"""
     ensure_writable()
     validate_practice(steps, conclusion)
     sid = f"agent_{datetime.now(CST):%Y%m%d}_{slug(topic) or 'practice'}"
     msgs = practice_messages(host, task, steps, conclusion)
-    results, failed, v2_done = [], False, None
-    vers = ["v2", "v1"] if version() == "v2" and read_v1() else [version()]
-    for ver in vers:
-        add = None
-        try:
-            add = post_messages(sid, msgs, agent=True, ver=ver)
-            time.sleep(1)
-            results.append(f"{ver} {add}/{flush(sid, agent=True, ver=ver)}")
-            if ver == "v2":
-                v2_done = time.monotonic()
-        except Exception as exc:
-            failed = True
-            phase = f"（add={add}，flush 未完成）" if add is not None else ""
-            results.append(f"{ver} failed{phase}: {exc!r}")
-    result = f"{sid}: " + "; ".join(results)
-    if failed:
+    add = None
+    try:
+        add = post_messages(sid, msgs)
+        time.sleep(1)
+        result = f"{sid}: v2 {add}/{flush(sid)}"
+    except Exception as exc:
+        phase = f"（add={add}，flush 未完成）" if add is not None else ""
+        result = f"{sid}: v2 failed{phase}: {exc!r}"
         log(f"practice incomplete {result}")
         raise RuntimeError("做法记录未完整写入；" + result)
-    if v2_done is not None:
-        result += "；" + practice_case_note(sid, msgs[0]["timestamp"], v2_done)
-    return result
+    return result + "；" + practice_case_note(sid, msgs[0]["timestamp"], time.monotonic())
 
 
 def fix_profile(operations: list[dict]) -> str:
     """v2 直接改画像：action=add/update/delete，type=explicit_info/implicit_traits，带 reason。"""
     ensure_writable()
-    if version() != "v2":
-        raise RuntimeError("编辑画像需要 v2（EVEROS_API_VERSION=v2）")
     selected = operations[:50]
     if not selected:
         raise ValueError("画像编辑至少需要一条操作")
@@ -1300,6 +1248,19 @@ def session_name(entries: list[dict], host: str, cwd: str, sid: str, title: str 
     return f"{prefix}_{day:%Y%m%d}_{slug(title or Path(cwd or 'x').name) or 'session'}_{session_suffix}"
 
 
+def drop_legacy_pending(st: dict, sp: Path) -> bool:
+    """v1 已停用：旧账本的 v1 缓冲无法再落盘，清掉 pending 并留痕，避免一直阻塞 v2 写入。
+
+    账本缺 api 字段视为 v1（v2 之前的老账本）。返回 True 表示本次清理了遗留状态。
+    """
+    if st.get("api", "v1") == "v2" or not st.get("pending"):
+        return False
+    st.update(pending=False, api="v2", legacy_v1_dropped_ms=int(time.time() * 1000))
+    save_state(sp, st)
+    log(f"legacy v1 pending dropped {st.get('everos_session_id')}: v1 已停用，旧缓冲无法再 flush")
+    return True
+
+
 def write_turns(payload: dict) -> None:
     ensure_writable()
     sid = str(payload.get("session_id") or "")
@@ -1332,15 +1293,7 @@ def write_turns(payload: dict) -> None:
                                                      sid.removeprefix("session_"), str(payload.get("session_title") or
                                                      payload.get("thread_name") or payload.get("session_name") or "")))
         host = st.get("host") or "claude_code"
-        if st.get("api", "v1") != version() and st.get("pending"):  # 换库前把旧库里的缓冲落盘
-            try:
-                res = flush(st['everos_session_id'], ver=st.get('api', 'v1'))
-                st.update(pending=False, last_flush_ms=int(time.time() * 1000), last_flush_status=res)
-                save_state(sp, st)
-                log(f"switch flush {st['everos_session_id']} ({st.get('api', 'v1')}) -> {res}")
-            except Exception as exc:
-                log(f"switch flush failed {st['everos_session_id']}: {exc!r}")
-                raise  # 旧库仍 pending，不能换 api 后把旧缓冲的重试路径丢掉
+        drop_legacy_pending(st, sp)
         parse = {"codex": messages_codex, "trae": messages_trae,
                  "kimi": messages_kimi, "kimi_desktop": messages_kimi}.get(host, messages_claude)
         msgs = parse(entries, host)
@@ -1487,7 +1440,9 @@ def sweep(force: bool = False) -> None:
             idle_h = (now * 1000 - st.get("last_write_ms", 0)) / 3_600_000
             if st.get("pending") and (force or idle_h >= IDLE_FLUSH_H):
                 try:
-                    res = flush(st["everos_session_id"], ver=st.get("api", "v1"))
+                    if drop_legacy_pending(st, p):
+                        continue
+                    res = flush(st["everos_session_id"], ver=st.get("api"))
                     st.update(pending=False, last_flush_ms=int(now * 1000), last_flush_status=res)
                     save_state(p, st)
                     log(f"sweep flush {st['everos_session_id']} -> {res}")
@@ -1501,20 +1456,20 @@ def doctor_result() -> tuple[str, bool]:
     c = cfg()
     healthy = ready()
     lines = [f"EVEROS_HOME   {HOME}（config.env {'存在' if (HOME / 'config.env').is_file() else '无'}）",
-             f"API           {version()}{'，过渡期同时读 v1' if version() == 'v2' and read_v1() else ''}；base {c['EVEROS_API_BASE']}",
+             f"API           v2；base {c['EVEROS_API_BASE']}",
              f"user_id       {c.get('EVEROS_USER_ID') or '缺失：设置 EVEROS_USER_ID'}",
              "API key       " + ("已配置" if c.get("EVEROS_API_KEY") else
                                   "未配置，云端走网络密钥" if network_secret_mode() else
                                   "缺失：设置 EVEROS_API_KEY 或写入 config.env"),
              f"读侧注入      {'关' if c.get('EVEROS_INJECT') == '0' else '开'}；写侧 {'关' if c.get('EVEROS_WRITE') == '0' else '开'}；"
              f"min_score {_num('EVEROS_MIN_SCORE', 0.3)}；每轮预算 {_num('EVEROS_RECALL_TIMEOUT', 18):.0f}s / {int(_num('EVEROS_RECALL_CHARS', 2000))} 字"]
+    legacy = legacy_api_settings()
+    if legacy:
+        lines.append(f"旧配置        {'、'.join(legacy)} 已失效（v1 已停用），可从 config.env 删除")
     checks = []
-    if version() == "v2" and c.get("EVEROS_USER_ID"):
+    if c.get("EVEROS_USER_ID"):
         checks += [("v2 用户记忆", "/api/v2/memory/get", {"memory_type": "episode", "user_id": owner(), "page_size": 1}),
                    ("v2 做法 case", "/api/v2/memory/get", {"memory_type": "agent_case", "agent_id": agent_id(), "page_size": 1})]
-    if read_v1() and c.get("EVEROS_USER_ID"):
-        checks.append(("v1 旧库", "/api/v1/memories/get", {"filters": {"user_id": owner()}, "memory_type": "episodic_memory",
-                                                            "page": 1, "page_size": 1}))
     for name, path, body in checks:
         try:
             t = time.time()

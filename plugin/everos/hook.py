@@ -70,7 +70,7 @@ def build_prompt_blocks(sid: str, prompt: str, *, need_profile: bool = False) ->
             st.update(profile_injected=True, needs_profile=False)
     notices = []
     items = core.search_items(question, top_k=5, budget=max(0.0, deadline - time.monotonic()),
-                              v1_episodes=3 if core.substantial(prompt) else 0, method="agentic", notices=notices)
+                              method="agentic", notices=notices)
     if notices:
         blocks.append("【EverOS 检索提示】\n" + "\n".join(notices))
     seen = set(st.get("ids") or [])

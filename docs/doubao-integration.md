@@ -19,7 +19,7 @@ Doubao Work 是云端 Linux 会话：agent 运行在受控 VM 里，**不能自�
 
 ```bash
 gh repo clone namelessssssssssss/everos-bridge ~/.everos-bridge   # 已 clone 则 git -C 拉取更新
-EVEROS_USER_ID=… EVEROS_API_KEY=… EVEROS_READ_V1=1 ~/.everos-bridge/install.sh
+EVEROS_USER_ID=… EVEROS_API_KEY=… ~/.everos-bridge/install.sh
 ```
 
 完整安装会检测其他宿主（Claude Code / Codex / TraeX / Kimi / MiMo），Doubao Work 部分无论

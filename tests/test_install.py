@@ -252,6 +252,15 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(len(backups), 1)
         self.assertEqual(backups[0].read_text(), "EVEROS_USER_ID=test-owner\nCUSTOM=keep\n")
 
+    def test_fresh_config_is_v2_only_and_ignores_retired_v1_settings(self):
+        self.env.update(EVEROS_API_VERSION="v1", EVEROS_READ_V1="1")
+        self.run_install()
+        text = (self.home / ".everos/config.env").read_text()
+        self.assertIn("EVEROS_USER_ID=test-owner", text)
+        self.assertIn("EVEROS_API_KEY=not-a-real-key", text)
+        self.assertNotIn("EVEROS_API_VERSION", text)
+        self.assertNotIn("EVEROS_READ_V1", text)
+
     def test_same_timestamp_backups_never_overwrite(self):
         path = self.put("file.json", "first")
         with mock.patch.object(install, "datetime") as timestamp:

@@ -24,7 +24,7 @@
 | Claude Code on the web（云端） | setup script + 仓库级 hook + 网络密钥 | ✅ | ✅ | ✅ | ✅ |
 | Doubao Work（豆包办公云端） | 命令行 MCP 客户端 + 用户级 skill（无 hook） | ✅（模型按 skill 主动调用） | ✅（同左） | ✅（每轮主动跑 everos-doubao-ingest） | ✅（everos-mcp 调原版服务端） |
 
-Python 代码只用标准库，不用安装依赖；运行期 hook 失败放行，MCP 和安装器会明确报告失败。接口用 EverOS v2，v1 旧库在过渡期合并读取（`EVEROS_READ_V1=1`），做法轨迹仍按协议双写。
+Python 代码只用标准库，不用安装依赖；运行期 hook 失败放行，MCP 和安装器会明确报告失败。接口只用 EverOS v2；官方已停用 v1，`EVEROS_API_VERSION` / `EVEROS_READ_V1` 已废弃，`--doctor` 会提示删除旧值。
 
 所有宿主的记忆工具都由同一个 `plugin/everos/mcp_server.py` 提供，工具说明和写入校验对每个宿主一致。`memory_record_practice` 至少要 3 个真实步骤，写完会回读 v2 是否生成做法 case，并在返回里说明，等待上限由 `EVEROS_CASE_WAIT` 控制。
 
@@ -46,7 +46,7 @@ everos search "复杂的历史问题" --method agentic --timeout 240
 
 - `--kind all|episodes|practices`：默认 `all`，检索事件和做法。
 - `--top-k N`：默认 `5`；接受 `-1` 或 `1–100`，是每类记忆的上限，合并后可能超过 N。
-- `--method hybrid|agentic`：默认 `hybrid`；复用 MCP 的 v1/v2 合并、agentic 默认 180 秒共同预算与回退。
+- `--method hybrid|agentic`：默认 `hybrid`；复用 MCP 的检索核心、agentic 默认 180 秒共同预算与回退。
 - `--timeout SECONDS`：按次设置总预算（正有限秒数，含回退），优先于配置。未设置时 agentic 采用 `EVEROS_AGENTIC_TIMEOUT`，hybrid 沿用原预算。
 - 问题须为 1–500 字。结果采用 MCP 的文本摘要格式，单条最多 260 字、整体约 4000 字；回退或部分失败会明确提示。
 
@@ -138,7 +138,7 @@ Doubao Work 的采集器与安装步骤覆盖在 `tests/test_doubao.py` 与 `tes
 云端会话不装插件，也不读 `~/.claude`，要单独接：
 
 1. **网络与密钥**：在云端环境设置里加一个网络密钥，Allowed websites 填 `api.evermind.ai`，Header 填 `Authorization: Bearer <key>`，这样 key 不进虚拟机。没有网络密钥功能时，把 `api.evermind.ai` 加进 Custom 网络白名单，并设环境变量 `EVEROS_API_KEY`。
-2. **环境变量**：`EVEROS_USER_ID=<你的空间>`。过渡期再加 `EVEROS_READ_V1=1`。仓库私有时，加一个只读的 `GH_TOKEN`（fine-grained，只授权本仓库）。
+2. **环境变量**：`EVEROS_USER_ID=<你的空间>`。仓库私有时，加一个只读的 `GH_TOKEN`（fine-grained，只授权本仓库）。
 3. **Setup script**：填 `cloud/setup.sh` 的内容，它会把本仓库装到 `/opt/everos-bridge`。
 4. **个人仓库**：把 `cloud/settings.snippet.json` 合并进该仓库的 `.claude/settings.json`，把 `cloud/mcp.snippet.json` 合并进 `.mcp.json`。这些命令受 `CLAUDE_CODE_REMOTE` 和文件是否存在门控，本地和其他协作者都不会触发。不要提交到团队仓库。
 5. **claude.ai 网页、手机端、Cowork**：把 `plugin/skills/everos-memory` 打包成 zip，上传到 claude.ai 的 Skills。
@@ -149,7 +149,7 @@ Doubao Work 的采集器与安装步骤覆盖在 `tests/test_doubao.py` 与 `tes
 AGENTS.md / CLAUDE.md             Agent 入口（CLAUDE.md 引用 AGENTS.md）
 PROTOCOL.md                       读写规则（唯一依据）
 docs/methodology.md               方法论：原则、决策记录、已知坑、演进路线
-docs/everos-notes.md              EverOS 服务本身的诀窍、局限与坑点：状态、v1/v2 差异、做法 case 门槛、接口与实测
+docs/everos-notes.md              EverOS 服务本身的诀窍、局限与坑点：状态、v1 停用记录、做法 case 门槛、接口与实测
 docs/agent-onboarding.md          新 Agent 接入：自查清单、实现步骤、验证清单、已接入宿主速查
 install.sh                        检测本机 agent 并逐个接线（改动前备份，幂等；支持非交互）；同步 Kimi Work 桌面端 daimon skill，并把 PROTOCOL.md 软链进 ~/.everos/
 bin/everos                        手动检索入口；安装到 ~/.local/bin/everos，支持 install.sh --cli-only
@@ -161,7 +161,7 @@ plugin/                           Claude Code 与 Codex 共用的插件目录
   hooks/hooks.json                生命周期 hook
   skills/everos-memory/SKILL.md   通用 skill（Agent Skills 格式）
   rules/everos-rules.md           写进只有 MCP 的 agent 全局指令文件的规则块
-  everos/core.py                  核心：v2 读写（含 v1 过渡）、各宿主会话记录解析、补落盘、本地记忆同步
+  everos/core.py                  核心：v2 读写、各宿主会话记录解析、补落盘、本地记忆同步
   everos/trae.py                  TraeX 会话定位、history_mutation / response_item 文本投影
   everos/hook.py                  hook 入口与命令行：--doctor / --dry-run / --mimo-recall / --mimo-write / --sweep / --sync-localmem
   everos/mcp_server.py            stdio MCP 服务：8 个 memory_* 工具

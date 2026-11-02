@@ -22,6 +22,8 @@ sys.path.insert(0, str(SOURCE))
 import core
 import hook
 
+_REAL_SWEEP = core.sweep  # IsolatedCore 会 mock sweep，个别用例需要真实实现
+
 
 def response(status):
     return {"data": {"status": status}}
@@ -146,27 +148,47 @@ class ResponseAndWriteTests(IsolatedCore):
         self.assertFalse(self.ledger()["pending"])
         self.assertEqual(self.ledger()["messages"], 1)
 
-    def test_failed_old_version_flush_does_not_lose_old_pending(self):
+    def test_legacy_v1_pending_is_dropped_without_blocking_v2_writes(self):
         payload = self.transcript()
-        old = {"everos_session_id": "old", "api": "v1", "pending": True, "offset": 0, "host": "codex"}
-        core.save_state(core.SESS_DIR / "test_session.json", old)
-        self.api.return_value = {"code": 500, "message": "old flush rejected"}
-        with self.assertRaises(core.APIResponseError):
-            core.write_turns(payload)
-        self.assertEqual(self.ledger(), old)
-        self.api.assert_called_once()
-        self.assertEqual(self.api.call_args.args[0], "/api/v1/memories/flush")
-        self.api.reset_mock()
+        for old in ({"everos_session_id": "old", "api": "v1", "pending": True, "offset": 0, "host": "codex"},
+                    {"everos_session_id": "old", "pending": True, "offset": 0, "host": "codex"}):  # 无 api 字段的老账本
+            with self.subTest(api=old.get("api")):
+                core.save_state(core.SESS_DIR / "test_session.json", old)
+                self.api.reset_mock()
+                self.api.return_value = response("extracted")
+                core.write_turns(payload)
+                ledger = self.ledger()
+                self.assertEqual(ledger["api"], "v2")
+                self.assertIn("legacy_v1_dropped_ms", ledger)
+                paths = [c.args[0] for c in self.api.call_args_list]
+                self.assertEqual(paths, ["/api/v2/memory/add"])
+                self.assertIn("legacy v1 pending dropped old", core.LOG.read_text())
+
+    def test_sweep_drops_legacy_v1_pending_instead_of_calling_v1(self):
+        sp = core.SESS_DIR / "legacy.json"
+        core.save_state(sp, {"everos_session_id": "legacy", "api": "v1", "pending": True, "last_write_ms": 0})
+        core.save_state(core.SESS_DIR / "current.json",
+                        {"everos_session_id": "current", "api": "v2", "pending": True, "last_write_ms": 0})
         self.api.return_value = response("extracted")
-        core.write_turns(payload)
-        self.assertEqual(self.ledger()["api"], "v2")
-        self.assertEqual([c.args[0] for c in self.api.call_args_list], ["/api/v1/memories/flush", "/api/v2/memory/add"])
+        with patch.object(core, "sync_local_memory"):
+            _REAL_SWEEP(force=True)
+        self.assertEqual([c.args for c in self.api.call_args_list],
+                         [("/api/v2/memory/flush", {"session_id": "current"})])
+        self.assertFalse(core.load_state(sp)["pending"])
+        self.assertTrue(all(not c.args[0].startswith("/api/v1/") for c in self.api.call_args_list))
+
+    def test_v1_write_requests_fail_locally_without_network(self):
+        for action in (lambda: core.flush("s", ver="v1"),
+                       lambda: core.post_messages("s", [{"role": "user", "content": "x"}], ver="v1")):
+            with self.assertRaisesRegex(RuntimeError, "v1 已停用"):
+                action()
+        self.api.assert_not_called()
 
     def test_all_write_entry_points_obey_disabled_switch(self):
         payload = self.transcript()
         with patch.dict(os.environ, {"EVEROS_WRITE": "0"}):
             actions = [lambda: core.post_messages("s", [{"role": "user", "content": "x"}]),
-                       lambda: core.flush("s", ver="v1"),
+                       lambda: core.flush("s"),
                        lambda: core.remember("codex", "topic", "note"),
                        lambda: core.record_practice("codex", "topic", "task", [], "result"),
                        lambda: core.fix_profile([{"action": "add"}]),
@@ -177,22 +199,20 @@ class ResponseAndWriteTests(IsolatedCore):
         self.api.assert_not_called()
         self.assertFalse(core.LOCALMEM_LEDGER.exists())
 
-    def test_practice_failure_retains_dual_write_outcomes(self):
+    def test_practice_failure_reports_the_v2_phase_and_never_writes_v1(self):
         steps = [{"action": f"act {i}", "result": f"result {i}"} for i in range(3)]
         with patch.dict(os.environ, {"EVEROS_READ_V1": "1"}), patch.object(core.time, "sleep"):
-            self.api.side_effect = [response("extracted"), response("no_extraction"), RuntimeError("v1 offline")]
-            with self.assertRaisesRegex(RuntimeError, "v2 extracted/no_extraction; v1 failed"):
-                core.record_practice("codex", "partial", "task", steps, "conclusion")
-            self.assertIn("v2 extracted/no_extraction; v1 failed", core.LOG.read_text())
             self.api.side_effect = RuntimeError("all writes offline")
-            with self.assertRaisesRegex(RuntimeError, "v2 failed.*v1 failed"):
+            with self.assertRaisesRegex(RuntimeError, "v2 failed: RuntimeError"):
                 core.record_practice("codex", "all", "task", steps, "conclusion")
-            self.api.side_effect = [response("extracted"), RuntimeError("v2 flush offline"),
-                                    response("accumulated"), response("extracted")]
-            with self.assertRaisesRegex(RuntimeError, "add=extracted，flush 未完成.*v1 accumulated/extracted"):
+            self.api.side_effect = [response("extracted"), RuntimeError("v2 flush offline")]
+            with self.assertRaisesRegex(RuntimeError, "v2 failed（add=extracted，flush 未完成）"):
                 core.record_practice("codex", "flush_failed", "task", steps, "conclusion")
-        # 写入失败时不做 case 回读：只有上面列出的 add / flush 调用。
-        self.assertNotIn("/api/v2/memory/get", [c.args[0] for c in self.api.call_args_list])
+            self.assertIn("practice incomplete", core.LOG.read_text())
+        paths = [c.args[0] for c in self.api.call_args_list]
+        # 写入失败时不做 case 回读，也不再有任何 v1 请求。
+        self.assertNotIn("/api/v2/memory/get", paths)
+        self.assertFalse([path for path in paths if path.startswith("/api/v1/")])
 
     def test_profile_edit_never_reports_partial_application_as_success(self):
         ops = [{"action": "add"}, {"action": "update"}]
@@ -217,13 +237,15 @@ class RecallTests(IsolatedCore):
         super().setUp()
         os.environ["EVEROS_AGENTIC_TIMEOUT"] = ".06"
 
-    def test_top_k_reaches_user_agent_and_legacy_queries_without_clamping(self):
+    def test_top_k_reaches_both_v2_tracks_without_clamping_even_with_legacy_flags(self):
         for top_k in (-1, 1, 21, 100):
-            with self.subTest(top_k=top_k), patch.dict(os.environ, {"EVEROS_READ_V1": "1"}), \
+            with self.subTest(top_k=top_k), \
+                    patch.dict(os.environ, {"EVEROS_READ_V1": "1", "EVEROS_API_VERSION": "v1"}), \
                     patch.object(core, "_read_jobs", return_value={}) as read:
                 core.search_items("query", top_k=top_k)
                 jobs = read.call_args.args[0]
-                self.assertEqual(set(jobs), {"v2u", "v2a", "v1"})
+                self.assertEqual(set(jobs), {"v2u", "v2a"})
+                self.assertTrue(all(path == "/api/v2/memory/search" for path, _ in jobs.values()))
                 self.assertTrue(all(body["top_k"] == top_k for _, body in jobs.values()))
 
     def test_invalid_top_k_fails_before_any_query_is_started(self):
@@ -233,14 +255,12 @@ class RecallTests(IsolatedCore):
                     core.search_items("query", top_k=top_k)
             read.assert_not_called()
 
-    def test_server_sized_legacy_results_keep_the_last_item_and_hook_cap(self):
-        episodes = [{"id": str(i), "summary": f"legacy result {i}"} for i in range(5)]
-        with patch.dict(os.environ, {"EVEROS_READ_V1": "1"}), \
-                patch.object(core, "_read_jobs", return_value={"v1": {"episodes": episodes}}):
+    def test_server_sized_results_keep_the_last_item_and_ignore_legacy_v1_payloads(self):
+        episodes = [{"id": str(i), "summary": f"server result {i}"} for i in range(5)]
+        stale = {"episodes": [{"id": "old", "summary": "stale v1 payload"}]}
+        with patch.object(core, "_read_jobs", return_value={"v2u": {"episodes": episodes}, "v1": stale}):
             items = core.search_items("query", top_k=-1)
-            self.assertEqual([it["id"] for it in items], [str(i) for i in range(5)])
-            capped = core.search_items("query", top_k=-1, v1_episodes=3)
-            self.assertEqual([it["id"] for it in capped], ["0", "1", "2"])
+        self.assertEqual([it["id"] for it in items], [str(i) for i in range(5)])
 
     def test_multiline_ids_only_cover_actual_items_and_hidden_item_can_reappear(self):
         items = [{"id": "shown", "kind": "episode", "text": "first\nsecond\nthird"},
@@ -377,14 +397,11 @@ class AgenticRecallTests(IsolatedCore):
         self.assertAlmostEqual(budgets[0], 210, delta=.1)
         self.assertAlmostEqual(budgets[1], 30, delta=.1)
 
-    def test_hybrid_and_v1_deep_search_ignore_agentic_timeout_configuration(self):
+    def test_hybrid_search_ignores_agentic_timeout_configuration(self):
         with patch.dict(os.environ, {"EVEROS_AGENTIC_TIMEOUT": "invalid"}), \
                 patch.object(core.time, "monotonic", return_value=100), \
                 patch.object(core, "_read_jobs", side_effect=lambda jobs, budget: {name: {} for name in jobs}) as read:
             core.search_items("history")
-            self.assertEqual(read.call_args.args[1], core.READ_TIMEOUT * 2)
-            with patch.dict(os.environ, {"EVEROS_API_VERSION": "v1"}):
-                core.search_items("history", method="agentic")
             self.assertEqual(read.call_args.args[1], core.READ_TIMEOUT * 2)
 
     def test_search_text_forwards_explicit_budget_unchanged(self):
@@ -517,32 +534,27 @@ class AgenticRecallTests(IsolatedCore):
         self.assertEqual([it["id"] for it in core.search_items("history", kind="practices")], ["high"])
         self.api.assert_called_once()
 
-    def test_legacy_tracks_remain_hybrid_and_keep_their_score_floor_during_deep_search(self):
+    def test_legacy_v1_flags_never_add_v1_requests_during_deep_search(self):
         def fake_api(path, body, timeout):
-            if path.startswith("/api/v1/"):
-                self.assertEqual(body["method"], "hybrid")
-                return {"data": {"episodes": [self.episode("legacy-episode")],
-                                 "agent_memory": {"cases": [self.case("legacy-low", .02),
-                                                             self.case("legacy-high", .8)]}}}
+            self.assertTrue(path.startswith("/api/v2/"), path)
             if body.get("user_id"):
                 return {"data": {"episodes": [self.episode("v2-episode", "new direct answer")]}}
             return {"data": {"agent_cases": [self.case("v2-low", .02)]}}
         self.api.side_effect = fake_api
         with patch.dict(os.environ, {"EVEROS_READ_V1": "1"}):
             items = core.search_items("history", method="agentic")
-        self.assertEqual({it["id"] for it in items}, {"legacy-episode", "legacy-high", "v2-episode", "v2-low"})
-        self.assertEqual(self.api.call_count, 3)
+        self.assertEqual({it["id"] for it in items}, {"v2-episode", "v2-low"})
+        self.assertEqual(self.api.call_count, 2)
 
-    def test_v1_only_agentic_downgrade_is_visible_and_uses_hybrid(self):
-        self.api.return_value = {"data": {"episodes": [self.episode("legacy")]}}
+    def test_legacy_api_version_v1_still_uses_v2_agentic_without_downgrade_notice(self):
+        self.api.return_value = {"data": {"episodes": [self.episode("current")]}}
         with patch.dict(os.environ, {"EVEROS_API_VERSION": "v1", "EVEROS_READ_V1": "1"}):
             text = core.search_text("history", top_k=-1, kind="episodes", method="agentic")
-        self.assertIn("v1", text)
-        self.assertIn("agentic", text)
-        self.assertIn("hybrid", text)
+        self.assertNotIn("当前使用 v1", text)
         self.assertIn("direct historical answer", text)
         self.api.assert_called_once()
-        self.assertEqual(self.api.call_args.args[1]["method"], "hybrid")
+        self.assertEqual(self.api.call_args.args[0], "/api/v2/memory/search")
+        self.assertEqual(self.api.call_args.args[1]["method"], "agentic")
         self.assertEqual(self.api.call_args.args[1]["top_k"], -1)
 
     def test_empty_primary_and_empty_fallback_are_successful_empty_search(self):
@@ -772,10 +784,8 @@ class PracticeTests(IsolatedCore):
     def fake_api(self, path, body, timeout=90):
         if path == "/api/v2/memory/add":
             return response("extracted")
-        if path in ("/api/v2/memory/flush", "/api/v1/memories/agent/flush"):
-            return response("no_extraction" if path.startswith("/api/v2") else "extracted")
-        if path == "/api/v1/memories/agent":
-            return response("accumulated")
+        if path == "/api/v2/memory/flush":
+            return response("no_extraction")
         if path == "/api/v2/memory/get":
             item = self.polls.pop(0) if self.polls else []
             if isinstance(item, Exception):
@@ -871,23 +881,13 @@ class PracticeTests(IsolatedCore):
         with patch.dict(os.environ, {"EVEROS_CASE_WAIT": "0"}):
             out = core.record_practice("codex", "topic", "task", self.STEPS, "conclusion")
         self.assertTrue(out.endswith("v2 做法 case 未回读（EVEROS_CASE_WAIT=0）"))
-        self.api.reset_mock()
-        with patch.dict(os.environ, {"EVEROS_API_VERSION": "v1"}):
-            out = core.record_practice("codex", "topic", "task", self.STEPS, "conclusion")
-        self.assertEqual(self.paths(), ["/api/v1/memories/agent", "/api/v1/memories/agent/flush"])
-        self.assertNotIn("做法 case", out)
 
-    def test_dual_write_sends_one_trajectory_to_both_versions_before_checking_v2(self):
+    def test_practice_writes_v2_only_even_with_legacy_flags_before_checking_case(self):
         self.polls = [lambda body: self.case_for(body)]
-        with patch.dict(os.environ, {"EVEROS_READ_V1": "1"}):
+        with patch.dict(os.environ, {"EVEROS_READ_V1": "1", "EVEROS_API_VERSION": "v1"}):
             out = core.record_practice("codex", "topic", "task", self.STEPS, "conclusion")
-        self.assertEqual(self.paths(), ["/api/v2/memory/add", "/api/v2/memory/flush", "/api/v1/memories/agent",
-                                        "/api/v1/memories/agent/flush", "/api/v2/memory/get"])
-        v2 = self.api.call_args_list[0].args[1]["messages"]
-        v1 = self.api.call_args_list[2].args[1]["messages"]
-        self.assertEqual([(m["role"], m["content"], m["timestamp"]) for m in v2],
-                         [(m["role"], m["content"], m["timestamp"]) for m in v1])
-        self.assertIn("v2 extracted/no_extraction; v1 accumulated/extracted；v2 做法 case 已生成", out)
+        self.assertEqual(self.paths(), ["/api/v2/memory/add", "/api/v2/memory/flush", "/api/v2/memory/get"])
+        self.assertIn("v2 extracted/no_extraction；v2 做法 case 已生成", out)
 
     def test_case_wait_config_and_timestamp_parsing(self):
         self.assertEqual(core.case_wait(), 30)
@@ -908,6 +908,32 @@ def datetime_utc_now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(time.time() + 5))
 
 
+class RecentTests(IsolatedCore):
+    def test_recent_reads_only_v2_sorted_and_deduplicated(self):
+        self.api.return_value = {"data": {"episodes": [
+            {"timestamp": "2026-11-01T00:00:00Z", "subject": "older note"},
+            {"timestamp": "2026-11-02T00:00:00Z", "subject": "newer note"},
+            {"timestamp": "2026-11-02T00:00:00Z", "subject": "newer note"}]}}
+        with patch.dict(os.environ, {"EVEROS_READ_V1": "1", "EVEROS_API_VERSION": "v1"}):
+            text = core.recent_text(days=3, limit=5)
+        self.assertEqual(text.splitlines(), ["- [2026-11-02] newer note", "- [2026-11-01] older note"])
+        self.api.assert_called_once()
+        path, body = self.api.call_args.args[:2]
+        self.assertEqual(path, "/api/v2/memory/get")
+        self.assertEqual((body["memory_type"], body["sort_by"], body["sort_order"]), ("episode", "timestamp", "desc"))
+
+    def test_recent_surfaces_v2_failure_instead_of_reporting_no_memory(self):
+        for failure in (RuntimeError("HTTP Error 403: Forbidden"), {"code": 500, "message": "server down"}):
+            with self.subTest(failure=failure):
+                self.api.reset_mock()
+                if isinstance(failure, Exception):
+                    self.api.side_effect, self.api.return_value = failure, None
+                else:
+                    self.api.side_effect, self.api.return_value = None, failure
+                with self.assertRaises((RuntimeError, core.APIResponseError)):
+                    core.recent_text(days=3, limit=5)
+
+
 class DoctorTests(IsolatedCore):
     def test_doctor_retains_readable_report_and_missing_config_is_unhealthy(self):
         with patch.dict(os.environ, {"EVEROS_USER_ID": ""}):
@@ -917,14 +943,15 @@ class DoctorTests(IsolatedCore):
             self.assertEqual(core.doctor(), report)
         self.api.assert_not_called()
 
-    def test_doctor_checks_every_transition_endpoint_and_propagates_partial_failure(self):
-        with patch.dict(os.environ, {"EVEROS_READ_V1": "1"}):
-            self.api.side_effect = [{"data": {"total_count": 1}}, {"code": 500, "message": "case failure"},
-                                    {"data": {"total_count": 2}}]
+    def test_doctor_checks_v2_endpoints_flags_legacy_settings_and_propagates_partial_failure(self):
+        with patch.dict(os.environ, {"EVEROS_READ_V1": "1", "EVEROS_API_VERSION": "v1"}):
+            self.api.side_effect = [{"data": {"total_count": 1}}, {"code": 500, "message": "case failure"}]
             report, healthy = core.doctor_result()
         self.assertFalse(healthy)
-        self.assertEqual(self.api.call_count, 3)
-        self.assertEqual(report.count("OK"), 2)
+        self.assertEqual(self.api.call_count, 2)
+        self.assertTrue(all(c.args[0] == "/api/v2/memory/get" for c in self.api.call_args_list))
+        self.assertIn("EVEROS_API_VERSION=v1、EVEROS_READ_V1=1 已失效", report)
+        self.assertEqual(report.count("OK"), 1)
         self.assertIn("case failure", report)
         self.assertNotIn("test_key", report)
 

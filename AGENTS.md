@@ -29,10 +29,8 @@
      EVEROS_USER_ID=<用户的记忆空间>
      EVEROS_API_KEY=<EverOS API key>
      EVEROS_OWNER_ALIASES=<botmux 邮箱前缀，可留空>
-     EVEROS_API_VERSION=v2
-     EVEROS_READ_V1=<官方迁完 v1 旧数据前填 1，迁完填 0>
      ```
-   - 用户在聊天里直接给了值的话，用环境变量传给安装脚本，由脚本写文件：`EVEROS_USER_ID=… EVEROS_API_KEY=… EVEROS_READ_V1=1 $REPO/install.sh`。
+   - 用户在聊天里直接给了值的话，用环境变量传给安装脚本，由脚本写文件：`EVEROS_USER_ID=… EVEROS_API_KEY=… $REPO/install.sh`。
    - agent 不能代替用户回答交互输入；没有终端时脚本不会进入交互，而是提示后退出。
 3. **接线**：运行 `$REPO/install.sh`。脚本会检测本机装了哪些 agent，逐个接上，改动前先备份原配置；重复运行不会重复追加。
    - 原生 Windows 的 Codex 使用 `install.ps1`（先 `-DryRun`），Kimi Work 桌面端使用 `install.ps1 -KimiDesktop`；都不运行 Bash 安装器，解释器可用 `-Python` 指定。详见 [Windows 接入](docs/windows-integration.md)，其他 Windows 宿主尚未覆盖。

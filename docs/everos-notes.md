@@ -1,6 +1,6 @@
 # EverOS 使用诀窍、局限与坑点
 
-本文记录 EverOS 服务本身的行为：写入状态怎么读、v1 和 v2 的差异、做法 case 怎么生成、读取和删除接口的限制，以及实测得到的诀窍。接线和各宿主的坑见 [methodology.md](methodology.md#已知坑大多静默失败不报错)，读写规则见 [PROTOCOL.md](../PROTOCOL.md)。
+本文记录 EverOS 服务本身的行为：写入状态怎么读、v1 停用前后的差异、做法 case 怎么生成、读取和删除接口的限制，以及实测得到的诀窍。接线和各宿主的坑见 [methodology.md](methodology.md#已知坑大多静默失败不报错)，读写规则见 [PROTOCOL.md](../PROTOCOL.md)。
 
 出处分三类，每节都会注明：
 - **官方文档**：docs.evermind.ai。
@@ -19,16 +19,18 @@
 | flush | `extracted` | 把缓冲里的消息抽取了 |
 | flush | `no_extraction` | 缓冲为空、内容已去重，或排队的 add 还没落地；不是错误 |
 
-- bridge 日志和工具返回里的 `A/B` 是同一版本的「add 状态/flush 状态」，不是「v1/v2」。做法双写的返回形如 `v2 extracted/no_extraction; v1 accumulated/extracted`。
+- bridge 日志和工具返回里的 `A/B` 是「add 状态/flush 状态」，不是「v1/v2」。做法写入的返回形如 `v2 extracted/no_extraction`。
 - v2 带 `async_mode=false` 时，add 当场抽取，紧接着的 flush 必然返回 `no_extraction`，属于正常。
 - 含非文本内容的请求总是排队，返回 202。
 - 缓冲里最新的消息要等下一次 add、flush，或在 Cloud 上闲置 2 小时才会落盘。
 - 抽取成功不等于检索立刻可见。写完要用 get 或 search 回读。
 - MCP 参数校验失败时，请求根本没有发出去，例如缺 `conclusion`、做法少于 3 步。看到 `-32602` 或 `isError` 要修正参数重写，不能当成已入库。
 
-## 2. v1 与 v2
+## 2. v1 与 v2（v1 已停用）
 
-出处：官方文档、实测（2026-10-08 至 10-16）。
+出处：官方文档、实测（2026-10-08 至 10-16）；停用实测 2026-11-02。
+
+**现状**：官方通知 v1 于 2026-11-02 退役并自动迁移到 v2。2026-11-02 实测，账号锁定 v2 后调用任何 `/api/v1/*` 记忆接口都返回 HTTP 403：`{"error":{"code":"VERSION_NOT_ALLOWED","message":"This account (memory API v2) is not allowed to call the v1 memory API."}}`，同一 key 调 v2 正常。bridge 已删除全部 v1 读写路径。下表保留作历史对照。
 
 | 项 | v1 | v2 |
 | --- | --- | --- |
@@ -38,9 +40,9 @@
 | 检索得分 | hybrid 得分全为 0，无法按相关度过滤 | 有得分，可设 `min_score` |
 | 画像 | 不能改 | `/api/v2/memory/edit` 可改 |
 | 做法 case | 几乎每条做法都出 case | 有提炼筛选，见第 3 节 |
-| 前景 | 即将退役，官方代迁数据 | 长期使用 |
+| 前景 | 2026-11-02 停用，官方代迁数据 | 唯一接口 |
 
-- **bridge 的写入分工**：对话入库、`memory_remember`、本地记忆同步只写 v2；只有 `memory_record_practice` 同时写 v1 和 v2。`EVEROS_READ_V1=1` 时，检索、画像、最近记忆合并读两个库。
+- **bridge 的读写分工**：对话入库、`memory_remember`、`memory_record_practice`、本地记忆同步都只写 v2；检索、画像、最近记忆都只读 v2。`EVEROS_API_VERSION` / `EVEROS_READ_V1` 已废弃，设了也不会再请求 v1。
 - **消息归属**：每条消息都要带 `sender_id`。用户原话用 user_id，助手和工具消息用 agent_id。get 和 search 的 `user_id`、`agent_id` 二选一。
 - **按谁查**：v2 的普通记忆（episode）只能按 `user_id` 查，按 `agent_id` 查返回 422。做法 case 和技能按 `agent_id` 查。
 
@@ -123,7 +125,7 @@ Cloud 上的情况：
 
 ## 8. 排查配方
 
-- **判断写入是否丢了**：先看版本，再看 add 状态，再用 get 或 search 回读。v2 下 `extracted/no_extraction` 是正常的。只有 v1 下 add 返回 `queued` 或 `accumulated`、flush 返回 `no_extraction`、而且回读查不到，才按丢失处理：补一次 flush，或运行 `python3 plugin/everos/hook.py --sweep`。
-- **分库核对**：合并读取分不清条目来自哪个库。要分别调 v2 的 `/api/v2/memory/get` 和 v1 的 `/api/v1/memories/get`，再按 `session_id` 对齐。
-- **做法 case 覆盖率**：v2 用 `memory_type=agent_case` 加 `agent_id` 查，v1 用 `memory_type=agent_case` 加 `filters.user_id` 查，两边按 `session_id` 求交集。
+- **判断写入是否丢了**：先看 add 状态，再用 get 或 search 回读。`extracted/no_extraction` 是正常的。add 返回 `accumulated`、回读又查不到时，补一次 flush，或运行 `python3 plugin/everos/hook.py --sweep`。
+- **出现 403**：先看响应体。`VERSION_NOT_ALLOWED` 表示请求打到了已停用的 v1，检查是否在用旧版 bridge 或自写脚本调 `/api/v1/*`；不是 key 或权限问题。
+- **做法 case 覆盖率**：v2 用 `memory_type=agent_case` 加 `agent_id` 查，按 `session_id` 对齐写入记录。
 - **回读统计**：`state/hook.log` 里每次写做法都会记一行 `practice case <session> found`、`missing` 或 `check failed`，可以直接统计 v2 生成 case 的比例。
