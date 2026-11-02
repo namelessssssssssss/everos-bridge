@@ -172,9 +172,7 @@ class WindowsHost:
                 additions[key] = value
         if not old.strip():
             additions = dict(EVEROS_API_BASE=os.environ.get("EVEROS_API_BASE", "https://api.evermind.ai"),
-                             **additions, EVEROS_OWNER_ALIASES=os.environ.get("EVEROS_OWNER_ALIASES", ""),
-                             EVEROS_API_VERSION=os.environ.get("EVEROS_API_VERSION", "v2"),
-                             EVEROS_READ_V1=os.environ.get("EVEROS_READ_V1", "0"))
+                             **additions, EVEROS_OWNER_ALIASES=os.environ.get("EVEROS_OWNER_ALIASES", ""))
         if any("\n" in value or "\r" in value for value in additions.values()):
             raise ValueError("EverOS config values must be single lines")
         text = old.rstrip() + ("\n" if old.strip() else "")
