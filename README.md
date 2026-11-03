@@ -186,3 +186,17 @@ cloud/                            云端 setup script 与仓库级配置片段
 环境变量优先，其次 `$EVEROS_HOME/config.env`（默认 `~/.everos/config.env`）。完整变量表见 PROTOCOL.md §5。密钥和状态都不在仓库里，`.gitignore` 已排除。
 
 跨harness接线与验收：`python3 scripts/audit_harnesses.py --exercise` 会用实际配置的stdio入口、本地合成API核对八工具与展开链路；它不表示旧应用会话已重载。详细范围见[跨harness验收](docs/harness-activation-2026-10-22.md)。
+
+
+### 配额耗尽的识别与恢复
+
+`quota_exceeded`（例如MCU余额不足）会显示具体额度类型与白名单余额字段，并在共享数据根内暂停该凭据对应的请求；MCU与检索分别管理，普通速率429不作为硬配额处理。状态只保存凭据摘要和必要额度字段，权限0600，不保存请求正文或密钥。
+
+```sh
+everos quota status
+everos quota retry --resource mcu
+```
+
+第二条命令用于充值/续期后允许下一次写入单次探测，不会发请求或断言充值成功。未主动恢复时默认15分钟后允许一次探测；其它并发进程继续暂停，成功才恢复，失败保留熔断。检索额度恢复使用`--resource retrieval`。新会话首次写入失败也会保留源路径和未确认的游标；恢复原文需按游标有界重放、验证add/flush并回读，`--sweep`本身不补传未发送消息。
+
+宿主自动生成的“下一条消息建议”和“个性化任务建议”不触发提问检索，也不作为用户原话采集；真实用户提问和短指令照常处理。

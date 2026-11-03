@@ -143,10 +143,17 @@ class WindowsSetupTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             ledger = self.home / ".everos/state/sessions/windows-worker.json"
             deadline = time.monotonic() + 10
-            while not ledger.exists() and time.monotonic() < deadline:
+            acknowledged = {}
+            while time.monotonic() < deadline:
+                if ledger.exists():
+                    acknowledged = json.loads(ledger.read_text(encoding="utf-8"))
+                    if acknowledged.get("messages") == 1:
+                        break
                 time.sleep(0.05)
             self.assertTrue(ledger.exists(), "worker did not persist after the hook exited")
-            self.assertEqual(json.loads(ledger.read_text(encoding="utf-8"))["messages"], 1)
+            self.assertEqual(acknowledged.get("messages"), 1, "worker did not acknowledge the transcript after the hook exited")
+            self.assertGreater(acknowledged.get("offset", 0), 0)
+            self.assertEqual(acknowledged.get("last_write_status"), "accumulated")
             self.assertTrue(any(row["path"].endswith("/add") for row in api.requests))
 
 

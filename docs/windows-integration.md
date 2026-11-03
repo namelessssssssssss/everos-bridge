@@ -14,7 +14,7 @@ Set-Location "$env:USERPROFILE\.everos-bridge"
 
 未自动找到 Python 时，给 `-Python` 传实际 `python.exe` 的绝对路径；安装器会探测解释器版本并跳过 Windows Store 的占位入口。凭据沿用环境变量或 `$EVEROS_HOME/config.env`；缺失时在交互终端输入，API key 隐藏输入。不要在提交、文档或命令示例里填实际值。
 
-平台隔离：Windows 安装、配置编辑、锁、运行快照生成和测试全部位于 `windows/`，不导入 Unix 安装器。`install.sh`、`scripts/`、`plugin/`、`bin/`、`cloud/`、原有测试与 CI 保持主干版本；`windows/linux-baseline.json` 为 49 个现有文件保存源码指纹，测试逐项比对。Linux 主干有主动变更时，须审阅后显式更新 Windows 指纹基线；本次基线包含已合并的 Doubao 接入。Windows 只读复用检索和写入算法，在仓外生成自己的运行副本；平台适配只应用到这个副本。每个适配点校验原文锚点和出现次数，上游结构变化时拒绝构建，要求重新审阅。Windows 不会修改 Linux 的源码、hook 定义或安装配置。
+平台隔离：Windows 安装、配置编辑、锁、运行快照生成和测试全部位于 `windows/`，不导入 Unix 安装器。`install.sh`、`scripts/`、`plugin/`、`bin/`、`cloud/`、原有测试与 CI 保持主干版本；`windows/linux-baseline.json` 为共享源码与回归测试保存显式指纹，测试逐项比对。Linux 主干有主动变更时，须审阅后显式更新 Windows 指纹基线；本次基线包含已合并的 Doubao 接入。Windows 只读复用检索和写入算法，在仓外生成自己的运行副本；平台适配只应用到这个副本。每个适配点校验原文锚点和出现次数，上游结构变化时拒绝构建，要求重新审阅。Windows 不会修改 Linux 的源码、hook 定义或安装配置。
 
 安装动作：
 

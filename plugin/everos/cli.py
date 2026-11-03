@@ -52,6 +52,11 @@ def main(argv: list[str] | None = None) -> int:
     read.add_argument("memory_id")
     read.add_argument("--offset", type=int, default=0)
     read.add_argument("--limit", type=int, default=4000)
+    limits = commands.add_parser("quota", help="查看本机硬配额熔断或在充值后允许单次恢复探测")
+    actions = limits.add_subparsers(dest="quota_action", required=True)
+    actions.add_parser("status", help="只读查看当前凭据的MCU及检索熔断状态")
+    retry = actions.add_parser("retry", help="额度恢复后，允许下一次相关请求单次探测；不发送网络请求")
+    retry.add_argument("--resource", choices=("mcu", "retrieval"), required=True)
     args = parser.parse_args(argv)
 
     # Help and argument validation work without credentials or API access.
@@ -61,6 +66,16 @@ def main(argv: list[str] | None = None) -> int:
         if not core.ready():
             raise RuntimeError("未配置：设置 EVEROS_USER_ID 与 EVEROS_API_KEY，"
                                "或写入 $EVEROS_HOME/config.env（默认 ~/.everos/config.env）")
+        if args.command == "quota":
+            import json
+            import quota
+            if args.quota_action == "retry":
+                changed = quota.Gate(core.STATE, core.cfg(), args.resource).retry()
+                print("已允许下一次请求验证额度恢复。" if changed else "当前没有对应的本机配额熔断。")
+            else:
+                print(json.dumps([quota.Gate(core.STATE, core.cfg(), resource).status()
+                                  for resource in quota.RESOURCES], ensure_ascii=False, indent=2))
+            return 0
         if args.command == "open":
             import recall
             print(recall.open_memory(args.memory_id, args.offset, args.limit))

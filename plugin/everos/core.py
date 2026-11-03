@@ -38,6 +38,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import trae
+import quota
 
 CST = timezone(timedelta(hours=8))
 MAX_MSG_CHARS = 20000          # 只截断超长粘贴
@@ -64,7 +65,9 @@ _REMINDER = re.compile(r"<system-reminder>.*?</system-reminder>", re.S)
 # Kimi Work 桌面端给每条用户提问加的前导脚手架（不是用户原话）
 _DESKTOP_META = re.compile(r"^<meta\b[^>]*?/?>\s*", re.S)
 _SKIP_PREFIX = ("<local-command-", "<task-notification>", "[SYSTEM NOTIFICATION",
-                "Caveat: The messages below")
+                "Caveat: The messages below",
+                "This is an app-generated request for a suggested next user message.",
+                "# Overview\n\nGenerate 0 to 3 hyperpersonalized suggestions")
 # Codex 以 role=user 注入的脚手架（环境、AGENTS.md、插件推荐等），不是用户原话
 _CODEX_SCAFFOLD = ("<environment_context>", "<user_instructions>", "<recommended_plugins>",
                    "<app-context>", "# AGENTS.md", "<INSTRUCTIONS>", "<user_shell_command>",
@@ -105,6 +108,12 @@ def log(msg: str) -> None:
                 f.write(f"{datetime.now(CST):%Y-%m-%d %H:%M:%S} {msg}\n")
     except Exception:
         pass
+
+
+def log_error(label: str, error: Exception) -> None:
+    """Keep real/partial failures visible; cached-only refusals are already known."""
+    if not quota.is_cached_refusal(error):
+        log(f"{label}: {error!r}")
 
 
 def cfg() -> dict:
@@ -218,9 +227,30 @@ def api(path: str, body: dict, timeout: float = 90) -> dict:
     req = urllib.request.Request(c["EVEROS_API_BASE"].rstrip("/") + path,
                                  data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
                                  method="POST", headers=headers)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        raw = resp.read().decode("utf-8")
-    return _check_response(json.loads(raw) if raw else {})
+    gate = quota.Gate.for_path(STATE, c, path)
+    probe = gate.before(timeout) if gate else None
+    success = False
+    try:
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                raw = resp.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            info, error = quota.inspect_error(exc)
+            if info:
+                blocked = quota.Gate(STATE, c, info["resource"])
+                refusal, changed = blocked.block(info["balance"], error.headers)
+                error.close()
+                if changed:
+                    log(json.dumps({"event": "quota_paused", "quota_type": info["resource"],
+                                    "balance": info["balance"]}, separators=(",", ":")))
+                raise refusal from None
+            raise error
+        out = _check_response(json.loads(raw) if raw else {})
+        success = True
+        return out
+    finally:
+        if gate:
+            gate.finish(probe, success)
 
 
 def ts_ms(iso: str | None) -> int:
@@ -436,6 +466,8 @@ def _read_error_projection(raw):
 
 def read_failure(exc: Exception, body: dict) -> dict:
     """Log allowlisted diagnostic symbols, never service messages or echoed input."""
+    if isinstance(exc, quota.QuotaError):
+        return exc.failure()
     failure = {"kind": "error", "exception": type(exc).__name__, "retryable": False}
     reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
     if isinstance(exc, urllib.error.HTTPError):
@@ -481,6 +513,8 @@ def log_read(operation, name, body, attempt, started, status, failure=None):
 
 def failure_label(failure):
     kind = failure.get("kind")
+    if failure.get("code") == "quota_exceeded":
+        return str(quota.QuotaError(failure["quota_type"], failure.get("balance")))
     if kind == "http":
         return "HTTP " + str(failure["status"])
     return {"deadline": "超过检索时限", "timeout": "网络超时", "network": "网络连接失败"}.get(kind, "请求失败")
@@ -499,7 +533,8 @@ def _agentic_jobs(jobs, deadline, reserve, notices):
         try:
             primary = _read_jobs({name: (path, body)}, max(0.0, primary_deadline - time.monotonic()), operation=operation)
             final = primary
-            if name in labels and (name not in primary or not _has_search_hits(name, primary[name])):
+            hard_quota = getattr(primary, "failures", {}).get(name, {}).get("code") == "quota_exceeded"
+            if name in labels and not hard_quota and (name not in primary or not _has_search_hits(name, primary[name])):
                 reason = "未命中" if name in primary else failure_label(getattr(primary, "failures", {}).get(name, {}))
                 hybrid = dict(body, method="hybrid")
                 if name == "v2u":
@@ -510,7 +545,11 @@ def _agentic_jobs(jobs, deadline, reserve, notices):
                     note = f"（{labels[name]}的 agentic {reason}，已回退 hybrid。）"
                 else:
                     failure = getattr(recovered, "failures", {}).get(name, {"kind": "deadline"})
+                    if name not in primary and failure.get("code") == "quota_exceeded":
+                        final = recovered
                     note = f"（{labels[name]}的 agentic {reason}，hybrid 回退{failure_label(failure)}。）"
+            elif hard_quota:
+                note = f"（{labels.get(name, name)}：{failure_label(primary.failures[name])}）"
         except Exception as exc:
             final = ReadResults()
             final.failures[name] = read_failure(exc, body)
@@ -543,6 +582,17 @@ def _agentic_jobs(jobs, deadline, reserve, notices):
     return results, methods
 
 
+def raise_read_quota_if_no_success(results) -> None:
+    # A successful empty source is still a valid read, including partial fallback.
+    if results:
+        return
+    failure = next((item for item in getattr(results, "failures", {}).values()
+                    if item.get("code") == "quota_exceeded"), None)
+    if failure:
+        raise quota.QuotaError(failure["quota_type"], failure.get("balance"),
+                               cached=failure.get("cached", False))
+
+
 def profile_text(limit: int = 4000, with_ids: bool = False, budget: float | None = None) -> str:
     lines, seen = [], set()
     sources = []
@@ -551,6 +601,7 @@ def profile_text(limit: int = 4000, with_ids: bool = False, budget: float | None
     if read_v1():
         sources.append(("/api/v1/memories/get", {"filters": {"user_id": owner()}, "memory_type": "profile"}))
     results = _read_jobs({path: (path, body) for path, body in sources}, READ_TIMEOUT * 2 if budget is None else budget)
+    raise_read_quota_if_no_success(results)
     for path, _ in sources:
         profiles = (results.get(path) or {}).get("profiles") or []
         ids = with_ids and path.startswith("/api/v2")  # 只有 v2 的条目能编辑
@@ -632,6 +683,7 @@ def search_items(query: str, top_k: int = 5, kind: str = "all", include_profile:
         agent_method = methods.get("v2a", method)
     else:
         results = _read_jobs(jobs, max(0.0, deadline - time.monotonic()))
+    raise_read_quota_if_no_success(results)
     if (method == "agentic" or strict) and jobs and not results:
         raise APIResponseError("记忆检索失败或超时，未获得任何成功轨道；请重试。")
     if strict and results:
@@ -789,13 +841,19 @@ def post_messages(session_id: str, msgs: list[dict], agent: bool = False, ver: s
         batches.append(cur)
     status = ""
     for batch in batches:
-        if ver == "v2":
-            out = api("/api/v2/memory/add", {"session_id": session_id[:128], "async_mode": False,
-                                             "messages": _v2_messages(batch)})
-        else:
-            out = api("/api/v1/memories/agent" if agent else "/api/v1/memories",
-                      {"user_id": owner(), "session_id": session_id[:128], "async_mode": False, "messages": batch})
-        status = _write_status(out, {"accumulated", "extracted", "buffered", "no_extraction"}, "add")
+        try:
+            if ver == "v2":
+                out = api("/api/v2/memory/add", {"session_id": session_id[:128], "async_mode": False,
+                                                 "messages": _v2_messages(batch)})
+            else:
+                out = api("/api/v1/memories/agent" if agent else "/api/v1/memories",
+                          {"user_id": owner(), "session_id": session_id[:128], "async_mode": False, "messages": batch})
+            status = _write_status(out, {"accumulated", "extracted", "buffered", "no_extraction"}, "add")
+        except Exception as exc:
+            if status and quota.is_cached_refusal(exc):
+                raise quota.WriteError("前序批次已确认写入，后续批次未完成；" + str(exc),
+                                       [exc], attempted=1, progressed=True) from exc
+            raise
     return status
 
 
@@ -925,7 +983,7 @@ def practice_case_note(session_id: str, since_ms: int, started: float) -> str:
             break
         time.sleep(min(CASE_POLL, remaining))
     if error is not None:
-        log(f"practice case {session_id} check failed: {error!r}")
+        log_error(f"practice case {session_id} check failed", error)
         return f"v2 做法 case 回读失败（{error}）；写入本身已完成"
     log(f"practice case {session_id} missing after {wait:.0f}s")
     return (f"v2 做法 case 在 {wait:.0f} 秒内没有生成。可能没通过 v2 的提炼筛选：步骤都是顺利执行、"
@@ -939,24 +997,27 @@ def record_practice(host: str, topic: str, task: str, steps: list[dict], conclus
     validate_practice(steps, conclusion)
     sid = f"agent_{datetime.now(CST):%Y%m%d}_{slug(topic) or 'practice'}"
     msgs = practice_messages(host, task, steps, conclusion)
-    results, failed, v2_done = [], False, None
+    results, failures, v2_done = [], [], None
+    progressed = False
     vers = ["v2", "v1"] if version() == "v2" and read_v1() else [version()]
     for ver in vers:
         add = None
         try:
             add = post_messages(sid, msgs, agent=True, ver=ver)
+            progressed = True
             time.sleep(1)
             results.append(f"{ver} {add}/{flush(sid, agent=True, ver=ver)}")
             if ver == "v2":
                 v2_done = time.monotonic()
         except Exception as exc:
-            failed = True
+            failures.append(exc)
             phase = f"（add={add}，flush 未完成）" if add is not None else ""
             results.append(f"{ver} failed{phase}: {exc!r}")
     result = f"{sid}: " + "; ".join(results)
-    if failed:
-        log(f"practice incomplete {result}")
-        raise RuntimeError("做法记录未完整写入；" + result)
+    if failures:
+        error = quota.WriteError("做法记录未完整写入；" + result, failures, len(vers), progressed)
+        log_error("practice incomplete", error)
+        raise error
     if v2_done is not None:
         result += "；" + practice_case_note(sid, msgs[0]["timestamp"], v2_done)
     return result
@@ -1182,7 +1243,7 @@ def messages_codex(entries: list[dict], host: str = "codex") -> list[dict]:
         if not text:
             continue
         if p["role"] == "user":
-            if text.startswith(_CODEX_SCAFFOLD):
+            if text.startswith(_CODEX_SCAFFOLD + _SKIP_PREFIX):
                 continue
             text, sender = split_botmux(text)
             msgs.append({"role": "user", **sender, "timestamp": ts_ms(o.get("timestamp")), "content": clip(text)})
@@ -1339,11 +1400,15 @@ def write_turns(payload: dict) -> None:
                 save_state(sp, st)
                 log(f"switch flush {st['everos_session_id']} ({st.get('api', 'v1')}) -> {res}")
             except Exception as exc:
-                log(f"switch flush failed {st['everos_session_id']}: {exc!r}")
+                log_error(f"switch flush failed {st['everos_session_id']}", exc)
                 raise  # 旧库仍 pending，不能换 api 后把旧缓冲的重试路径丢掉
         parse = {"codex": messages_codex, "trae": messages_trae,
                  "kimi": messages_kimi, "kimi_desktop": messages_kimi}.get(host, messages_claude)
         msgs = parse(entries, host)
+        # Persist validated source identity before the first network write, but
+        # never acknowledge bytes when parsing or writing fails.
+        if not sp.exists():
+            save_state(sp, st)
         if msgs:
             res = post_messages(st["everos_session_id"], msgs)
             st.update(pending=True, api=version(), last_write_ms=int(time.time() * 1000), last_write_status=res,
@@ -1358,7 +1423,7 @@ def write_turns(payload: dict) -> None:
                 save_state(sp, st)
                 log(f"{event} flush {st['everos_session_id']} -> {res}")
             except Exception as exc:  # 留给 sweep 补
-                log(f"{event} flush failed {st['everos_session_id']}: {exc!r}")
+                log_error(f"{event} flush failed {st['everos_session_id']}", exc)
     sweep()
 
 
@@ -1393,7 +1458,7 @@ def write_mimo_turns(payload: dict) -> None:
                 save_state(sp, st)
                 log(f"mimocode flush {st['everos_session_id']} -> {res}")
             except Exception as exc:
-                log(f"mimocode flush failed {st['everos_session_id']}: {exc!r}")
+                log_error(f"mimocode flush failed {st['everos_session_id']}", exc)
     sweep()
 
 
@@ -1460,7 +1525,7 @@ def sync_local_memory(limit: int | None = None) -> None:
                                "attempts": attempts + 1 if isinstance(exc, APIResponseError) else attempts,
                                "last_error": str(exc)[:200]}
                 save_state(LOCALMEM_LEDGER, ledger)
-                log(f"localmem failed {sid}: {exc!r}")
+                log_error(f"localmem failed {sid}", exc)
                 done += 1
                 fails += 1
                 if fails >= 3:
@@ -1492,7 +1557,7 @@ def sweep(force: bool = False) -> None:
                     save_state(p, st)
                     log(f"sweep flush {st['everos_session_id']} -> {res}")
                 except Exception as exc:
-                    log(f"sweep flush failed {st.get('everos_session_id')}: {exc!r}")
+                    log_error(f"sweep flush failed {st.get('everos_session_id')}", exc)
     sync_local_memory(limit=None if force else 10)
 
 
