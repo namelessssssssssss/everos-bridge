@@ -249,7 +249,8 @@ def main() -> int:
             child.stdin.write(raw.encode("utf-8"))
             child.stdin.close()
     except Exception as exc:  # fail-open：记忆读写永远不值得打断一次对话
-        core.log(f"error {args[:1] or 'hook'}: {exc!r}")
+        if not isinstance(exc, core.quota.QuotaError) or not exc.cached:
+            core.log(f"error {args[:1] or 'hook'}: {exc!r}")
         if args[:1] == ["--doctor"]:
             return 1
     return 0

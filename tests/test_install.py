@@ -90,6 +90,7 @@ class InstallerTests(unittest.TestCase):
         (self.repo / "plugin/everos").mkdir(parents=True)
         shutil.copy2(ROOT / "plugin/everos/core.py", self.repo / "plugin/everos/core.py")
         shutil.copy2(ROOT / "plugin/everos/trae.py", self.repo / "plugin/everos/trae.py")
+        shutil.copy2(ROOT / "plugin/everos/quota.py", self.repo / "plugin/everos/quota.py")
         shutil.copy2(ROOT / "plugin/everos/rules.py", self.repo / "plugin/everos/rules.py")
         (self.repo / "plugin/rules").mkdir(parents=True)
         shutil.copy2(ROOT / "install.sh", self.repo / "install.sh")

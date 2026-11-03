@@ -38,6 +38,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import trae
+import quota
 
 CST = timezone(timedelta(hours=8))
 MAX_MSG_CHARS = 20000          # 只截断超长粘贴
@@ -64,7 +65,9 @@ _REMINDER = re.compile(r"<system-reminder>.*?</system-reminder>", re.S)
 # Kimi Work 桌面端给每条用户提问加的前导脚手架（不是用户原话）
 _DESKTOP_META = re.compile(r"^<meta\b[^>]*?/?>\s*", re.S)
 _SKIP_PREFIX = ("<local-command-", "<task-notification>", "[SYSTEM NOTIFICATION",
-                "Caveat: The messages below")
+                "Caveat: The messages below",
+                "This is an app-generated request for a suggested next user message.",
+                "# Overview\n\nGenerate 0 to 3 hyperpersonalized suggestions")
 # Codex 以 role=user 注入的脚手架（环境、AGENTS.md、插件推荐等），不是用户原话
 _CODEX_SCAFFOLD = ("<environment_context>", "<user_instructions>", "<recommended_plugins>",
                    "<app-context>", "# AGENTS.md", "<INSTRUCTIONS>", "<user_shell_command>",
@@ -218,9 +221,30 @@ def api(path: str, body: dict, timeout: float = 90) -> dict:
     req = urllib.request.Request(c["EVEROS_API_BASE"].rstrip("/") + path,
                                  data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
                                  method="POST", headers=headers)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        raw = resp.read().decode("utf-8")
-    return _check_response(json.loads(raw) if raw else {})
+    gate = quota.Gate.for_path(STATE, c, path)
+    probe = gate.before(timeout) if gate else None
+    success = False
+    try:
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                raw = resp.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            info, error = quota.inspect_error(exc)
+            if info:
+                blocked = quota.Gate(STATE, c, info["resource"])
+                refusal, changed = blocked.block(info["balance"], error.headers)
+                error.close()
+                if changed:
+                    log(json.dumps({"event": "quota_paused", "quota_type": info["resource"],
+                                    "balance": info["balance"]}, separators=(",", ":")))
+                raise refusal from None
+            raise error
+        out = _check_response(json.loads(raw) if raw else {})
+        success = True
+        return out
+    finally:
+        if gate:
+            gate.finish(probe, success)
 
 
 def ts_ms(iso: str | None) -> int:
@@ -436,6 +460,8 @@ def _read_error_projection(raw):
 
 def read_failure(exc: Exception, body: dict) -> dict:
     """Log allowlisted diagnostic symbols, never service messages or echoed input."""
+    if isinstance(exc, quota.QuotaError):
+        return exc.failure()
     failure = {"kind": "error", "exception": type(exc).__name__, "retryable": False}
     reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
     if isinstance(exc, urllib.error.HTTPError):
@@ -481,6 +507,8 @@ def log_read(operation, name, body, attempt, started, status, failure=None):
 
 def failure_label(failure):
     kind = failure.get("kind")
+    if failure.get("code") == "quota_exceeded":
+        return str(quota.QuotaError(failure["quota_type"], failure.get("balance")))
     if kind == "http":
         return "HTTP " + str(failure["status"])
     return {"deadline": "超过检索时限", "timeout": "网络超时", "network": "网络连接失败"}.get(kind, "请求失败")
@@ -499,7 +527,8 @@ def _agentic_jobs(jobs, deadline, reserve, notices):
         try:
             primary = _read_jobs({name: (path, body)}, max(0.0, primary_deadline - time.monotonic()), operation=operation)
             final = primary
-            if name in labels and (name not in primary or not _has_search_hits(name, primary[name])):
+            hard_quota = getattr(primary, "failures", {}).get(name, {}).get("code") == "quota_exceeded"
+            if name in labels and not hard_quota and (name not in primary or not _has_search_hits(name, primary[name])):
                 reason = "未命中" if name in primary else failure_label(getattr(primary, "failures", {}).get(name, {}))
                 hybrid = dict(body, method="hybrid")
                 if name == "v2u":
@@ -511,6 +540,8 @@ def _agentic_jobs(jobs, deadline, reserve, notices):
                 else:
                     failure = getattr(recovered, "failures", {}).get(name, {"kind": "deadline"})
                     note = f"（{labels[name]}的 agentic {reason}，hybrid 回退{failure_label(failure)}。）"
+            elif hard_quota:
+                note = f"（{labels.get(name, name)}：{failure_label(primary.failures[name])}）"
         except Exception as exc:
             final = ReadResults()
             final.failures[name] = read_failure(exc, body)
@@ -633,6 +664,11 @@ def search_items(query: str, top_k: int = 5, kind: str = "all", include_profile:
     else:
         results = _read_jobs(jobs, max(0.0, deadline - time.monotonic()))
     if (method == "agentic" or strict) and jobs and not results:
+        hard_quota = next((failure for failure in getattr(results, "failures", {}).values()
+                           if failure.get("code") == "quota_exceeded"), None)
+        if hard_quota:
+            raise quota.QuotaError(hard_quota["quota_type"], hard_quota.get("balance"),
+                                   cached=hard_quota.get("cached", False))
         raise APIResponseError("记忆检索失败或超时，未获得任何成功轨道；请重试。")
     if strict and results:
         labels = {"v2u": "用户记忆", "v2a": "做法记忆", "v1": "v1 旧库"}
@@ -1182,7 +1218,7 @@ def messages_codex(entries: list[dict], host: str = "codex") -> list[dict]:
         if not text:
             continue
         if p["role"] == "user":
-            if text.startswith(_CODEX_SCAFFOLD):
+            if text.startswith(_CODEX_SCAFFOLD + _SKIP_PREFIX):
                 continue
             text, sender = split_botmux(text)
             msgs.append({"role": "user", **sender, "timestamp": ts_ms(o.get("timestamp")), "content": clip(text)})
@@ -1344,6 +1380,10 @@ def write_turns(payload: dict) -> None:
         parse = {"codex": messages_codex, "trae": messages_trae,
                  "kimi": messages_kimi, "kimi_desktop": messages_kimi}.get(host, messages_claude)
         msgs = parse(entries, host)
+        # Persist validated source identity before the first network write, but
+        # never acknowledge bytes when parsing or writing fails.
+        if not sp.exists():
+            save_state(sp, st)
         if msgs:
             res = post_messages(st["everos_session_id"], msgs)
             st.update(pending=True, api=version(), last_write_ms=int(time.time() * 1000), last_write_status=res,

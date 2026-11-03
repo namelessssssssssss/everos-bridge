@@ -19,7 +19,7 @@ import core  # noqa: E402
 import recall  # noqa: E402
 import rules as rulebook  # noqa: E402
 
-VERSION = "0.9.2"
+VERSION = "0.9.3"
 MAX_PENDING_TOOL_CALLS = 16
 INSTRUCTIONS = (
     "EverOS 是用户跨 agent、跨设备共用的长期记忆。会话开始调用 memory_profile 了解用户，"
@@ -299,7 +299,8 @@ class Server:
             except RpcError:
                 raise
             except Exception as exc:
-                core.log(f"mcp {params.get('name')} failed: {exc!r}")
+                if not isinstance(exc, core.quota.QuotaError) or not exc.cached:
+                    core.log(f"mcp {params.get('name')} failed: {exc!r}")
                 return {"content": [{"type": "text", "text": f"EverOS 调用失败：{exc}"}], "isError": True}
         raise RpcError(-32601, f"Method not found: {method}")
 
