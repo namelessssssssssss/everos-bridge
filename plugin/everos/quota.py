@@ -56,6 +56,20 @@ class QuotaError(RuntimeError):
         return result
 
 
+def is_cached_refusal(error):
+    if isinstance(error, QuotaError):
+        return error.cached
+    return isinstance(error, WriteError) and error.cached_quota
+
+
+class WriteError(RuntimeError):
+    """Preserve aggregated failure provenance without hiding partial writes."""
+    def __init__(self, message, failures, attempted, progressed=False):
+        super().__init__(message)
+        self.cached_quota = (bool(failures) and len(failures) == attempted and not progressed
+                             and all(is_cached_refusal(error) for error in failures))
+
+
 def inspect_error(error):
     """Only recognized hard quotas open the circuit; preserve ordinary 429 bodies."""
     if error.code != 429:

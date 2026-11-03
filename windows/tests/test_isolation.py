@@ -47,7 +47,7 @@ class IsolationTests(unittest.TestCase):
             runtime = WindowsInstaller(ROOT).snapshot()
             tests = runtime / "tests"
             tests.mkdir()
-            for name in ("test_core_regressions.py", "test_mcp.py", "test_read_resilience.py", "test_mcp_concurrency.py", "test_quota.py"):
+            for name in ("test_core_regressions.py", "test_mcp.py", "test_read_resilience.py", "test_mcp_concurrency.py", "test_quota.py", "test_quota_review.py"):
                 shutil.copyfile(ROOT / "tests" / name, tests / name)
             result = subprocess.run([sys.executable, "-X", "utf8", "-m", "unittest", "discover", "-s", str(tests), "-v"],
                                     cwd=runtime, env=dict(os.environ, PYTHONUTF8="1"), capture_output=True,

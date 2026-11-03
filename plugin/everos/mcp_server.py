@@ -299,8 +299,7 @@ class Server:
             except RpcError:
                 raise
             except Exception as exc:
-                if not isinstance(exc, core.quota.QuotaError) or not exc.cached:
-                    core.log(f"mcp {params.get('name')} failed: {exc!r}")
+                core.log_error(f"mcp {params.get('name')} failed", exc)
                 return {"content": [{"type": "text", "text": f"EverOS 调用失败：{exc}"}], "isError": True}
         raise RpcError(-32601, f"Method not found: {method}")
 

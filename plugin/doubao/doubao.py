@@ -232,7 +232,7 @@ def ingest_session(sid: str, *, sessions_root: Path | None = None, dry_run: bool
     try:
         core.sweep()  # rate-limited inside; failures never undo a successful add
     except Exception as exc:
-        core.log(f"doubao_work sweep failed: {exc!r}")
+        core.log_error(f"doubao_work sweep failed", exc)
     return result
 
 
@@ -282,7 +282,7 @@ def _ingest_all(args) -> dict:
             results.append(item)
         except Exception as exc:
             failed += 1
-            core.log(f"doubao_work ingest failed {sid}: {exc!r}")
+            core.log_error(f"doubao_work ingest failed {sid}", exc)
             results.append({"session": sid, "error": f"{type(exc).__name__}: {exc}"})
     print(json.dumps({"since": datetime.fromtimestamp(since, core.CST).isoformat(timespec="seconds"),
                       "dry_run": args.dry_run, "sessions": results}, ensure_ascii=False, indent=2))
@@ -311,7 +311,7 @@ def main(argv: list[str] | None = None) -> int:
                                         flush=args.flush), ensure_ascii=False, indent=2))
         return 0
     except Exception as exc:
-        core.log(f"doubao_work ingest failed: {exc!r}")
+        core.log_error(f"doubao_work ingest failed", exc)
         print(json.dumps({"error": f"{type(exc).__name__}: {exc}"}, ensure_ascii=False), file=sys.stderr)
         return 1
 
