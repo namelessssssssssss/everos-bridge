@@ -158,10 +158,17 @@ class KimiDesktopTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             ledger = self.home / ".everos/state/sessions" / (session + ".json")
             deadline = time.monotonic() + 10
-            while not ledger.exists() and time.monotonic() < deadline:
+            acknowledged = {}
+            while time.monotonic() < deadline:
+                if ledger.exists():
+                    acknowledged = json.loads(ledger.read_text(encoding="utf-8"))
+                    if acknowledged.get("messages") == 2:
+                        break
                 time.sleep(0.05)
             self.assertTrue(ledger.exists(), "worker did not find the transcript using the bound desktop home")
-            self.assertEqual(json.loads(ledger.read_text(encoding="utf-8"))["messages"], 2)
+            self.assertEqual(acknowledged.get("messages"), 2, "worker did not acknowledge the bound desktop transcript")
+            self.assertGreater(acknowledged.get("offset", 0), 0)
+            self.assertEqual(acknowledged.get("last_write_status"), "accumulated")
             self.assertTrue(any(row["path"].endswith("/add") for row in api.requests))
 
     def test_kimi_rule_sync_preserves_codex_target(self):
