@@ -33,6 +33,18 @@ def codex_message(role, text, channel=None):
                         "content": [{"type": "input_text" if role == "user" else "output_text", "text": text}]}}
 
 
+def claude_message(role, text, minute=0):
+    return {"type": role, "timestamp": f"2026-10-08T00:{minute:02d}:00Z",
+            "message": {"role": role, "content": text if role == "user" else [{"type": "text", "text": text}]}}
+
+
+def claude_queued(prompt, minute=0, **overrides):
+    attachment = {"type": "queued_command", "prompt": prompt, "commandMode": "prompt",
+                  "origin": {"kind": "human"}, "humanTurn": True}
+    attachment.update(overrides)
+    return {"type": "attachment", "timestamp": f"2026-10-08T00:{minute:02d}:00Z", "attachment": attachment}
+
+
 class IsolatedCore(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -210,6 +222,56 @@ class ResponseAndWriteTests(IsolatedCore):
                                     codex_message("assistant", "answer", "final")])
         self.assertIn("full record", msgs[-1]["content"])
         self.assertIn("answer", msgs[-1]["content"])
+
+    def test_claude_human_mid_turn_prompt_is_captured_in_order(self):
+        msgs = core.messages_claude([claude_message("user", "first", 0),
+                                     claude_message("assistant", "working", 1),
+                                     claude_queued("also check this", 2),
+                                     claude_message("assistant", "done", 3)])
+        self.assertEqual([(m["role"], m["content"]) for m in msgs],
+                         [("user", "first"), ("assistant", "working"),
+                          ("user", "also check this"), ("assistant", "done")])
+        self.assertEqual(msgs[2]["sender_id"], "test_owner")
+
+    def test_claude_queued_entries_without_human_markers_are_not_user_history(self):
+        cases = {
+            "task_notification_origin": claude_queued("system text", origin={"kind": "task-notification"}),
+            "not_human_turn": claude_queued("system text", humanTurn=False),
+            "missing_human_turn": claude_queued("system text", humanTurn=None),
+            "missing_origin": claude_queued("system text", origin=None),
+            "non_prompt_mode": claude_queued("ls -la", commandMode="bash"),
+            "sidechain": {**claude_queued("subagent text"), "isSidechain": True},
+            "meta": {**claude_queued("meta text"), "isMeta": True},
+            "other_attachment": {"type": "attachment", "attachment": {"type": "file", "prompt": "file text",
+                                                                      "commandMode": "prompt", "humanTurn": True,
+                                                                      "origin": {"kind": "human"}}},
+            "skipped_prefix": claude_queued("<task-notification>\n<task-id>x</task-id>"),
+            "reminder_only": claude_queued("<system-reminder>hidden</system-reminder>"),
+            "empty": claude_queued("   "),
+        }
+        for name, entry in cases.items():
+            with self.subTest(name):
+                self.assertEqual(core.messages_claude([entry]), [])
+
+    def test_claude_mid_turn_prompt_reuses_user_text_normalization(self):
+        msgs = core.messages_claude([
+            claude_queued([{"type": "text", "text": "block prompt"}, {"type": "image", "source": {}}], 0),
+            claude_queued("<system-reminder>hidden</system-reminder>visible", 1),
+        ])
+        self.assertEqual([m["content"] for m in msgs], ["block prompt", "visible"])
+
+    def test_claude_mid_turn_prompt_is_written_once_across_stop_events(self):
+        path = self.root / "transcript.jsonl"
+        rows = [claude_message("user", "first", 0), claude_queued("also check this", 1),
+                claude_message("assistant", "done", 2)]
+        path.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+        payload = {"session_id": "test_session", "transcript_path": str(path), "hook_event_name": "Stop"}
+        core.write_turns(payload)
+        core.write_turns(payload)
+        adds = [c.args[1] for c in self.api.call_args_list if c.args[0] == "/api/v2/memory/add"]
+        self.assertEqual(len(adds), 1)
+        self.assertEqual(self.ledger()["messages"], 3)
+        self.assertIn("also check this", json.dumps(adds[0], ensure_ascii=False))
 
 
 class RecallTests(IsolatedCore):

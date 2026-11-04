@@ -1139,6 +1139,20 @@ def _claude_user_text(content) -> str | None:
     return text
 
 
+def _claude_queued_text(entry: dict) -> str | None:
+    """回合中途送达的用户消息写在 attachment 里，不是 type=user。
+
+    只收宿主同时标为人类发送的 prompt；其他来源（后台任务通知等）和缺标记的形态都不算用户原话。
+    """
+    item = entry.get("attachment")
+    if not isinstance(item, dict) or item.get("type") != "queued_command" or item.get("commandMode") != "prompt":
+        return None
+    origin = item.get("origin")
+    if item.get("humanTurn") is not True or not isinstance(origin, dict) or origin.get("kind") != "human":
+        return None
+    return _claude_user_text(item.get("prompt"))
+
+
 def split_botmux(text: str) -> tuple[str, dict]:
     """botmux 转来的飞书消息：剥掉脚手架，按 <sender> 标注真实发送者。"""
     if "<user_message>" not in text:
@@ -1192,6 +1206,11 @@ def messages_claude(entries: list[dict], host: str = "claude_code") -> list[dict
                          "content": clip("\n\n".join(buf))})
             buf, buf_ts = [], 0
 
+    def add_user(raw: str, entry: dict):
+        flush_assistant()
+        text, sender = split_botmux(raw)
+        msgs.append({"role": "user", **sender, "timestamp": ts_ms(entry.get("timestamp")), "content": clip(text)})
+
     for o in entries:
         if o.get("isSidechain") or o.get("isMeta"):
             continue
@@ -1223,9 +1242,11 @@ def messages_claude(entries: list[dict], host: str = "claude_code") -> list[dict
                                      "content": clip(f"（回答选择题）{r}")})
             text = _claude_user_text(content)
             if text:
-                flush_assistant()
-                text, sender = split_botmux(text)
-                msgs.append({"role": "user", **sender, "timestamp": ts_ms(o.get("timestamp")), "content": clip(text)})
+                add_user(text, o)
+        elif t == "attachment":
+            text = _claude_queued_text(o)
+            if text:
+                add_user(text, o)
     flush_assistant()
     return _monotonic(msgs)
 
