@@ -3,7 +3,7 @@
   "sha256": {
     ".agents/plugins/marketplace.json": "b8ea166ea2b7be9b440b456735629a067dab2e179b5e49c60b3198578aefdf16",
     ".claude-plugin/marketplace.json": "da739a75bd93d089278354f195d2a70b1bb63792345e88f6b40081da84737b22",
-    ".github/workflows/tests.yml": "09eef8f717f7a24ff352eb811a1179399c8b789c9e0ff4b2bb12ca4f97e18846",
+    ".github/workflows/tests.yml": "1c8e19fe37ac3a1e187fcabd57e86017d31fa1bc6784aedda9e046e4a3c1ef68",
     ".gitignore": "338125f5a062726be2a26fb750bab0a45f179d489c8c893c4a079de56b9e6013",
     "bin/everos": "ae3c1629c0cd5403d7254dd968d045997323a43cbbe2bdba35452c1c1a3980a6",
     "bin/everos-doubao-ingest": "52758a3a40a2294a9e683c17f1d24f0ba4b55d4c2da7ee337d1c61d09200fd7f",
@@ -58,6 +58,7 @@
     "Rule update only: plugin/everos/rules.py, plugin/rules/everos-rules.md, plugin/skills/everos-memory/SKILL.md; verified-source automatic rule update, memory/API behavior unchanged",
     "PR #20 follow-up based on 2cbfb8e: reviewed shared recovery deadlines, safe-read retries, structured diagnostics, log rotation and serial MCP queue; refresh six changed canonical fingerprints, include two new shared regression suites, adapt the new diagnostic lock to a+b in the Windows copy, and exercise all shared suites in native Windows CI. Manifests and MCP version advance to 0.9.2. No Unix installer or existing Linux CI changes.",
     "Quota governance: reviewed shared credential/resource circuit, safe quota diagnostics, single-probe recovery, first-write ledger retention, CLI operations and new quota tests; installer fixture adds the shared module. Shared manifests/MCP advance to 0.9.3. Native Windows CI exercises the new shared suite; platform overlay anchors remain checked. App-generated suggestion scaffolding is excluded from prompt retrieval and user-history capture; real short prompts remain supported.",
-    "PR22 review follow-up: propagate quota failures across profile/hybrid/fallback paths; centralize cached-refusal logging across internal flush and host writers; retain provenance in typed practice aggregates without hiding partial writes; include the review regressions in native Windows parity."
+    "PR22 review follow-up: propagate quota failures across profile/hybrid/fallback paths; centralize cached-refusal logging across internal flush and host writers; retain provenance in typed practice aggregates without hiding partial writes; include the review regressions in native Windows parity.",
+    "CI compatibility: pin the existing Linux Python 3.9/3.13 matrix to Ubuntu 24.04 because ubuntu-latest now selects Ubuntu 26.04 without a Python 3.9 build. Only the runner label and its reviewed fingerprint change; runtime and test behavior are unchanged."
   ]
 }
