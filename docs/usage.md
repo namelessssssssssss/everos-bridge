@@ -4,6 +4,8 @@
 
 This guide covers routine use of EverOS Bridge. [PROTOCOL.md](../PROTOCOL.md) remains the authoritative read/write policy; detailed host and service documentation is currently in Chinese.
 
+Features marked **0.10.0+** require that Bridge version. Earlier installations retain their previous automatic extraction behavior.
+
 ## Agent tools
 
 You can ask your agent to save a decision, find earlier work, or correct a profile item in ordinary language. These are the shared tools available to connected agents:
@@ -16,10 +18,11 @@ You can ask your agent to save a decision, find earlier work, or correct a profi
 | `memory_context` | Keep local task clues and retrieval context for a session |
 | `memory_remember` | Record facts, decisions, preferences, and corrections |
 | `memory_record_practice` | Record a troubleshooting trajectory with at least three real steps |
+| `memory_flush` (0.10.0+) | Explicitly request extraction for one saved session when the task needs it |
 | `memory_fix_profile` | Correct profile items using their IDs and a reason |
 | `memory_rules` | Read the installed rules and changes |
 
-New writes default to v2; practice recording also writes to v1 for compatibility. Disabling legacy reads does not disable that practice dual-write. See [write results](#understand-write-results) for confirmation and extraction behavior.
+New writes default to v2. From **0.10.0**, practice records also write to v1 only when v2 is configured and `EVEROS_READ_V1=1`; disabling legacy access also disables that dual-write. Bridge 0.9.3 and earlier always dual-write practice records in v2 mode. See [write results](#understand-write-results) for confirmation and extraction behavior.
 
 ## Configuration
 
@@ -37,10 +40,10 @@ Replace the placeholders locally. Use unquoted values in `config.env` for compat
 | Option | Default | Purpose |
 | --- | --- | --- |
 | `EVEROS_API_VERSION` | `v2` | API version; `v1` is retained for compatibility |
-| `EVEROS_READ_V1` | Disabled | Set to `1` to merge legacy v1 reads |
+| `EVEROS_READ_V1` | Disabled | Set to `1` to merge legacy v1 reads; from 0.10.0, also enables practice dual-write in v2 mode |
 | `EVEROS_AGENT_ID` | `<user_id>_agent` | Assistant identity shared across hosts |
 | `EVEROS_AGENTIC_TIMEOUT` | `180` | Total agentic retrieval budget, in seconds |
-| `EVEROS_CASE_WAIT` | `30` | Seconds to wait for a v2 practice case after writing; `0` disables polling |
+| `EVEROS_CASE_WAIT` | `30` | Maximum practice-case readback wait, in seconds; from 0.10.0, polling runs only if the v2 add reports `extracted`; `0` disables it |
 | `EVEROS_INJECT` | Enabled | Set to `0` to disable automatic injection |
 | `EVEROS_WRITE` | Enabled | Set to `0` to disable all Bridge writes |
 
@@ -79,6 +82,45 @@ Search and open do not write remote memories. Search can save local result snaps
 | `130` | Interrupted by the user |
 
 `everos --help` and `everos search --help` require no credentials or network access.
+
+## On-demand extraction (0.10.0+)
+
+For v2, saving messages and extracting a memory are separate steps. Bridge confirms each add, then leaves extraction to EverOS unless the agent decides the latest saved content is needed now. Useful boundaries include a handoff, a completed workflow, a topic change, or a search that depends on the latest saved messages. [EverOS Cloud processes an idle session after two hours without new messages](https://docs.evermind.ai/cookbook/quickstart); that behavior should not be assumed for every self-hosted or legacy server.
+
+Use `memory_flush` from an agent or `everos flush` from a terminal. Supply a nonempty reason and **exactly one** target:
+
+| MCP argument / CLI flag | Target |
+| --- | --- |
+| `session_id` / `--session-id` | The EverOS session ID returned by a structured write |
+| `conversation_id` / `--conversation-id` | The host's native session ID shown in the prompt hook; requires an existing local capture ledger |
+
+The native conversation ID is not the EverOS session ID. A conversation without captured writes has nothing for this command to extract. Flush does not capture or upload an unsent final response. For an immediate handoff, first save the conclusion with `memory_remember`, then flush its returned target if needed.
+
+Example MCP arguments, using the actual ID from the write receipt:
+
+```json
+{
+  "session_id": "ID_FROM_WRITE_RECEIPT",
+  "reason": "The handoff needs the latest saved decision",
+  "api_version": "v2"
+}
+```
+
+Equivalent terminal examples:
+
+```bash
+everos flush --session-id ID_FROM_WRITE_RECEIPT \
+  --reason "The handoff needs the latest saved decision" --api-version v2
+
+everos flush --conversation-id NATIVE_SESSION_ID \
+  --reason "The completed workflow is ready for handoff"
+```
+
+`--api-version v1|v2` is optional: direct session IDs default to the configured API version; conversation IDs use their capture ledger. After switching versions, pass the old version explicitly to flush a preserved old target. `--kind episodes|practices` defaults to `episodes`; use `practices` for the v1 agent-memory endpoint. Conversation targets support only `episodes`. MCP uses `api_version` and `kind` for the same options.
+
+In 0.10.0+, v2 remember/practice writes, conversation lifecycle events, MiMo capture, local-memory synchronization, and normal or forced sweeps do not automatically flush. SessionEnd and PreCompact still capture remaining messages. Legacy v1 automatic flush behavior is preserved, including its old-buffer confirmation before a version switch. Sweeps still synchronize local memory and recover pending v1 flushes; they do not force v2 extraction or replay unsent transcripts.
+
+An acknowledged add can advance capture progress. A failed flush retains its pending confirmation without resending that add. Local pending state records the absence of a confirmed local flush; it does not prove that Cloud still has unprocessed messages. A successful flush also does not guarantee immediate search visibility or a practice case. All explicit flushes obey `EVEROS_WRITE=0` and quota controls. After upgrading, reconnect MCP or open a new agent session to load the new tool and instructions.
 
 ## Retrieval timeouts
 
@@ -154,7 +196,7 @@ everos quota retry --resource retrieval
 
 MCU and retrieval quotas are separate, so an MCU refusal does not disable reads. Ordinary rate-limit responses are handled separately from explicit hard quota errors.
 
-Failed capture retains its source position rather than marking messages as sent. A flush sweep only flushes pending sessions; it does not replay every unsent transcript. Recovery requires bounded replay from the retained cursor and a readback check.
+Failed capture retains its source position rather than marking messages as sent. From **0.10.0**, a sweep flushes only pending legacy v1 sessions and synchronizes local memory; v2 extraction is left to the service or an [explicit targeted flush](#on-demand-extraction-0100). A sweep does not replay unsent transcripts. Recovery requires bounded replay from the retained cursor and a readback check.
 
 ### Understand write results
 
@@ -164,7 +206,7 @@ Failed capture retains its source position rather than marking messages as sent.
 | `extracted` | Extraction completed; search visibility and practice-case creation still need separate checks |
 | `no_extraction` | A flush did not extract new content; this alone does not establish a failure or missing data |
 
-Practice recording requires at least three real steps. Record actual failed attempts, unexpected findings, and user corrections; do not invent steps to meet the threshold. The result reports whether a v2 practice case was found; no case is not necessarily a failed write. Current practice recording writes to both v2 and v1. `EVEROS_READ_V1=0` only changes reads.
+Practice recording requires at least three real steps. Record actual failed attempts, unexpected findings, and user corrections; do not invent steps to meet the threshold. From **0.10.0**, the existing bounded case readback runs only when the v2 add returns `extracted`. An accepted but buffered add reports that extraction is pending and defers case polling; it does not promise that a case or searchable memory already exists. A missing case is not necessarily a failed write. In v2 mode, practice dual-write to v1 is enabled only by `EVEROS_READ_V1=1`.
 
 For service-specific limitations and historical tests, see [EverOS notes](everos-notes.md). This guide describes current behavior; it does not change the Bridge's extraction policy.
 

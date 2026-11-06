@@ -26,9 +26,11 @@
 | Claude Code on the web（云端） | setup script + 仓库级 hook + 网络密钥 | ✅ | ✅ | ✅ | ✅ |
 | Doubao Work（豆包办公云端） | 命令行 MCP 客户端 + 用户级 skill（无 hook） | ✅（模型按 skill 主动调用） | ✅（同左） | ✅（每轮主动跑 everos-doubao-ingest） | ✅（everos-mcp 调原版服务端） |
 
-Python 代码只用标准库，不用安装依赖；运行期 hook 失败放行，MCP 和安装器会明确报告失败。接口用 EverOS v2，v1 旧库在过渡期合并读取（`EVEROS_READ_V1=1`），做法轨迹仍按协议双写。
+Python 代码只用标准库，不用安装依赖；运行期 hook 失败放行，MCP 和安装器会明确报告失败。接口默认用 EverOS v2，v1 旧库在过渡期合并读取（`EVEROS_READ_V1=1`）。0.10.0 起，v2 模式下的做法轨迹只在启用该兼容开关时双写 v1；0.9.3 及更早版本保留原有双写行为。
 
-所有宿主的记忆工具都由同一个 `plugin/everos/mcp_server.py` 提供，工具说明和写入校验对每个宿主一致。`memory_record_practice` 至少要 3 个真实步骤，写完会回读 v2 是否生成做法 case，并在返回里说明，等待上限由 `EVEROS_CASE_WAIT` 控制。
+所有宿主的记忆工具都由同一个 `plugin/everos/mcp_server.py` 提供，工具说明和写入校验对每个宿主一致。`memory_record_practice` 至少要 3 个真实步骤。0.10.0 起，仅当 v2 add 返回 `extracted` 时回读做法 case，等待上限由 `EVEROS_CASE_WAIT` 控制；已接受但仍在缓冲的写入会提示等待抽取，不立即轮询，也不承诺已经可检索。
+
+0.10.0 起，v2 写入、SessionEnd/PreCompact、MiMo、本地记忆同步和 sweep 不再自动 flush；会话事件仍补采集剩余消息。由 agent 在交接、流程完成、话题转移或需要最新已保存内容时，使用 `memory_flush` / `everos flush` 指定一个会话和理由。官方 Cloud 闲置两小时处理会话；v1 保留兼容 flush。EverOS 会话 ID 与宿主原生会话 ID 是不同目标，flush 不会采集尚未保存的当前最终回复。参数及边界见[按需抽取指南](docs/usage.md#on-demand-extraction-0100)。
 
 ## 手动检索 CLI
 
@@ -165,8 +167,8 @@ plugin/                           Claude Code 与 Codex 共用的插件目录
   everos/core.py                  核心：v2 读写（含 v1 过渡）、各宿主会话记录解析、补落盘、本地记忆同步
   everos/trae.py                  TraeX 会话定位、history_mutation / response_item 文本投影
   everos/hook.py                  hook 入口与命令行：--doctor / --dry-run / --mimo-recall / --mimo-write / --sweep / --sync-localmem
-  everos/mcp_server.py            stdio MCP 服务：8 个 memory_* 工具
-  everos/cli.py                   手动检索 CLI：search（与 MCP 共用配置和检索核心）
+  everos/mcp_server.py            stdio MCP 服务：memory_* 工具（0.10.0 新增 memory_flush）
+  everos/cli.py                   CLI：search / open / quota；0.10.0 新增显式 flush
   mimo/everos.mjs                 MiMoCode Plugin API：L3 注入 + L4 trajectory 入库
   doubao/                          Doubao Work（豆包办公）：无 hook 宿主的命令行通道
     doubao.py                      main agent trajectory 解析 + 增量采集（复用 core 账本/写入）
@@ -198,6 +200,6 @@ everos quota status
 everos quota retry --resource mcu
 ```
 
-第二条命令用于充值/续期后允许下一次写入单次探测，不会发请求或断言充值成功。未主动恢复时默认15分钟后允许一次探测；其它并发进程继续暂停，成功才恢复，失败保留熔断。检索额度恢复使用`--resource retrieval`。新会话首次写入失败也会保留源路径和未确认的游标；恢复原文需按游标有界重放、验证add/flush并回读，`--sweep`本身不补传未发送消息。
+第二条命令用于充值/续期后允许下一次写入单次探测，不会发请求或断言充值成功。未主动恢复时默认15分钟后允许一次探测；其它并发进程继续暂停，成功才恢复，失败保留熔断。检索额度恢复使用`--resource retrieval`。新会话首次写入失败也会保留源路径和未确认的游标；恢复原文需按游标有界重放、验证add及必要的flush并回读。0.10.0起，`--sweep`只补legacy v1 flush并同步本地记忆，不强制v2抽取，也不补传未发送消息。
 
 宿主自动生成的“下一条消息建议”和“个性化任务建议”不触发提问检索，也不作为用户原话采集；真实用户提问和短指令照常处理。
