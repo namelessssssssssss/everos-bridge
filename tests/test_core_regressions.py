@@ -587,6 +587,61 @@ class AgenticRecallTests(IsolatedCore):
         self.assertGreater(budgets[1], 29)
         self.assertLessEqual(budgets[1], 30)
 
+    def test_agentic_phase_budget_never_exceeds_its_plan_after_float_rounding(self):
+        for budget, now in ((180.0, 100.1), (10.0, 10.1)):
+            budgets = []
+            reserve = min(core.FALLBACK_TIMEOUT, budget / 3)
+            primary_budget = budget - reserve
+            def empty_tracks(jobs, remaining, **kwargs):
+                budgets.append(remaining)
+                return {name: {} for name in jobs}
+            with self.subTest(budget=budget), patch.object(core.time, "monotonic", return_value=now), \
+                    patch.object(core, "_read_jobs", side_effect=empty_tracks):
+                self.assertGreater((now + budget) - reserve - now, primary_budget)
+                core.search_items("history", kind="episodes", method="agentic", budget=budget)
+                self.assertEqual(budgets, [primary_budget, reserve])
+
+    def test_hybrid_budget_never_exceeds_configured_limit_after_float_rounding(self):
+        budget, now = .06, 1.0
+        with patch.object(core.time, "monotonic", return_value=now), \
+                patch.object(core, "_read_jobs", return_value={"v2u": {}}) as read:
+            self.assertGreater((now + budget) - now, budget)
+            core.search_items("history", kind="episodes", method="hybrid", budget=budget)
+        self.assertEqual(read.call_args.args[1], budget)
+
+    def test_transport_timeout_and_queue_wait_are_capped_after_float_rounding(self):
+        budget, now, waits = 180.0, 100.1, []
+        real_queue = core.queue.Queue
+        class RecordingQueue(real_queue):
+            def get(self, block=True, timeout=None):
+                waits.append(timeout)
+                return super().get(block=block, timeout=timeout)
+        self.api.return_value = {"data": {"episodes": []}}
+        with patch.object(core.time, "monotonic", return_value=now), \
+                patch.object(core.queue, "Queue", RecordingQueue):
+            self.assertGreater((now + budget) - now, budget)
+            results = core._read_jobs({"v2u": ("/api/v2/memory/search", {"method": "hybrid"})}, budget)
+        self.assertIn("v2u", results)
+        self.assertEqual(self.api.call_args.kwargs["timeout"], budget)
+        self.assertEqual(waits, [budget])
+
+    def test_phase_caps_still_honor_elapsed_time_in_the_shared_deadline(self):
+        now, budgets = [100.0], []
+        agentic_jobs = core._agentic_jobs
+        def delayed_start(jobs, deadline, reserve, notices, **caps):
+            now[0] += 50
+            return agentic_jobs(jobs, deadline, reserve, notices, **caps)
+        def empty_tracks(jobs, budget, **kwargs):
+            budgets.append(budget)
+            if len(budgets) == 1:
+                now[0] += 110  # A late primary completion leaves only 20s total.
+            return {name: {} for name in jobs}
+        with patch.object(core.time, "monotonic", side_effect=lambda: now[0]), \
+                patch.object(core, "_agentic_jobs", side_effect=delayed_start), \
+                patch.object(core, "_read_jobs", side_effect=empty_tracks):
+            core.search_items("history", kind="episodes", method="agentic", budget=180)
+        self.assertEqual(budgets, [100.0, 20.0])
+
     def test_primary_and_fallback_share_one_deadline_and_keep_fast_results(self):
         def fake_api(path, body, timeout):
             if body.get("agent_id"):
