@@ -11,7 +11,15 @@
 
 [EverOS](https://docs.evermind.ai/cloud/quickstart) 保存和检索对话中形成的记忆。**Bridge 把这份记忆带进你已经在用的 agent**：在支持的宿主中自动召回和采集，也提供工具供 agent 保存决策、查询过去的工作。
 
-[为什么使用](#继续已有工作) · [原理与链路](#记忆如何形成闭环) · [支持的 agent](#支持的-agent) · [开始使用](#开始使用) · [使用指南](docs/usage.zh-CN.md)
+[Agent 接入](#交给-agent-接入) · [为什么使用](#继续已有工作) · [原理与链路](#记忆如何形成闭环) · [支持的 agent](#支持的-agent) · [开始使用](#开始使用) · [使用指南](docs/usage.zh-CN.md)
+
+## 交给 agent 接入
+
+把仓库链接和接入要求交给 agent。[Agent 入口](AGENTS.md)会引导它检查已有环境、预览改动、安装并验证结果。`AGENTS.md` 保持为 agent 自动发现的规范文件，英文对应版提供相同指引。
+
+> 阅读 https://github.com/namelessssssssssss/everos-bridge ，按 AGENTS.md 为这台机器上受支持的 agent 接入 EverOS。先检查并复用已有安装和配置，再完成验证，不要显示凭据。
+
+如果只有仓库 URL、没有接入授权，入口会先完成只读预检并说明具体下一步。
 
 ## 继续已有工作
 

@@ -11,7 +11,15 @@ Keep your preferences, project decisions, and troubleshooting experience availab
 
 [EverOS](https://docs.evermind.ai/cloud/quickstart) stores and retrieves memories from your conversations. **Bridge brings that memory into the agents you already use**, with automatic recall and capture where supported, plus tools your agent can use to save decisions and look up past work.
 
-[Why use it](#pick-up-where-you-left-off) · [How it works](#the-memory-loop) · [Supported agents](#supported-agents) · [Get started](#get-started) · [Usage guide](docs/usage.md)
+[Agent setup](#set-up-with-your-agent) · [Why use it](#pick-up-where-you-left-off) · [How it works](#the-memory-loop) · [Supported agents](#supported-agents) · [Get started](#get-started) · [Usage guide](docs/usage.md)
+
+## Set up with your agent
+
+Give your agent the repository link and a setup request. The [agent entry](AGENTS.en.md) guides it through checking the existing environment, previewing changes, installing, and verifying the result. `AGENTS.md` remains the canonical file that agents discover; the English companion carries the same instructions.
+
+> Read https://github.com/namelessssssssssss/everos-bridge and follow AGENTS.md (English companion: AGENTS.en.md) to set up EverOS for the supported agents on this machine. Inspect and reuse the existing installation and configuration first, then verify setup without exposing credentials.
+
+With only a repository URL and no setup authorization, the entry starts with a read-only preflight and a concrete next step.
 
 ## Pick up where you left off
 
