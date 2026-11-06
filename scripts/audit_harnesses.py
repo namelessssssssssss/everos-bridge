@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from install_config import Installer
 
 EXPECTED = {'memory_rules', 'memory_profile', 'memory_search', 'memory_open', 'memory_context', 'memory_recent',
-            'memory_remember', 'memory_record_practice', 'memory_fix_profile'}
+            'memory_remember', 'memory_record_practice', 'memory_fix_profile', 'memory_flush'}
 
 
 def json_entry(path, kind='mcpServers'):
@@ -172,11 +172,15 @@ def probe(entry):
             opened = json.loads(client.tool('memory_open', {'memory_id': ref, 'limit': 12000}))
             context = json.loads(client.tool('memory_context', {'session_id': 'audit', 'stage': 'recover'}))
             rules = json.loads(client.tool('memory_rules', {'section': 'rules', 'limit': 12000}))
+            refusal = client.call('tools/call', {'name': 'memory_flush', 'arguments': {
+                'session_id': 'audit', 'reason': 'verify the disabled write gate'}})
+            flush_gated = bool(refusal.get('isError')) and any('EVEROS_WRITE=0' in block.get('text', '')
+                                                            for block in refusal.get('content', []))
             valid = ('HARNESS_EXPANSION_OK' in opened['text'] and context['generation']==1
-                     and '二次搜索' in rules['text'] and rules['revision'][:12] in info['instructions'])
+                     and '二次搜索' in rules['text'] and rules['revision'][:12] in info['instructions'] and flush_gated)
             return dict(entry, status='adapter_passed' if valid else 'adapter_failed',
                         version=info['serverInfo']['version'], tool_count=len(names),
-                        native_client_verified=False)
+                        flush_write_gate_verified=flush_gated, native_client_verified=False)
         except Exception as error:
             return dict(entry, status='adapter_failed', error=type(error).__name__+':'+str(error)[:80])
         finally:

@@ -117,6 +117,8 @@ class ResponseAndWriteTests(IsolatedCore):
         self.assertTrue(self.ledger()["pending"])
         payload["hook_event_name"] = "SessionEnd"
         core.write_turns(payload)
+        self.assertTrue(self.ledger()["pending"])
+        core.flush_memory(reason="handoff needs the latest turn", conversation_id="test_session")
         self.assertFalse(self.ledger()["pending"])
 
     def test_partial_batch_failure_retries_without_advancing_offset(self):
@@ -135,14 +137,14 @@ class ResponseAndWriteTests(IsolatedCore):
         payload = self.transcript()
         core.write_turns(payload)
         offset = self.ledger()["offset"]
-        payload["hook_event_name"] = "SessionEnd"
         for out in [response("buffered"), {"code": 500}, {}]:
             self.api.return_value = out
-            core.write_turns(payload)
+            with self.assertRaises(core.APIResponseError):
+                core.flush_memory(reason="completed workflow", conversation_id="test_session")
             self.assertTrue(self.ledger()["pending"])
             self.assertEqual(self.ledger()["offset"], offset)
         self.api.return_value = response("no_extraction")
-        core.write_turns(payload)
+        core.flush_memory(reason="completed workflow", conversation_id="test_session")
         self.assertFalse(self.ledger()["pending"])
         self.assertEqual(self.ledger()["messages"], 1)
 
@@ -180,16 +182,16 @@ class ResponseAndWriteTests(IsolatedCore):
     def test_practice_failure_retains_dual_write_outcomes(self):
         steps = [{"action": f"act {i}", "result": f"result {i}"} for i in range(3)]
         with patch.dict(os.environ, {"EVEROS_READ_V1": "1"}), patch.object(core.time, "sleep"):
-            self.api.side_effect = [response("extracted"), response("no_extraction"), RuntimeError("v1 offline")]
-            with self.assertRaisesRegex(RuntimeError, "v2 extracted/no_extraction; v1 failed"):
+            self.api.side_effect = [response("extracted"), RuntimeError("v1 offline")]
+            with self.assertRaisesRegex(RuntimeError, "v2 extracted/deferred; v1 failed"):
                 core.record_practice("codex", "partial", "task", steps, "conclusion")
-            self.assertIn("v2 extracted/no_extraction; v1 failed", core.LOG.read_text())
+            self.assertIn("v2 extracted/deferred; v1 failed", core.LOG.read_text())
             self.api.side_effect = RuntimeError("all writes offline")
             with self.assertRaisesRegex(RuntimeError, "v2 failed.*v1 failed"):
                 core.record_practice("codex", "all", "task", steps, "conclusion")
-            self.api.side_effect = [response("extracted"), RuntimeError("v2 flush offline"),
-                                    response("accumulated"), response("extracted")]
-            with self.assertRaisesRegex(RuntimeError, "add=extracted，flush 未完成.*v1 accumulated/extracted"):
+            self.api.side_effect = [response("extracted"), response("accumulated"),
+                                    RuntimeError("legacy flush offline")]
+            with self.assertRaisesRegex(RuntimeError, "v2 extracted/deferred; v1 failed.*add=accumulated，flush 未完成"):
                 core.record_practice("codex", "flush_failed", "task", steps, "conclusion")
         # 写入失败时不做 case 回读：只有上面列出的 add / flush 调用。
         self.assertNotIn("/api/v2/memory/get", [c.args[0] for c in self.api.call_args_list])
@@ -689,6 +691,7 @@ class AgenticRecallTests(IsolatedCore):
 
 class LocalMemoryTests(IsolatedCore):
     def test_new_file_version_retries_after_three_incomplete_flushes(self):
+        self.stack.enter_context(patch.dict(os.environ, {"EVEROS_API_VERSION": "v1"}))
         note = self.local_note()
         self.api.return_value = response("buffered")
         with patch.object(core.time, "sleep"):
@@ -720,10 +723,13 @@ class LocalMemoryTests(IsolatedCore):
         self.api.reset_mock()
         with patch.object(core.time, "sleep"):
             core.sync_local_memory()
-        self.assertEqual(self.api.call_count, 2)
-        self.assertEqual(core.load_state(core.LOCALMEM_LEDGER)[str(note)]["mtime"], note.stat().st_mtime)
+        self.assertEqual(self.api.call_count, 1)
+        saved = core.load_state(core.LOCALMEM_LEDGER)[str(note)]
+        self.assertEqual(saved["mtime"], note.stat().st_mtime)
+        self.assertEqual(saved["flush"], "deferred")
 
-    def test_no_extraction_flush_is_completed_dedup(self):
+    def test_legacy_no_extraction_flush_is_completed_dedup(self):
+        self.stack.enter_context(patch.dict(os.environ, {"EVEROS_API_VERSION": "v1"}))
         note = self.local_note()
         self.api.side_effect = [response("accumulated"), response("no_extraction")]
         with patch.object(core.time, "sleep"):
@@ -739,8 +745,11 @@ class LocalMemoryTests(IsolatedCore):
         core.save_state(core.LOCALMEM_LEDGER, {str(note): {"mtime": 0, "attempts": 3}})
         with patch.object(core.time, "sleep"):
             core.sync_local_memory()
-        self.assertEqual(self.api.call_count, 2)
-        self.assertEqual(core.load_state(core.LOCALMEM_LEDGER)[str(note)]["attempted_mtime"], note.stat().st_mtime)
+        self.assertEqual(self.api.call_count, 1)
+        saved = core.load_state(core.LOCALMEM_LEDGER)[str(note)]
+        self.assertEqual(saved["attempted_mtime"], note.stat().st_mtime)
+        self.assertEqual(saved["mtime"], note.stat().st_mtime)
+        self.assertEqual(saved["flush"], "deferred")
 
 
 class FakeClock:
@@ -841,10 +850,9 @@ class PracticeTests(IsolatedCore):
     def test_readback_reports_generated_case_after_polling(self):
         self.polls = [[], lambda body: self.case_for(body)]
         out = core.record_practice("codex", "topic", "task", self.STEPS, "conclusion")
-        self.assertIn("v2 extracted/no_extraction；v2 做法 case 已生成（质量 0.9", out)
-        self.assertEqual(self.paths(), ["/api/v2/memory/add", "/api/v2/memory/flush",
-                                        "/api/v2/memory/get", "/api/v2/memory/get"])
-        body = self.api.call_args_list[2].args[1]
+        self.assertIn("v2 extracted/deferred；v2 做法 case 已生成（质量 0.9", out)
+        self.assertEqual(self.paths(), ["/api/v2/memory/add", "/api/v2/memory/get", "/api/v2/memory/get"])
+        body = self.api.call_args_list[1].args[1]
         self.assertEqual((body["memory_type"], body["agent_id"]), ("agent_case", "test_owner_agent"))
         self.assertTrue(body["filters"]["session_id"].startswith("agent_") and body["filters"]["session_id"].endswith("_topic"))
         self.assertIn("practice case agent_", core.LOG.read_text())
@@ -881,13 +889,13 @@ class PracticeTests(IsolatedCore):
         self.polls = [lambda body: self.case_for(body)]
         with patch.dict(os.environ, {"EVEROS_READ_V1": "1"}):
             out = core.record_practice("codex", "topic", "task", self.STEPS, "conclusion")
-        self.assertEqual(self.paths(), ["/api/v2/memory/add", "/api/v2/memory/flush", "/api/v1/memories/agent",
+        self.assertEqual(self.paths(), ["/api/v2/memory/add", "/api/v1/memories/agent",
                                         "/api/v1/memories/agent/flush", "/api/v2/memory/get"])
         v2 = self.api.call_args_list[0].args[1]["messages"]
-        v1 = self.api.call_args_list[2].args[1]["messages"]
+        v1 = self.api.call_args_list[1].args[1]["messages"]
         self.assertEqual([(m["role"], m["content"], m["timestamp"]) for m in v2],
                          [(m["role"], m["content"], m["timestamp"]) for m in v1])
-        self.assertIn("v2 extracted/no_extraction; v1 accumulated/extracted；v2 做法 case 已生成", out)
+        self.assertIn("v2 extracted/deferred; v1 accumulated/extracted；v2 做法 case 已生成", out)
 
     def test_case_wait_config_and_timestamp_parsing(self):
         self.assertEqual(core.case_wait(), 30)

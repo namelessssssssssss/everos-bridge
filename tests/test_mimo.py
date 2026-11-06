@@ -122,8 +122,8 @@ class MimoWriteTests(IsolatedCore):
             code = hook.main()
         return code
 
-    def test_write_posts_flushes_and_builds_mc_session_name(self):
-        self.api.side_effect = [response("extracted"), response("extracted")]
+    def test_write_posts_without_flush_and_builds_mc_session_name(self):
+        self.api.return_value = response("accumulated")
         code = self.run_cli({
             "session_id": "mimo_sess_1",
             "cwd": str(self.root),
@@ -131,16 +131,14 @@ class MimoWriteTests(IsolatedCore):
             "trajectory": trajectory_turn("问题", "答案"),
         })
         self.assertEqual(code, 0)
-        st = self.ledger()
-        # ledger() reads test_session.json; mimo uses its own sid
         st = core.load_state(core.SESS_DIR / "mimo_sess_1.json")
         self.assertTrue(st["everos_session_id"].startswith("mc_"))
         self.assertIn("接入", st["everos_session_id"] or "接入 MiMo")
-        self.assertFalse(st.get("pending"))
+        self.assertTrue(st.get("pending"))
         self.assertEqual(st.get("messages"), 2)
         calls = [c.args[0] for c in self.api.call_args_list]
-        self.assertTrue(any("messages" in str(c) or True for c in calls))
-        self.assertGreaterEqual(self.api.call_count, 2)
+        self.assertEqual(calls, ["/api/v2/memory/add"])
+        self.assertEqual([m["content"] for m in self.api.call_args.args[1]["messages"]], ["问题", "答案"])
 
     def test_write_disabled_is_noop(self):
         self.stack.enter_context(patch.object(core, "cfg", return_value={"EVEROS_WRITE": "0"}))

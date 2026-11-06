@@ -69,7 +69,8 @@
 - **写**：
   - 对话原文由 hook 自动入库；
   - 交付、纠错、偏好、决策这类关键节点，调 `memory_remember`；
-  - 排障或工具用法闭环，调 `memory_record_practice`：至少 3 个真实步骤，没走通或出乎意料的步骤标 `outcome`，用户纠正的原话填 `user_correction`；返回里会说明 v2 是否生成做法 case；
+  - 排障或工具用法闭环，调 `memory_record_practice`：至少 3 个真实步骤，没走通或出乎意料的步骤标 `outcome`，用户纠正的原话填 `user_correction`；v2 add 已抽取时回读 case，仅接受入缓冲时返回待抽取；
+  - v2 add 确认后不自动 flush。交接、流程完成、话题转移或立即检索需要时，由 agent 判断必要性，再用 `memory_flush` 指定一个目标与理由；其他时候交给服务端处理。hook 原生 ID 传 `conversation_id`，写入回执的 EverOS ID 传 `session_id`，二者不能混用；尚未采集的当前最终回复不在 flush 范围内。细节见 [按需抽取](docs/flush-policy.md)。
   - 画像写错了或过期了，调 `memory_fix_profile`。
 - **交付自检**：写了就在回复里列出写了什么；没写就在结尾输出「记忆写入：无」。
 

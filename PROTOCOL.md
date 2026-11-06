@@ -26,7 +26,7 @@
 - TraeX ≥ 0.209.1：`SessionStart` / `UserPromptSubmit` 注入，`Stop` 增量采集，`SessionEnd` / `PreCompact` 补写与落盘；`PostCompact` 只标记下轮补读画像。当前注入已存在时，规则不再重复调用 MCP。hook 必须启用且被信任。
 - TraeX 读取原始 rollout 的 `history_mutation` v1 append（兼容旧 `response_item`），只保存用户与助手的文本；用 `content_item_kinds` 区分用户输入与环境/规则/注入，不采集工具镜像或 reasoning。替换/压缩快照不作为新对话重新入库。`transcript_path` 为空时按精确 session_id 只读查索引或匹配 rollout 文件，找不到会记录错误且不推进采集进度。
 - Kimi Work 桌面端：hook 挂在 App 内嵌 runtime 的 `config.toml`（daimon 托管，App 升级会重写，丢了重跑 `install.sh`）；hook 命令带 `EVEROS_HOST=kimi_desktop` 显式指定宿主；`ctitle-*` 标题侧会话不采集。
-- MiMoCode：无 hooks.json，L3/L4 走 Plugin API；轨迹在 `session.post` 内存直传，每轮写完即 flush；配置写 `~/.config/mimocode/mimocode.jsonc`，新会话生效。
+- MiMoCode：无 hooks.json，L3/L4 走 Plugin API；轨迹在 `session.post` 内存直传，v2 每轮只确认 add，不自动 flush；配置写 `~/.config/mimocode/mimocode.jsonc`，新会话生效。
 - Doubao Work（豆包办公）：harness 不支持 agent 注册 MCP、没有 hook/全局指令/插件。L1 用命令行 stdio 客户端 `everos-mcp` 调未改动的 `mcp_server.py`；L2 是安装器同步的用户级 skill；L3/L4 靠模型按 skill 每轮主动执行（`everos-doubao-ingest --all`），不是平台强制。采集只读 main agent 的 `system/trajectory.jsonl`，消息无时间戳，按 `system/assignment.md` 的需求标题顺序对齐；只写用户原话（剥 `<system-reminder>`、同请求去重）和无 `tool_calls` 的最终回复，不写工具镜像/工具结果/reasoning；当轮最终回复在下一轮补写。接入细节见 `docs/doubao-integration.md`。
 - botmux 转来的飞书消息按 `<sender>` 标注真实发送者：owner 本人（命中 `EVEROS_OWNER_ALIASES`）记为 owner，其他人记为 `feishu_<邮箱前缀>`。
 
@@ -53,10 +53,11 @@
 
 ### 3.1 自动（hook）
 
-- v2 写入带 `async_mode=false`，不逐轮 flush。
+- v2 写入带 `async_mode=false`，保留已确认 add 才推进游标的语义；记忆工具、自动采集、MiMo、本地记忆同步和 sweep 均不自动 flush v2。
 - add 只有返回已识别的成功状态才推进会话读取偏移；HTTP 成功但业务失败、未知状态或异常时保留偏移，下一次 hook 可重试。flush 只有 `extracted` / `no_extraction` 才清除 pending。
 - 消息归属：用户原话的 `sender_id` 是 owner；助手和工具消息统一用 `EVEROS_AGENT_ID`（默认 `<user_id>_agent`），原 agent 名记在 `sender_name`。
-- SessionEnd、PreCompact、闲置 2 小时的会话由 hook 补落盘。从 v1 延续下来的会话，换库前会先在 v1 落盘。
+- SessionEnd、PreCompact 只补写未采集的消息。v2 由服务端按边界处理；Cloud 无新消息两小时后自动处理不代表所有自托管或 v1 服务都如此。原生宿主事件不等于 agent 判断的任务边界。
+- v1 保留兼容 flush；从 v1 切到 v2 前先完成旧 v1 缓冲。离开 v2 时不自动 flush，账本保留旧目标，必要时显式选择 `api_version=v2` 处理。pending 只表示没有本地 flush 确认，不能按经过时间推断 Cloud 尚未抽取或已抽取。
 
 ### 3.2 结构化记录（agent 在关键节点主动写）
 
@@ -69,9 +70,9 @@
   - 至少 3 个真实步骤，写入前校验。只有一两步的结论改用 `memory_remember`，不补写没发生的步骤。
   - 走错的路、失败的尝试单独记一步，标 `outcome=failed`；出乎意料的结果标 `outcome=unexpected`。`result` 第一句写这一步的发现。
   - 用户中途纠正或改向时，原话填进那一步的 `user_correction`，作为独立的用户消息写入，不改写。
-  - v2 只把有试错、意外、非显然诊断或用户纠正的轨迹提炼成做法 case，顺利执行的线性流程通常不会有 case，内容仍以普通记忆可检索。门槛和实测见 [EverOS 诀窍与坑点](docs/everos-notes.md#3-做法-case-怎么生成v2)。
-  - 写完在 `EVEROS_CASE_WAIT` 秒内回读 v2 做法 case，结果写在返回里；没生成不算失败。
-  - 过渡期同时写 v1，v1 几乎每条都出 case。停双写的条件见 [演进路线](docs/methodology.md#演进路线)。
+  - v2 只把有试错、意外、非显然诊断或用户纠正的轨迹提炼成做法 case，顺利执行的线性流程通常不会有 case。是否形成普通记忆及何时可检索需要独立回读，不能仅凭 add 确认推断。门槛和实测见 [EverOS 诀窍与坑点](docs/everos-notes.md#3-做法-case-怎么生成v2)。
+  - v2 add 返回 `extracted` 时，在 `EVEROS_CASE_WAIT` 秒内回读 case；返回 `accumulated` 等已接受状态时，不自动 flush 或轮询，只说明抽取/case 待确认。没有 case 不等于写入失败。
+  - 配置 v2 且启用 `EVEROS_READ_V1=1` 时兼容双写 v1；否则只写配置版本。启用的 v1 写入保留旧 flush 行为；v2 不自动 flush。停双写的条件见 [演进路线](docs/methodology.md#演进路线)。
 - 实践双写任一版本失败时，工具返回错误并保留各版本结果，不做 case 回读；成功的版本可能已经写入，重试仍沿用同一 topic。写入与抽取成功不代表搜索索引已经可见，需要回读确认。
 - `memory_fix_profile(operations)`：用户纠正了画像里的偏好或背景，或者画像里的进度过期了，就直接改。先用 `memory_profile` 拿到 item_id，每条操作都写 reason。
 
@@ -81,7 +82,7 @@
 - MCU 与检索调用额度分别熔断。状态按后端和凭据的不可逆摘要保存在本机 `state/quotas/`，同一数据根的各宿主、hook 与 MCP 进程共享；MCU 耗尽不会关闭检索。普通速率429和无法识别的错误保持原有处理方式。
 - 首次确认硬配额后暂停对应请求15分钟；并发恢复时仅允许一个带租约的探测请求，正常流量不串行化。失败保留暂停，成功才清除该次探测的熔断，迟到结果不得清除更新的拒绝。
 - `everos quota status` 只读查看本机熔断；充值/续期后可执行 `everos quota retry --resource mcu`（或 `retrieval`），允许下一次相关请求单次验证，不直接发网络请求，不表示云端额度已恢复。
-- 自动采集在源数据校验通过后、首次网络写入前保存会话定位信息；add失败不推进偏移，flush失败保留pending。保留的原文和游标可用于有界补写；普通`sweep`只补flush，不会重放所有未发送的原文。手工工具仍明确返回失败，不能把失败当作已经保存。
+- 自动采集在源数据校验通过后、首次网络写入前保存会话定位信息；add失败不推进偏移，flush失败保留pending。保留的原文和游标可用于有界补写；普通或强制`sweep`只补旧 v1 flush 与本地记忆同步，不自动 flush v2，也不会重放所有未发送的原文。手工工具仍明确返回失败，不能把失败当作已经保存。
 - 缓存熔断造成的重复hook/MCP及内部flush错误不刷相同日志；MCP仍返回明确失败。做法聚合异常保留各版本失败来源，仅在所有尝试均为缓存拒绝且没有确认任何add时抑制日志，混合失败和部分成功继续可见。
 - 画像及所有检索方式在没有成功来源时明确传播硬配额错误；primary失败、fallback才遇到硬配额时保留fallback的配额原因和cached标记。成功的空来源或部分成功结果保持原有语义。读取遥测区分`cached`本地熔断和真实HTTP响应，硬配额拒绝不走短时重试或重复回退。
 - 宿主明确标注的自动补全下一条消息、个性化建议请求不是用户提问，不触发提问检索，也不作为用户原话入库；普通用户短指令保持原有行为。
@@ -90,13 +91,24 @@
 
 接线相关的坑见 [docs/methodology.md](docs/methodology.md#已知坑大多静默失败不报错)，EverOS 服务本身的坑见 [docs/everos-notes.md](docs/everos-notes.md)。
 
-- 写完要核对：add 返回 `accumulated` 或 `extracted`，并且能用 get 或 search 查到。
-- `no_extraction` 有三种情况：缓冲为空、内容已去重、v1 时序问题。前两种正常，第三种 v2 已不存在。
-- 日志和工具返回里的 `A/B` 是同一版本的「add 状态/flush 状态」，不是「v1/v2」；做法双写写成 `v2 A/B; v1 A/B`。
+- 写入确认与抽取、可检索分别核对：add 的已接受状态允许推进采集游标；需要立即使用内容时，再按需抽取及回读。
+- `no_extraction` 可能表示缓冲为空、内容已去重，或异步 add 尚未落地。Bridge 使用同步 add，但不能用这个 flush 状态单独判定丢失。
+- 旧日志或 v1 回执中的 `A/B` 是同一版本的「add 状态/flush 状态」，不是「v1/v2」。v2 写入回执分别说明 add 与抽取状态并返回目标 ID；不能把接受写入当作完成 flush。
 - `extracted` 不代表生成了做法 case。做法 case 是否生成，看 `memory_record_practice` 返回里的回读结论，或 hook.log 的 `practice case … found/missing`。
 - MCP 参数校验失败（`-32602`）的请求没有发出，修正参数后重写，不能当成已入库。
-- 兜底命令：`python3 plugin/everos/hook.py --sweep`，补落盘所有待抽取的会话，并同步本地记忆。
+- 兜底命令：`python3 plugin/everos/hook.py --sweep`，处理旧 v1 待抽取会话并同步本地记忆。v2 使用下面的按需入口，不通过 sweep 批量强制切段。
 - 本地记忆的三次非成功重试限制按文件版本计算；正文更新后重新允许尝试。网络异常不消耗内容重试次数，`no_extraction` 可视为已去重完成。
+
+### 3.5 按需显式抽取
+
+由 agent 判断交接、流程完成、话题转移，或马上检索需要最新内容时是否有必要抽取。使用 `memory_flush` 或 `everos flush`，每次指定一个明确目标和 `reason`；不要每轮或每次 remember 后机械调用。
+
+- `session_id` 是结构化写入回执中的 EverOS ID；`conversation_id` 是 hook 注入的宿主原生 ID，二选一。原生会话须已有本机采集账本，不能猜测转换关系。
+- `api_version` 可选 v1/v2；直接 ID 默认按配置，原生会话按账本，版本迁移时可显式选择保留的旧版本目标。v1 做法使用 `kind=practices`；原生会话只支持 episodes。
+- flush 仅处理已送达服务端的消息，不补采集当前尚未保存的最终回复。必要的交接结论可先通过 remember 写入，使用该回执 ID。
+- 所有显式写入受 `EVEROS_WRITE=0` 和配额熔断约束。成功确认才更新对应账本，失败保留待确认状态；`extracted` 不保证 case 生成或搜索立即可见。
+
+命令、迁移与状态说明见 [按需抽取](docs/flush-policy.md)。
 
 ## 4. 读
 
@@ -147,7 +159,7 @@ MCP子进程可能过滤父进程环境，安装器在各客户端支持的env/e
 | `EVEROS_AGENT_ID` | v2 助手消息的归属，默认 `<user_id>_agent` |
 | `EVEROS_MIN_SCORE` / `EVEROS_RECALL_TIMEOUT` / `EVEROS_RECALL_CHARS` | hybrid 检索门槛、旧版画像预算、注入字数；EVEROS_RECALL_TIMEOUT 不再限制提问检索 |
 | `EVEROS_AGENTIC_TIMEOUT` | 自动/手动 agentic 检索总预算（秒，含回退），默认 180；MCP `timeout` / CLI `--timeout` 可按次覆盖 |
-| `EVEROS_CASE_WAIT` | 写做法后回读 v2 做法 case 的最长等待（秒），从 v2 写完开始计，默认 30，上限 150，`0` 关闭回读；非法值按默认处理 |
+| `EVEROS_CASE_WAIT` | v2 add 已抽取时回读做法 case 的最长等待（秒），从 v2 写完开始计，默认 30，上限 150，`0` 关闭回读；非法值按默认处理 |
 | `EVEROS_OWNER_ALIASES` | botmux 邮箱前缀别名 |
 | `EVEROS_INJECT=0` / `EVEROS_WRITE=0` | 关闭读侧自动注入 / 所有写侧入库（包括 MCP、flush、画像编辑、本地记忆同步） |
 | `EVEROS_HOST` | hook 命令里显式指定宿主（如 `kimi_desktop`），桌面端 payload 没有 `client_type`，靠它区分 |

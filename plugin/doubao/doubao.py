@@ -212,6 +212,7 @@ def ingest_session(sid: str, *, sessions_root: Path | None = None, dry_run: bool
                       transcript_path=str(data["trajectory"]), everos_session_id=result["everos_session_id"],
                       head_hash=data["head_hash"])
         new_offset = offsets[new_rows[-1][0]] + 1 if new_rows else (min(offset, length) if offset else 0)
+        core.prepare_session_version(st, sp)
         if msgs:
             res = core.post_messages(st["everos_session_id"], msgs)
             st.update(pending=True, api=core.version(), last_write_ms=int(time.time() * 1000),

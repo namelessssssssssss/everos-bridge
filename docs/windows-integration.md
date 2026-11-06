@@ -45,7 +45,7 @@ Linux 保持原有 `fcntl.flock` 和打开方式。Windows 生成副本使用 `w
 
 | 功能 | Windows 验证 | Linux 边界 |
 | --- | --- | --- |
-| L1 MCP：9 个工具、参数校验、stdio、正文展开 | 在 Windows 副本运行未修改的 `test_mcp.py` | 原 MCP 与全部测试不变 |
+| L1 MCP：10 个工具、参数校验、stdio、正文展开 | 在 Windows 副本运行未修改的 `test_mcp.py` | 原 MCP 与全部测试不变 |
 | L2：配置、备份、规则管理块、回读 | Windows 独立配置与规则测试 | 原安装器与规则源不变 |
 | L3：画像、每轮 agentic、回退、去重与总预算 | 未修改的 `test_core_regressions.py` 加 Windows hook 命令测试 | 原 hook 与召回核心不变 |
 | L4：增量采集、失败保留偏移、禁写开关、flush | 同一组核心回归，加 Windows 后台 worker loopback 验收 | 原采集与后台启动方式不变 |

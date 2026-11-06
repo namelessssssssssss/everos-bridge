@@ -1,4 +1,4 @@
-"""手动检索 EverOS 记忆（纯标准库，配置与 MCP 共用）。"""
+"""检索 EverOS 记忆、按需抽取指定会话（纯标准库，配置与 MCP 共用）。"""
 from __future__ import annotations
 
 import argparse
@@ -33,6 +33,13 @@ def _timeout(value: str) -> float:
     return seconds
 
 
+def _reason(value: str) -> str:
+    value = value.strip()
+    if not value or len(value) > 500:
+        raise argparse.ArgumentTypeError("flush reason 须为 1–500 字，说明本次抽取的必要性")
+    return value
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="everos", description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -52,12 +59,22 @@ def main(argv: list[str] | None = None) -> int:
     read.add_argument("memory_id")
     read.add_argument("--offset", type=int, default=0)
     read.add_argument("--limit", type=int, default=4000)
+    flush = commands.add_parser("flush", help="由agent判断必要后，显式抽取一个已写入会话")
+    target = flush.add_mutually_exclusive_group(required=True)
+    target.add_argument("--session-id", default="", help="写入回执中的EverOS会话ID")
+    target.add_argument("--conversation-id", default="", help="hook中的原生会话ID，须已有本机采集账本")
+    flush.add_argument("--reason", required=True, type=_reason, help="交接、完成、转题等本次抽取理由")
+    flush.add_argument("--api-version", choices=("v1", "v2"), help="目标API版本，省略时按配置或账本")
+    flush.add_argument("--kind", choices=("episodes", "practices"), default="episodes",
+                       help="v1做法使用practices；conversation-id只支持episodes")
     limits = commands.add_parser("quota", help="查看本机硬配额熔断或在充值后允许单次恢复探测")
     actions = limits.add_subparsers(dest="quota_action", required=True)
     actions.add_parser("status", help="只读查看当前凭据的MCU及检索熔断状态")
     retry = actions.add_parser("retry", help="额度恢复后，允许下一次相关请求单次探测；不发送网络请求")
     retry.add_argument("--resource", choices=("mcu", "retrieval"), required=True)
     args = parser.parse_args(argv)
+    if args.command == "flush" and args.conversation_id and args.kind != "episodes":
+        parser.error("--conversation-id only supports --kind episodes")
 
     # Help and argument validation work without credentials or API access.
     import core
@@ -80,6 +97,12 @@ def main(argv: list[str] | None = None) -> int:
             import recall
             print(recall.open_memory(args.memory_id, args.offset, args.limit))
             return 0
+        if args.command == "flush":
+            core.ensure_writable()
+            print(core.flush_memory(args.reason, session_id=args.session_id,
+                                    conversation_id=args.conversation_id,
+                                    api_version=args.api_version, kind=args.kind))
+            return 0
         if len(args.context) > 500:
             raise ValueError("context 最多500字")
         options = {"method": args.method, "strict": True}
@@ -92,10 +115,10 @@ def main(argv: list[str] | None = None) -> int:
         text = core.search_text(args.query, args.top_k, args.kind, **options)
         print(text or "（没有相关记忆）")
     except KeyboardInterrupt:
-        print("EverOS 检索已取消", file=sys.stderr)
+        print("EverOS 操作已取消", file=sys.stderr)
         return 130
     except Exception as error:
-        print(f"EverOS 检索失败：{error}", file=sys.stderr)
+        print(f"EverOS 调用失败：{error}", file=sys.stderr)
         return 1
     return 0
 

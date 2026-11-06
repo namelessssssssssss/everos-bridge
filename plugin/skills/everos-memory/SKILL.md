@@ -9,7 +9,7 @@ description: 用户跨 agent、跨设备共用的 EverOS 长期记忆。会话�
 
 ## 用哪条通道
 
-1. **有 MCP 工具 `memory_*` 时优先用**：`memory_rules`、`memory_profile`、`memory_search`、`memory_open`、`memory_context`、`memory_recent`、`memory_remember`、`memory_record_practice`、`memory_fix_profile`。
+1. **有 MCP 工具 `memory_*` 时优先用**：`memory_rules`、`memory_profile`、`memory_search`、`memory_open`、`memory_context`、`memory_recent`、`memory_remember`、`memory_record_practice`、`memory_flush`、`memory_fix_profile`。
 2. **装了 hook 的宿主**（Claude Code、Codex、Kimi Code）：画像、每条提问检索、对话原文入库都自动完成；仍应按需主动补查与补写结构化记录。复用本轮已覆盖同一问题的注入；新线索、历史信息缺口或上下文丢失仍需补查。
 3. **两者都没有时**（例如云端会话）：用下面的 curl 模板直接调 v2 接口。
 
@@ -59,7 +59,9 @@ description: 用户跨 agent、跨设备共用的 EverOS 长期记忆。会话�
 - 排障或工具用法闭环时，用 `memory_record_practice` 写一条轨迹：需求 → 每步动作与结果 → 结论。
   - 至少 3 个真实步骤；只有一两步的结论改用 `memory_remember`，不补写没发生的步骤。
   - 没走通的尝试单独记一步并标 `outcome=failed`，出乎意料的结果标 `outcome=unexpected`；`result` 第一句写这一步的发现；用户中途纠正的原话填 `user_correction`。
-  - EverOS v2 只把有试错、意外、非显然诊断或用户纠正的轨迹提炼成做法 case。返回里会说明 case 是否生成，没生成不算失败，内容仍可检索。门槛和实测见 everos-bridge 仓库的 `docs/everos-notes.md`。
+  - EverOS v2 只把有试错、意外、非显然诊断或用户纠正的轨迹提炼成做法 case。add 已抽取时有界回读 case；仅接受入缓冲时返回抽取/case 待确认，不自动 flush 或轮询。没有 case 不等于写入失败，也不能把 add 确认当作搜索已可见。门槛和实测见 everos-bridge 仓库的 `docs/everos-notes.md`。
+- v2 写入确认 add 后不自动 flush；交接、流程完成、话题转移或检索必须依赖最新内容时，由 agent 判断必要性，调用 `memory_flush` 或 `everos flush` 指定一个目标并说明 `reason`，不要每次写入后机械调用。其余交给服务端处理；Cloud 两小时无新消息的自动抽取不代表所有自托管或旧版服务都有此保证。hook 注入的原生 `session_id` 传 `conversation_id`；结构化写入回执中的 EverOS ID 传 `session_id`，二选一。只抽取已送达的内容，不采集当前尚未保存的最终回复。v1 保留兼容抽取行为。
+- `memory_flush(reason, session_id?, conversation_id?, api_version?, kind?)`：两个 ID 必须二选一；`api_version` 可选 v1/v2，原生会话默认按采集账本，直接 ID 默认按配置。v1 做法指定 `kind=practices`；原生会话只支持 episodes。失败保留待确认状态，成功也不保证搜索索引立即可见。
 - 用户纠正了画像里的偏好或背景，或者画像里的进度过期了：先 `memory_profile` 拿到 item_id，再 `memory_fix_profile`，并写明 reason。
 - episode 只追加不删除；owner 明确要求才删。
 - 交付自检：写了就在回复里列出写入内容；没写就在结尾输出「记忆写入：无」。

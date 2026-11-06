@@ -4,7 +4,7 @@
   SessionStart      注入用户画像
   UserPromptSubmit  每条提问都按提问检索并注入相关记忆（得分门槛 + 会话内去重 + 预算上限）
   Stop              把新增的完整轮次写入 EverOS（转交后台子进程，立即返回）
-  SessionEnd / PreCompact  写完剩余轮次并 flush
+  SessionEnd / PreCompact  补写剩余轮次；v2 抽取由服务端或显式 memory_flush 处理
 
 fail-open：生命周期事件的异常只记日志并 exit 0，绝不阻塞会话；--doctor 失败返回非零退出码。
 
@@ -13,7 +13,7 @@ fail-open：生命周期事件的异常只记日志并 exit 0，绝不阻塞会�
   hook.py --dry-run <transcript.jsonl>  只打印将写入的消息（自动识别 Claude Code / Codex 格式）
   hook.py --mimo-recall                 MiMoCode L3：stdin 收提问 JSON，stdout 输出注入文本
   hook.py --mimo-write                  MiMoCode L4：stdin 收轨迹 JSON 并写入 EverOS
-  hook.py --sweep                       补 flush 所有待抽取会话并全量同步本地记忆
+  hook.py --sweep                       处理旧 v1 待抽取会话并同步本地记忆；不自动 flush v2
   hook.py --sync-localmem               只同步 Claude Code 本地记忆
 """
 from __future__ import annotations
@@ -81,7 +81,10 @@ def build_prompt_blocks(sid: str, prompt: str, *, need_profile: bool = False) ->
         seen.update(shown_ids)
     recall.record_coverage(st, question, fresh, shown_ids)
     if not st.get("turns") or st.pop("needs_retrieval_policy", False):
-        blocks.append(f"【EverOS 检索用法】session_id={sid}\n" + recall.POLICY)
+        blocks.append(f"【EverOS 检索用法】session_id={sid}\n" + recall.POLICY +
+                      f"\n需要按需抽取本会话已采集的消息时，memory_flush 使用 conversation_id={sid} 并说明 reason。"
+                      "不要把这个原生ID当成EverOS session_id；尚未采集的当前最终回复不在flush范围内。"
+                      "仅在交接、流程完成、话题转移或立即检索有需要时调用，其他时候由服务端处理。")
     st.update(turns=st.get("turns", 0) + 1, ids=sorted(seen)[-500:])
     recall.save_state(state_p, st)
     return blocks

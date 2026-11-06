@@ -173,7 +173,8 @@ class TraeTests(IsolatedCore):
         adds = [call for call in self.api.call_args_list if call.args[0].endswith("/add")]
         self.assertEqual(len(adds), 1)
         self.assertEqual(self.ledger()["messages"], 2)
-        self.assertFalse(self.ledger()["pending"])
+        self.assertTrue(self.ledger()["pending"])
+        self.assertEqual(self.api.call_count, 1)
 
     def test_disabled_writes_and_fail_open_lifecycle(self):
         self.rollout([mutation(message("user", "question"))])
