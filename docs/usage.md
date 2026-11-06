@@ -32,7 +32,7 @@ EVEROS_API_KEY=your-api-key
 EVEROS_API_VERSION=v2
 ```
 
-Replace the placeholders locally. Use plain, unquoted values in `config.env`: the current runtime does not remove surrounding quotes. The Unix installer creates this file with mode `0600`; native Windows uses ACL protection. Do not commit the file or paste its contents into a conversation or issue.
+Replace the placeholders locally. Use unquoted values in `config.env` for compatibility with older Bridge versions. The Unix installer creates this file with mode `0600`; native Windows uses ACL protection. Do not commit the file or paste its contents into a conversation or issue.
 
 | Option | Default | Purpose |
 | --- | --- | --- |
@@ -139,7 +139,7 @@ python3 ~/.everos-bridge/plugin/everos/hook.py --doctor
 
 Doctor performs connectivity checks. Inspect `~/.everos/state/hook.log` for operational errors, but keep private text and credentials out of reports. Verify new-session injection and a real write/readback separately from configuration checks.
 
-If installation succeeds but authentication fails, check for quoted values in `config.env`. Current runtime parsing retains surrounding quotes; use unquoted values until that behavior is fixed.
+On Bridge 0.9.3 and earlier, if installation succeeds but authentication fails, check for quoted values in `config.env`. Those versions retain surrounding quotes at runtime; use unquoted values for compatibility.
 
 ### Recover from a hard quota error
 
