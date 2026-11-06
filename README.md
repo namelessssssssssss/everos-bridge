@@ -7,6 +7,11 @@
 
 English · [简体中文](README.zh-CN.md)
 
+**Get connected in two steps**
+
+1. **Provide your EverOS API key and user ID** through environment variables or local configuration available to your agent.
+2. **Give [this repository link](https://github.com/namelessssssssssss/everos-bridge) to your agent** and ask it to follow `AGENTS.md` to complete setup.
+
 Keep your preferences, project decisions, and troubleshooting experience available when you start a new chat, switch agents, or move to another device. EverOS Bridge connects Claude Code, Codex, Kimi, and other assistants to the same personal memory, so you spend less time explaining what came before.
 
 [EverOS](https://docs.evermind.ai/cloud/quickstart) stores and retrieves memories from your conversations. **Bridge brings that memory into the agents you already use**, with automatic recall and capture where supported, plus tools your agent can use to save decisions and look up past work.

@@ -7,6 +7,11 @@
 
 [English](README.md) · 简体中文
 
+**两步接入**
+
+1. **提供 EverOS API key 和 user ID**，通过环境变量或本地配置供 Agent 使用。
+2. **把[仓库链接](https://github.com/namelessssssssssss/everos-bridge)交给 Agent**，让它按 `AGENTS.md` 完成接入。
+
 新开会话、更换 agent 或换一台设备时，仍能找回你的偏好、项目决策和排障经验。EverOS Bridge 将 Claude Code、Codex、Kimi 等助手接到同一份个人记忆，让你少花时间重复交代之前的背景。
 
 [EverOS](https://docs.evermind.ai/cloud/quickstart) 保存和检索对话中形成的记忆。**Bridge 把这份记忆带进你已经在用的 agent**：在支持的宿主中自动召回和采集，也提供工具供 agent 保存决策、查询过去的工作。
