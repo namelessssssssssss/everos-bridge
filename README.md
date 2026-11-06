@@ -111,4 +111,4 @@ See the [configuration guide](docs/usage.md#configuration) for custom data locat
 | Understand the available memory tools | [Agent tools](docs/usage.md#agent-tools) |
 | Contribute a fix or another integration | [Development](docs/usage.md#development) · [Onboarding checklist](docs/agent-onboarding.md) (Chinese) |
 
-For detailed background, see the [Chinese README](README.zh-CN.md), [design notes](docs/methodology.md), and [EverOS service notes](docs/everos-notes.md).
+The [Chinese version](README.zh-CN.md) covers the same content. For detailed background, see the [design notes](docs/methodology.md) and [EverOS service notes](docs/everos-notes.md) (Chinese).

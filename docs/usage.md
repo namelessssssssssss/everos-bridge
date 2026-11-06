@@ -1,5 +1,7 @@
 # Usage guide
 
+English · [简体中文](usage.zh-CN.md)
+
 [Back to README](../README.md)
 
 This guide covers routine use of EverOS Bridge. [PROTOCOL.md](../PROTOCOL.md) remains the authoritative read/write policy; detailed host and service documentation is currently in Chinese.
@@ -22,7 +24,7 @@ You can ask your agent to save a decision, find earlier work, or correct a profi
 | `memory_fix_profile` | Correct profile items using their IDs and a reason |
 | `memory_rules` | Read the installed rules and changes |
 
-New writes default to v2. From **0.10.0**, practice records also write to v1 only when v2 is configured and `EVEROS_READ_V1=1`; disabling legacy access also disables that dual-write. Bridge 0.9.3 and earlier always dual-write practice records in v2 mode. See [write results](#understand-write-results) for confirmation and extraction behavior.
+New writes default to v2. Practice records also write to v1 only when v2 is configured and `EVEROS_READ_V1=1`; disabling legacy access also disables that dual-write. See [write results](#understand-write-results) for confirmation and extraction behavior.
 
 ## Configuration
 
@@ -40,7 +42,7 @@ Replace the placeholders locally. Use unquoted values in `config.env` for compat
 | Option | Default | Purpose |
 | --- | --- | --- |
 | `EVEROS_API_VERSION` | `v2` | API version; `v1` is retained for compatibility |
-| `EVEROS_READ_V1` | Disabled | Set to `1` to merge legacy v1 reads; from 0.10.0, also enables practice dual-write in v2 mode |
+| `EVEROS_READ_V1` | Disabled | Set to `1` to merge legacy v1 reads and enable practice dual-write in v2 mode |
 | `EVEROS_AGENT_ID` | `<user_id>_agent` | Assistant identity shared across hosts |
 | `EVEROS_AGENTIC_TIMEOUT` | `180` | Total agentic retrieval budget, in seconds |
 | `EVEROS_CASE_WAIT` | `30` | Maximum practice-case readback wait, in seconds; from 0.10.0, polling runs only if the v2 add reports `extracted`; `0` disables it |
@@ -152,7 +154,7 @@ Linked host guides are in Chinese. New integrations should follow the [onboardin
 The cloud environment needs its own setup; a local plugin installation does not carry over.
 
 1. Allow access to `api.evermind.ai`. Where supported, configure a network secret with an `Authorization: Bearer <key>` header so the key stays outside the virtual machine. Otherwise, supply `EVEROS_API_KEY` through the environment's secret mechanism.
-2. Set `EVEROS_USER_ID`. Add `EVEROS_READ_V1=1` only if legacy reads are needed. A private fork also needs repository access, such as a read-only token scoped to that repository.
+2. Set `EVEROS_USER_ID`. Add `EVEROS_READ_V1=1` only if legacy reads are needed. The default repository is public and needs no GitHub token. To select a fork, set `EVEROS_BRIDGE_REPO=owner/repo`; for a private fork, supply `GH_TOKEN` with read access to that repository.
 3. Use [`cloud/setup.sh`](../cloud/setup.sh) as the setup script. It installs the Bridge under `/opt/everos-bridge`.
 4. Merge [`cloud/settings.snippet.json`](../cloud/settings.snippet.json) into the personal repository's `.claude/settings.json`, and [`cloud/mcp.snippet.json`](../cloud/mcp.snippet.json) into `.mcp.json`. Preserve unrelated settings; keep personal wiring out of shared team repositories.
 5. Start a new cloud session and verify recall and capture. The hook template gates execution on `CLAUDE_CODE_REMOTE` and the installed files.
