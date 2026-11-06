@@ -64,12 +64,12 @@ def build_prompt_blocks(sid: str, prompt: str, *, need_profile: bool = False) ->
     need_profile = need_profile or bool(st.get("needs_profile")) or (
         HOST_OVERRIDE == "trae" and not st.get("profile_injected"))
     if need_profile:
-        profile = core.profile_text(budget=min(core.READ_TIMEOUT, max(0.0, deadline - time.monotonic())))
+        profile = core.profile_text(budget=max(0.0, min(core.READ_TIMEOUT, budget, deadline - time.monotonic())))
         if profile:
             blocks.append(f"【EverOS 用户画像】{HEADER}\n{profile}")
             st.update(profile_injected=True, needs_profile=False)
     notices = []
-    items = core.search_items(question, top_k=5, budget=max(0.0, deadline - time.monotonic()),
+    items = core.search_items(question, top_k=5, budget=max(0.0, min(budget, deadline - time.monotonic())),
                               v1_episodes=3 if core.substantial(prompt) else 0, method="agentic", notices=notices)
     if notices:
         blocks.append("【EverOS 检索提示】\n" + "\n".join(notices))

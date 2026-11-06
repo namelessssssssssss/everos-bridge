@@ -629,6 +629,21 @@ class AgenticRecallTests(IsolatedCore):
             self.assertGreater(call.kwargs["budget"], 179)
             self.assertLessEqual(call.kwargs["budget"], 180)
 
+    def test_prompt_budgets_never_exceed_configured_limit_after_float_rounding(self):
+        # With no clock advance, deadline subtraction can still round upward:
+        # (100.1 + 180) - 100.1 == 180.00000000000003.
+        for budget, now in ((180.0, 100.1), (0.06, 1.0)):
+            with self.subTest(budget=budget), \
+                    patch.dict(os.environ, {"EVEROS_AGENTIC_TIMEOUT": str(budget)}), \
+                    patch.object(hook.time, "monotonic", return_value=now), \
+                    patch.object(core, "profile_text", return_value="") as profile, \
+                    patch.object(core, "search_items", return_value=[]) as search:
+                self.assertGreater((now + budget) - now, budget)
+                hook.build_prompt_blocks(f"rounding-{budget}", "current task", need_profile=True)
+                self.assertLessEqual(profile.call_args.kwargs["budget"], min(core.READ_TIMEOUT, budget))
+                self.assertLessEqual(search.call_args.kwargs["budget"], budget)
+                self.assertGreater(search.call_args.kwargs["budget"], 0)
+
     def test_all_prompt_entrypoints_send_agentic_on_every_turn_at_api_boundary(self):
         def api(path, body, timeout):
             if path.endswith("/get"):
