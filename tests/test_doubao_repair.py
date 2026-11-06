@@ -46,16 +46,135 @@ class CaptureRepairTests(unittest.TestCase):
         self.assertEqual(result["preview"][-1]["timestamp"], doubao.parse_ts("2026-11-01T10:00:00Z"))
         self.assertEqual(result["preview"][1]["timestamp"], doubao.parse_ts("2026-11-01T10:00:00Z") - 1)
 
+    def pre_pr_byte_write(self):
+        # The byte writer's ledger path, extracted from 3b4fa8a before offset_unit existed.
+        data = doubao.read_session(self.root / "sessions", self.sid)
+        core.SESS_DIR.mkdir(parents=True, exist_ok=True)
+        ledger = core.SESS_DIR / f"doubao_{self.sid}.json"
+        st = {"claude_session_id": self.sid, "host": doubao.HOST,
+              "transcript_path": str(data["trajectory"]), "everos_session_id": "synthetic-session",
+              "head_hash": data["head_hash"]}
+        core.prepare_session_version(st, ledger)
+        core.post_messages(st["everos_session_id"], doubao.messages_doubao(
+            data["rows"], data["user_ts"], int(data["trajectory"].stat().st_mtime * 1000)))
+        st.update(offset=data["length"], api=core.version(), pending=True)
+        core.save_state(ledger, st)
+        return ledger
+
+    def test_pre_pr_byte_writer_ledger_upgrades_without_replaying(self):
+        rows = [{"role": "user", "content": "first"}]
+        self.write(rows)
+        ledger = self.pre_pr_byte_write()
+        original = ledger.read_bytes()
+        self.assertNotIn("offset_unit", json.loads(original))
+        self.write(rows + [{"role": "assistant", "channel": "final", "content": "answer"},
+                           {"role": "user", "content": "second"}])
+        preview = self.run_capture(dry_run=True)
+        self.assertEqual([p["head"] for p in preview["preview"]], ["answer", "second"])
+        self.assertEqual(ledger.read_bytes(), original)
+        self.run_capture()
+        self.assertEqual(core.load_state(ledger)["offset_unit"], "bytes-v1")
+        self.assertEqual(self.run_capture()["new_messages"], 0)
+        self.assertEqual(next(core.SESS_DIR.glob("*.bak-offset-*")).read_bytes(), original)
+
+    def test_ambiguous_small_untagged_offset_requires_explicit_format(self):
+        core.SESS_DIR.mkdir(parents=True)
+        ledger = core.SESS_DIR / f"doubao_{self.sid}.json"
+        original = json.dumps({"offset": 2, "everos_session_id": "synthetic-session"})
+        ledger.write_text(original)
+        for dry in (True, False):
+            with self.assertRaisesRegex(ValueError, "legacy-offset-unit"):
+                self.run_capture(dry_run=dry)
+        self.assertEqual(ledger.read_text(), original)
+        self.add.assert_not_called()
+        self.assertEqual(list(core.SESS_DIR.glob("*.bak-offset-*")), [])
+        byte = self.run_capture(dry_run=True, legacy_offset_unit="bytes-v1")
+        row = self.run_capture(dry_run=True, legacy_offset_unit="rows-v1")
+        self.assertEqual([p["head"] for p in byte["preview"]], ["answer", "second"])
+        self.assertEqual([p["head"] for p in row["preview"]], ["second"])
+        self.assertEqual(ledger.read_text(), original)
+
+    def test_failed_row_migration_retains_source_format_after_identity_is_saved(self):
+        core.SESS_DIR.mkdir(parents=True)
+        data = doubao.read_session(self.root / "sessions", self.sid)
+        ledger = core.SESS_DIR / f"doubao_{self.sid}.json"
+        st = {"offset": 2, "host": doubao.HOST, "claude_session_id": self.sid,
+              "transcript_path": str(data["trajectory"]), "head_hash": data["head_hash"],
+              "everos_session_id": "synthetic-session", "api": "v1", "pending": True}
+        ledger.write_text(json.dumps(st))
+        self.add.side_effect = core.APIResponseError("failed add")
+        with patch.object(core, "version", return_value="v2"):
+            with self.assertRaises(core.APIResponseError):
+                self.run_capture(legacy_offset_unit="rows-v1")
+            self.assertEqual(core.load_state(ledger)["offset"], 2)
+            preview = self.run_capture(dry_run=True)
+            self.assertEqual([p["head"] for p in preview["preview"]], ["second"])
+            self.add.side_effect = None
+            self.run_capture()
+        self.assertEqual(core.load_state(ledger)["offset_unit"], "bytes-v1")
+        self.assertEqual(self.run_capture()["new_messages"], 0)
+
+    def test_legacy_format_cli_is_single_session_only(self):
+        for args, expected in ((['--all', '--legacy-offset-unit', 'rows-v1'], 2),
+                               (['--session', self.sid, '--sessions-root', str(self.root / 'sessions'),
+                                 '--legacy-offset-unit', 'rows-v1', '--dry-run'], 0)):
+            with tempfile.TemporaryDirectory() as home:
+                ledger = Path(home) / 'state/sessions' / f'doubao_{self.sid}.json'
+                ledger.parent.mkdir(parents=True)
+                ledger.write_text(json.dumps({'offset': 2}))
+                result = subprocess.run([sys.executable, str(ROOT / 'bin/everos-doubao-ingest'), *args],
+                    env=dict(os.environ, EVEROS_HOME=home), capture_output=True, text=True, timeout=20)
+                self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+
+    def test_explicit_format_cannot_override_tagged_or_invalid_ledger(self):
+        core.SESS_DIR.mkdir(parents=True)
+        ledger = core.SESS_DIR / f"doubao_{self.sid}.json"
+        ledger.write_text(json.dumps({"offset": 1, "offset_unit": "bytes-v1"}))
+        with self.assertRaises(ValueError):
+            self.run_capture(dry_run=True, legacy_offset_unit="rows-v1")
+        ledger.write_text(json.dumps({"offset": 99}))
+        with self.assertRaises(ValueError):
+            self.run_capture(dry_run=True, legacy_offset_unit="rows-v1")
+
+    def test_identical_requests_after_completed_answer_have_own_time_and_capture(self):
+        self.assign = ("- Role: main\n## [2026-11-06T08:00:00Z] 需求\ncontinue\n"
+                       "## [2026-11-06T08:05:00Z] 需求\ncontinue\n")
+        first = [{"role": "user", "content": "continue"},
+                 {"role": "assistant", "channel": "final", "content": "first completed answer"}]
+        self.write(first)
+        self.run_capture()
+        rows = first + [{"role": "user", "content": "continue"},
+                        {"role": "user", "content": "continue"}]
+        self.write(rows)
+        times = doubao.assignment_timestamps(self.assign, rows)
+        self.assertEqual(times, [doubao.parse_ts("2026-11-06T08:00:00Z"),
+                                doubao.parse_ts("2026-11-06T08:05:00Z"),
+                                doubao.parse_ts("2026-11-06T08:05:00Z")])
+        preview = self.run_capture(dry_run=True)
+        self.assertEqual([p["head"] for p in preview["preview"]], ["continue"])
+        self.assertEqual(preview["preview"][0]["timestamp"], times[1])
+        self.run_capture()
+        self.assertEqual(self.run_capture()["new_messages"], 0)
+        self.assertEqual([m["content"] for m in self.add.call_args.args[1]], ["continue"])
+
+    def test_nonfinal_assistant_does_not_break_same_turn_replay_dedup(self):
+        self.write([{"role": "user", "content": "first"},
+                    {"role": "assistant", "channel": "commentary", "content": "progress"},
+                    {"role": "user", "content": "first"},
+                    {"role": "assistant", "channel": "final", "content": "done"}])
+        preview = self.run_capture(dry_run=True)
+        self.assertEqual([p["head"] for p in preview["preview"]], ["first", "done"])
+
     def test_legacy_row_offset_is_not_treated_as_bytes(self):
         core.SESS_DIR.mkdir(parents=True)
         data = doubao.read_session(self.root / "sessions", self.sid)
         ledger = core.SESS_DIR / f"doubao_{self.sid}.json"
         original = {"host": "doubao_work", "offset": 2, "head_hash": data["head_hash"], "everos_session_id": "synthetic-session"}
         ledger.write_text(json.dumps(original))
-        result = self.run_capture(dry_run=True)
+        result = self.run_capture(dry_run=True, legacy_offset_unit="rows-v1")
         self.assertEqual([p["head"] for p in result["preview"]], ["second"])
         self.assertEqual(json.loads(ledger.read_text()), original)
-        self.run_capture()
+        self.run_capture(legacy_offset_unit="rows-v1")
         migrated = json.loads(ledger.read_text())
         self.assertEqual(migrated["offset_unit"], "bytes-v1")
         self.assertEqual(migrated["offset"], data["length"])
@@ -121,7 +240,7 @@ class CaptureRepairTests(unittest.TestCase):
                                "everos_session_id": "synthetic-session"})
         ledger.write_text(original)
         with patch.object(core, "version", return_value="v2"):
-            self.run_capture()
+            self.run_capture(legacy_offset_unit="rows-v1")
         backups = list(core.SESS_DIR.glob("*.bak-offset-*"))
         self.assertEqual(len(backups), 1)
         self.assertEqual(backups[0].read_text(), original)
@@ -171,6 +290,14 @@ class RuntimeCheckTests(unittest.TestCase):
                    FIXTURE_TOOLS='\n'.join(name + '\tfixture' for name in names))
         return subprocess.run(['/bin/bash', str(ROOT / 'plugin/doubao/check.sh')],
                               env=env, capture_output=True, text=True, timeout=20)
+
+    def test_cli_path_with_spaces_lists_tools_and_runs_doctor(self):
+        destination = self.bin.with_name("bin with spaces")
+        self.bin.rename(destination)
+        self.bin = destination
+        result = self.check(self.names)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("OK fixture doctor", result.stdout)
 
     def test_current_tools_and_extra_tool_are_accepted(self):
         result = self.check(self.names + ['memory_future'])

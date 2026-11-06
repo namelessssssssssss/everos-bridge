@@ -12,7 +12,7 @@ done
 INGEST="$(command -v everos-doubao-ingest || true)"
 [ -n "$INGEST" ] && [ "$(readlink -f "$INGEST")" = "$ROOT/bin/everos-doubao-ingest" ] || { printf 'MISS mixed CLI runtime\n'; exit 1; }
 printf 'OK runtime files and CLI targets\n'
-TOOLS="$($CLI list)"
+TOOLS="$("$CLI" list)"
 for name in memory_rules memory_profile memory_search memory_recent memory_open memory_context memory_remember memory_record_practice memory_flush memory_fix_profile; do
   present=0
   while IFS="$(printf '\t')" read -r tool description; do

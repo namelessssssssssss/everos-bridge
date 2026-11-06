@@ -69,6 +69,11 @@ def text_of(content) -> str:
     return ""
 
 
+def _is_final(row: dict) -> bool:
+    return (row.get("role") == "assistant" and not row.get("tool_calls")
+            and row.get("channel") in (None, "final") and bool(text_of(row.get("content")).strip()))
+
+
 def _indexed_messages(rows: list[dict], user_ts: list[int | None], fallback_ms: int):
     out, pending = [], []
     u_idx, last_user = -1, None
@@ -87,10 +92,9 @@ def _indexed_messages(rows: list[dict], user_ts: list[int | None], fallback_ms: 
             last_user = text
             out.append((i, {"role": "user", "sender_id": core.owner(),
                             "timestamp": ts or fallback_ms, "content": core.clip(text)}))
-        elif role == "assistant" and not row.get("tool_calls") and row.get("channel") in (None, "final"):
-            text = text_of(row.get("content")).strip()
-            if text:
-                pending.append((i, text))
+        elif _is_final(row):
+            last_user = None
+            pending.append((i, text_of(row.get("content")).strip()))
     for ai, answer in pending:
         out.append((ai, {"role": "assistant", "sender_id": HOST,
                          "timestamp": fallback_ms, "content": core.clip(answer)}))
@@ -113,6 +117,8 @@ def assignment_timestamps(assign_text: str, rows: list[dict] | None = None) -> l
         return [ts for _, ts in entries]
     result, cursor, previous, previous_ts = [], 0, None, None
     for row in rows:
+        if _is_final(row):
+            previous, previous_ts = None, None
         if row.get("role") != "user":
             continue
         text = clean_user(text_of(row.get("content")))
@@ -213,8 +219,43 @@ def read_session(sessions_root: Path, sid: str) -> dict:
                 json.dumps(rows[0], ensure_ascii=False, sort_keys=True).encode()).hexdigest() if rows else ""}
 
 
+def _ledger_offset(st: dict, data: dict, sid: str, since_bytes: int | None,
+                   legacy_offset_unit: str | None) -> tuple[int, bool, str | None]:
+    unit = st.get("offset_unit")
+    if unit not in (None, "bytes-v1"):
+        raise ValueError("未知 offset_unit；拒绝重放")
+    migrate = bool(st) and unit is None and since_bytes is None
+    if legacy_offset_unit is not None:
+        if legacy_offset_unit not in ("bytes-v1", "rows-v1") or not migrate:
+            raise ValueError("legacy-offset-unit 仅用于无单位旧账本，不能覆盖已标记单位或 since_bytes")
+    offset = int(st.get("offset", 0)) if since_bytes is None else since_bytes
+    source_unit = None
+    if migrate:
+        saved_unit = st.get("legacy_offset_unit")
+        if saved_unit not in (None, "bytes-v1", "rows-v1"):
+            raise ValueError("未知旧账本迁移格式；拒绝重放")
+        if saved_unit and legacy_offset_unit and saved_unit != legacy_offset_unit:
+            raise ValueError("legacy-offset-unit 与已确认旧账本来源冲突")
+        source_unit = legacy_offset_unit or saved_unit
+        # Only the bridge byte writer saved this identity-bound source tuple.
+        if source_unit is None and (isinstance(st.get("identity"), str) and st["identity"]
+                and st.get("host") == HOST and st.get("claude_session_id") == sid
+                and st.get("transcript_path") == str(data["trajectory"])):
+            source_unit = "bytes-v1"
+        if source_unit is None:
+            raise ValueError("旧账本 offset 单位不明；核对来源后指定 --legacy-offset-unit bytes-v1 或 rows-v1")
+        if source_unit == "rows-v1":
+            if offset < 0 or offset > len(data["rows"]):
+                raise ValueError("旧行偏移越界；拒绝重放")
+            offset = data["offsets"][offset] if offset < len(data["rows"]) else data["length"]
+    if offset < 0 or offset > data["length"]:
+        raise ValueError("字节偏移越界；拒绝重放")
+    return offset, migrate, source_unit
+
+
 def ingest_session(sid: str, *, sessions_root: Path | None = None, dry_run: bool = False,
-                   flush: bool = False, since_bytes: int | None = None) -> dict:
+                   flush: bool = False, since_bytes: int | None = None,
+                   legacy_offset_unit: str | None = None) -> dict:
     """Incrementally capture one Doubao Work session into EverOS.
 
     Offset semantics match core.write_turns: the ledger advances only to a fully-read point
@@ -235,17 +276,7 @@ def ingest_session(sid: str, *, sessions_root: Path | None = None, dry_run: bool
         if lock is not None:
             fcntl.flock(lock, fcntl.LOCK_EX)
         st = core.load_state(sp)
-        offset = int(st.get("offset", 0)) if since_bytes is None else since_bytes
-        unit = st.get("offset_unit")
-        if unit not in (None, "bytes-v1"):
-            raise ValueError("未知 offset_unit；拒绝重放")
-        migrate = bool(st) and unit is None and since_bytes is None
-        if migrate:
-            if offset < 0 or offset > len(rows):
-                raise ValueError("旧行偏移越界；拒绝重放")
-            offset = offsets[offset] if offset < len(rows) else length
-        if offset < 0 or offset > length:
-            raise ValueError("字节偏移越界；拒绝重放")
+        offset, migrate, source_unit = _ledger_offset(st, data, sid, since_bytes, legacy_offset_unit)
         head_hash = st.get("head_hash")
         if head_hash and head_hash != data["head_hash"]:
             raise RuntimeError("trajectory 已被改写或截断；为避免重复入库已停止，请人工核对")
@@ -269,6 +300,7 @@ def ingest_session(sid: str, *, sessions_root: Path | None = None, dry_run: bool
             with open(backup, "xb") as out:
                 os.chmod(backup, 0o600)
                 out.write(sp.read_bytes())
+            st["legacy_offset_unit"] = source_unit
         new_offset = length
         core.prepare_session_version(st, sp)
         if msgs:
@@ -282,6 +314,7 @@ def ingest_session(sid: str, *, sessions_root: Path | None = None, dry_run: bool
             result["add"] = res
             new_offset = length  # messages may include finals read before this byte boundary; advance to read end
         st.update(offset=new_offset, offset_unit="bytes-v1")
+        st.pop("legacy_offset_unit", None)
         core.save_state(sp, st)
         if flush and st.get("pending"):
             res = core.flush(st["everos_session_id"], ver=st.get("api"))
@@ -358,7 +391,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--since", help="配合 --all：ISO 时间，覆盖默认的接入时间点")
     parser.add_argument("--dry-run", action="store_true", help="只解析预览，不调用 API")
     parser.add_argument("--flush", action="store_true", help="写入后立即落盘抽取")
+    parser.add_argument("--legacy-offset-unit", choices=["bytes-v1", "rows-v1"],
+                        help="经来源核对后指定单个旧无单位账本的格式；先用 --dry-run 核对")
     args = parser.parse_args(argv)
+    if args.all and args.legacy_offset_unit:
+        parser.error("--legacy-offset-unit 只能用于 --current 或 --session，不能批量指定")
     if core.cfg().get("EVEROS_WRITE") == "0" and not args.dry_run:
         print(json.dumps({"error": "EverOS 写入已关闭（EVEROS_WRITE=0）"}, ensure_ascii=False), file=sys.stderr)
         return 1
@@ -367,7 +404,7 @@ def main(argv: list[str] | None = None) -> int:
             return _ingest_all(args)
         sid = current_session_id() if args.current else args.session
         print(json.dumps(ingest_session(sid, sessions_root=Path(args.sessions_root), dry_run=args.dry_run,
-                                        flush=args.flush), ensure_ascii=False, indent=2))
+                                        flush=args.flush, legacy_offset_unit=args.legacy_offset_unit), ensure_ascii=False, indent=2))
         return 0
     except Exception as exc:
         core.log_error(f"doubao_work ingest failed", exc)
