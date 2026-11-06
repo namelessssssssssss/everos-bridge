@@ -62,4 +62,4 @@ For capture-ledger diagnostics, an unconfirmed v2 target from a version switch i
 
 All explicit writes, including flush, obey `EVEROS_WRITE=0` and quota controls. These changes do not alter the synchronous add confirmation used for recoverable capture. They do not establish a measured MCU saving or an improvement in extraction quality.
 
-After updating the Bridge, reconnect MCP or open a new agent session to load `memory_flush` and the new rules. Existing processes may still expose the previous tool list. See [rule synchronization](rule-sync.md) and the [protocol](../PROTOCOL.md).
+After updating the Bridge, reconnect MCP or open a new agent session to load `memory_flush` and the new rules. Existing processes may still expose the previous tool list. See [rule synchronization](rule-sync.md) and the [protocol](../PROTOCOL.md) (both in Chinese).

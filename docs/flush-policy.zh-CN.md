@@ -62,4 +62,4 @@ Flush 失败时保留 pending 状态，不重新发送已经确认的 add。对�
 
 包括 flush 在内的所有显式写入都遵守 `EVEROS_WRITE=0` 和配额控制。这些变更不改变可恢复采集所依赖的同步 add 确认机制，也不代表已经实测了 MCU 节省幅度或抽取质量提升。
 
-更新 Bridge 后，重新连接 MCP 或打开新的 agent 会话，以加载 `memory_flush` 和新规则。已有进程可能仍然只暴露旧工具列表。详见[规则同步](rule-sync.md)和[协议](../PROTOCOL.md)。
+更新 Bridge 后，重新连接 MCP 或打开新的 agent 会话，以加载 `memory_flush` 和新规则。已有进程可能仍然只暴露旧工具列表。详见[规则同步](rule-sync.md)和[协议](../PROTOCOL.md)（两份均为中文）。
