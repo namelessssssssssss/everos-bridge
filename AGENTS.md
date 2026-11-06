@@ -17,9 +17,9 @@
 ## 接入步骤（按顺序做，每步核对结果）
 
 1. **环境与仓库**：确认有 `python3`（≥ 3.9）和 `git`。仓库放在 `~/.everos-bridge`，下文记作 `$REPO`。
-   - 仓库是私有的，网页链接和 raw 链接都读不到，直接用 gh 拉取：`gh repo clone namelessssssssssss/everos-bridge ~/.everos-bridge`；
-   - `gh auth status` 显示未登录时，请用户先执行 `gh auth login`；
-   - 已经拉过的，执行 `git -C ~/.everos-bridge pull`；如果报 `could not read Username`，先执行 `gh auth setup-git`。
+   - 默认仓库公开，可直接拉取：`git clone https://github.com/namelessssssssssss/everos-bridge.git ~/.everos-bridge`；
+   - 使用私有 fork 时才需要对应的仓库访问权限。使用 GitHub CLI 时，可先通过 `gh auth status` 检查授权；未登录则请用户执行 `gh auth login`，再按需运行 `gh auth setup-git`；
+   - 已经拉过的，执行 `git -C ~/.everos-bridge pull --ff-only`；存在分叉或本地冲突时先核对，不覆盖本地改动。
    - 仓库不在默认路径也可以（例如 `~/.everos/source`）：`install.sh` 以自身所在路径为准，直接在原地 pull 后重跑即可，不必搬家。
 2. **配置**：检查环境变量或 `~/.everos/config.env` 里是否有 `EVEROS_USER_ID` 和 `EVEROS_API_KEY`。
    - 没有就停下来问用户，不要猜，也不要去别处搜。
@@ -76,7 +76,7 @@
 
 ## 给用户的一句话启动指令
 
-> 用 gh 把私有仓库 namelessssssssssss/everos-bridge 拉到 ~/.everos-bridge，读里面的 AGENTS.md，按步骤把 EverOS 记忆接到你自己和这台机器上的其他 agent。
+> 用 git 把公开仓库 https://github.com/namelessssssssssss/everos-bridge.git 拉到 ~/.everos-bridge，读里面的 AGENTS.md，按步骤把 EverOS 记忆接到你自己和这台机器上的其他 agent。
 
 ## 不要做
 
@@ -85,3 +85,10 @@
 - 不要绕过 `install.sh` 去改其他 agent 的配置；确实需要手改时，先备份。
 - 不要在各 agent 加载的仓库目录里切分支或改代码，那等于直接改线上；开发用 `git worktree`，合并后再在原目录 pull 并重跑 `install.sh`。
 - 改了读写规则，要同步更新 PROTOCOL.md 和 docs/，提交并推送。
+
+## 中英文文档同步维护
+
+- 成对文档必须在同一 PR 中同步更新：`README.md` / `README.zh-CN.md`、`docs/usage.md` / `docs/usage.zh-CN.md`、`docs/flush-policy.md` / `docs/flush-policy.zh-CN.md`。新增其他语言版本时，将对应关系列入本节，并沿用此要求。
+- 两版的功能定位、支持范围、安装步骤、示例、命令、配置默认值、版本条件和限制必须保持一致。允许自然的语言表达差异，不得把一版保留为旧版参考、只在另一版增加或删减产品内容。
+- 修改任一语言后，逐节核对另一版的含义与条件，并检查语言切换、同语言指南链接及章节锚点。仅两份文件都发生改动不代表已同步，审阅者须确认内容等价。
+- 目前只有单一语言的旧参考文档须明确标注语言；不要在没有对应版本时将其描述为双语文档。
