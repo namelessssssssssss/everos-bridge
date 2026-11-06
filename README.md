@@ -11,7 +11,15 @@ Keep your preferences, project decisions, and troubleshooting experience availab
 
 [EverOS](https://docs.evermind.ai/cloud/quickstart) stores and retrieves memories from your conversations. **Bridge brings that memory into the agents you already use**, with automatic recall and capture where supported, plus tools your agent can use to save decisions and look up past work.
 
-[Why use it](#pick-up-where-you-left-off) · [Supported agents](#supported-agents) · [Get started](#get-started) · [Usage guide](docs/usage.md)
+[Agent setup](#set-up-with-your-agent) · [Why use it](#pick-up-where-you-left-off) · [How it works](#the-memory-loop) · [Supported agents](#supported-agents) · [Get started](#get-started) · [Usage guide](docs/usage.md)
+
+## Set up with your agent
+
+Give your agent the repository link and a setup request. The [agent entry](AGENTS.en.md) guides it through checking the existing environment, previewing changes, installing, and verifying the result. `AGENTS.md` remains the canonical file that agents discover; the English companion carries the same instructions.
+
+> Read https://github.com/namelessssssssssss/everos-bridge and follow AGENTS.md (English companion: AGENTS.en.md) to set up EverOS for the supported agents on this machine. Inspect and reuse the existing installation and configuration first, then verify setup without exposing credentials.
+
+With only a repository URL and no setup authorization, the entry starts with a read-only preflight and a concrete next step.
 
 ## Pick up where you left off
 
@@ -34,6 +42,29 @@ Memory supplies context; your agent still needs the relevant files, permissions,
 1. **Work in your usual agent.** With automatic capture enabled, user and assistant conversation text is saved as you work. You can also ask your agent to remember an important decision or record a useful troubleshooting process.
 2. **Bring relevant history into the next question.** Automatic integrations retrieve memories before each prompt. In other clients, the agent follows its memory instructions or your request to search.
 3. **Continue across sessions and devices.** Connect another supported agent to the same EverOS service, account, and user ID to retrieve those memories there. New memories become searchable after the service processes them.
+
+### The memory loop
+
+Bridge runs alongside each connected agent. It sends captured conversation text and explicit memory records to EverOS, then brings relevant history back into later conversations.
+
+```mermaid
+flowchart LR
+    A["You + agents"]
+    subgraph B["EverOS Bridge"]
+        W["Save"]
+        R["Recall"]
+    end
+    E["EverOS service<br/>Message buffer<br/>↓ Extract memories<br/>↓ Shared memory"]
+    A -->|"Save"| W
+    W -->|"Write"| E
+    W -.->|"On-demand flush"| E
+    A <-->|"Ask / context"| R
+    R <-->|"Read"| E
+```
+
+- **Save:** automatic capture is available only in supported agents; explicit memory tools save decisions and troubleshooting experience. A confirmed write means the service accepted the messages.
+- **Process:** v2 extraction is handled by the service, or requested explicitly when the agent needs it. Bridge does not flush v2 after every write. EverOS Cloud also processes sessions after two hours without new messages; extraction and search visibility can take time.
+- **Recall:** profile information and memories relevant to the current question return through Bridge to the agent. Other connected agents can query the same memory using the same service, account, and user ID; project files stay in their own workspaces.
 
 ## Supported agents
 

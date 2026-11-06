@@ -41,7 +41,9 @@
 4. **文档**：更新 README 的覆盖表、PROTOCOL.md 的接线表、本文的速查表；新踩的坑记进 `docs/methodology.md`。
 5. **提交并推送**，再在另一台机器上按 AGENTS.md 走一遍，确认能复现。
 
-## 验证清单（全部通过才算接入完成）
+## 验证清单（按宿主能力逐项记录）
+
+分别记录配置同步、工具可用、原生事件触发、写入确认和抽取/检索回读。只声明已经取得证据的能力；不支持的能力标明范围，受权限、信任、配额或后台处理影响的项目标为待验证，不能用安装成功或一个 hook 的退出码替代。
 
 任务中检索还需验证：search返回ID可通过open跨进程分页读取；新问题/正文更新/压缩后可重新注入；Claude Code/Codex工具事件只本地提醒、无网络、无权限裁决；其他宿主不得仅凭MCP可连接声称已接入工具事件。
 
@@ -49,14 +51,14 @@
 - [ ] `python3 -m unittest discover -s tests -v` 通过；`install.sh --dry-run` 不修改配置也不访问 API。
 - [ ] Codex 新安装或更新的 hook 定义已经审阅并信任；实际出现注入，不能只看插件 enabled 或 MCP connected。
 - [ ] `hook.py --dry-run <会话记录文件>`：解析出来的消息角色正确、没有混进脚手架、时间戳单调递增。
-- [ ] 真实会话里，让模型复述「EverOS 相关记忆」或「用户画像」，确认注入生效。
-- [ ] 一轮对话结束后，v2 里出现这个会话的 episode，`sender_ids` 归属正确（用户是 owner，同事是 `feishu_*`）。
+- [ ] 在支持自动注入的宿主真实会话中，核对「EverOS 相关记忆」或「用户画像」确实到达上下文；新账号可以合法返回空结果，应区分成功的空读取与错误。没有原生 hook 的宿主按工具/skill 能力报告。
+- [ ] 在支持自动采集的宿主结束一轮对话后，确认 add 回执及采集游标，核对消息角色与归属；v2 接受消息不代表当轮已生成 episode。需要立即验证最新写入时，对一个明确目标显式 flush 并说明验收理由，再独立检查 episode、`sender_ids` 和搜索可见性；否则有界等待服务处理，保留抽取/回读待验证状态。
 - [ ] 断网或填错 key 时，会话照常进行（失败放行），`state/hook.log` 里有错误记录。
 - [ ] 提问前 hook 的总预算生效：默认 180 秒（EVEROS_AGENTIC_TIMEOUT），宿主默认 190 秒；每条消息的 v2 首次请求都必须为 agentic；Kimi 首轮画像最多 6 秒并与召回共用预算，超时只采用已经返回的结果。
 - [ ] `install.sh` 重复运行不会重复追加配置（幂等）。
 - [ ] 改完代码后在新会话里验证（MCP 服务是常驻进程，旧会话里还是旧代码）。
-- [ ] `EVEROS_WRITE=0` 时自动采集和 MCP 三个写工具均不能入库；业务错误不会推进 offset 或清除 pending；多行记忆只标记真正注入的 ID。
-- [ ] 新宿主里调一次 `memory_record_practice`：2 步时应被拒绝并提示改用 `memory_remember`；3 步以上、含一步 `outcome=failed` 时，返回里应出现 v2 做法 case 的回读结论。宿主的 MCP 外层超时要容得下写入加 `EVEROS_CASE_WAIT`（默认 30 秒）。
+- [ ] `EVEROS_WRITE=0` 时自动采集和 MCP 四个远端写工具（remember、record_practice、flush、fix_profile）均被拒绝；业务错误不会推进 offset 或清除 pending；多行记忆只标记真正注入的 ID。
+- [ ] 使用真实且获准记录的过程，或隔离样例验证 `memory_record_practice`：2 步应被拒绝并提示改用 `memory_remember`；3 步以上的有效轨迹应返回写入状态。只有 v2 add 已返回 `extracted` 时才预期有界 case 回读；接受入缓冲时应返回待抽取、不自动 flush 或轮询。没有 case 不等于写入失败。外层超时要容得下适用的写入及 `EVEROS_CASE_WAIT`（默认 30 秒）。
 
 ## 已接入宿主速查
 
