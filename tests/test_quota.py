@@ -65,7 +65,8 @@ class QuotaTests(IsolatedCore):
         with patch.object(core, "api", self.real_api):
             notices = []
             results, methods = core._agentic_jobs({'v2u':('/api/v2/memory/search', {
-                'method':'agentic','query':'synthetic'})}, time.monotonic()+1, .1, notices)
+                'method':'agentic','query':'synthetic'})}, time.monotonic()+1, .1, notices,
+                primary_budget=.9, total_budget=1)
         self.assertEqual(self.net.call_count, 1)
         self.assertFalse(results)
         self.assertTrue(any('quota_exceeded' in notice for notice in notices))

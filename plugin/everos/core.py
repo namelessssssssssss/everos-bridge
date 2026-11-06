@@ -321,12 +321,12 @@ def _read_jobs(jobs: dict, budget: float, *, operation: str | None = None) -> di
     operation = operation or uuid.uuid4().hex[:16]
 
     def run(name, path, body):
-        remaining = deadline - time.monotonic()
+        remaining = min(budget, deadline - time.monotonic())
         if remaining <= 0:
             return
         for attempt in (1, 2):
             request_started = time.monotonic()
-            remaining = deadline - request_started
+            remaining = min(budget, deadline - request_started)
             if remaining <= 0:
                 return
             try:
@@ -342,7 +342,7 @@ def _read_jobs(jobs: dict, budget: float, *, operation: str | None = None) -> di
                 log_read(operation, name, body, attempt, request_started, "error", failure)
                 # Only retry safe reads with a transient transport/server error. A
                 # HTTP 422 needs its error detail investigated, not a blind retry.
-                remaining = deadline - time.monotonic()
+                remaining = min(budget, deadline - time.monotonic())
                 delay = failure.get("retry_after", .2)
                 if attempt == 1 and failure["retryable"] and remaining > max(.5, delay):
                     time.sleep(delay)
@@ -355,7 +355,7 @@ def _read_jobs(jobs: dict, budget: float, *, operation: str | None = None) -> di
     for name, (path, body) in jobs.items():
         threading.Thread(target=run, args=(name, path, body), daemon=True).start()
     for _ in jobs:
-        remaining = deadline - time.monotonic()
+        remaining = min(budget, deadline - time.monotonic())
         if remaining <= 0:
             break
         try:
@@ -517,8 +517,10 @@ def failure_label(failure):
     return {"deadline": "超过检索时限", "timeout": "网络超时", "network": "网络连接失败"}.get(kind, "请求失败")
 
 
-def _agentic_jobs(jobs, deadline, reserve, notices):
+def _agentic_jobs(jobs, deadline, reserve, notices, *, primary_budget, total_budget):
     """Each track can recover immediately, independently of slower siblings."""
+    # Keep planned caps separate from absolute deadlines: subtracting a large
+    # clock value can round the remaining duration above its configured budget.
     primary_deadline = deadline - reserve
     completed = queue.Queue()
     results, methods = ReadResults(), {}
@@ -528,7 +530,8 @@ def _agentic_jobs(jobs, deadline, reserve, notices):
     def run(name, path, body):
         final, method, note = ReadResults(), body["method"], ""
         try:
-            primary = _read_jobs({name: (path, body)}, max(0.0, primary_deadline - time.monotonic()), operation=operation)
+            remaining = max(0.0, min(primary_budget, primary_deadline - time.monotonic()))
+            primary = _read_jobs({name: (path, body)}, remaining, operation=operation)
             final = primary
             hard_quota = getattr(primary, "failures", {}).get(name, {}).get("code") == "quota_exceeded"
             if name in labels and not hard_quota and (name not in primary or not _has_search_hits(name, primary[name])):
@@ -558,7 +561,7 @@ def _agentic_jobs(jobs, deadline, reserve, notices):
         threading.Thread(target=run, args=(name, path, body), daemon=True).start()
     pending = set(jobs)
     while pending:
-        remaining = deadline - time.monotonic()
+        remaining = min(total_budget, deadline - time.monotonic())
         if remaining <= 0:
             break
         try:
@@ -676,10 +679,11 @@ def search_items(query: str, top_k: int = 5, kind: str = "all", include_profile:
     reserve = min(FALLBACK_TIMEOUT, total_budget / 3) if deep else 0.0
     agent_method = method
     if deep:
-        results, methods = _agentic_jobs(jobs, deadline, reserve, notes)
+        results, methods = _agentic_jobs(jobs, deadline, reserve, notes,
+                                        primary_budget=total_budget - reserve, total_budget=total_budget)
         agent_method = methods.get("v2a", method)
     else:
-        results = _read_jobs(jobs, max(0.0, deadline - time.monotonic()))
+        results = _read_jobs(jobs, max(0.0, min(total_budget, deadline - time.monotonic())))
     raise_read_quota_if_no_success(results)
     if (method == "agentic" or strict) and jobs and not results:
         raise APIResponseError("记忆检索失败或超时，未获得任何成功轨道；请重试。")
