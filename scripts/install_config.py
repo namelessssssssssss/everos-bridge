@@ -579,19 +579,38 @@ class Installer:
         link = self.home / ".local/bin" / name
         if not target.is_file() or not os.access(target, os.X_OK):
             raise ValueError("可执行入口不存在或不可执行：{}".format(target))
+        owned_link = False
         if link.is_symlink():
             try:
                 if link.resolve() == target:
                     return
-            except (OSError, RuntimeError):
-                pass  # Broken/cyclic links are conflicts, never replace them.
-        if link.exists() or link.is_symlink():
+                old_target = link.resolve(strict=True)
+                if old_target.name == name and old_target.parent.name == "bin":
+                    roots = []
+                    for repo in (old_target.parent.parent, self.repo):
+                        result = subprocess.run(["git", "-C", str(repo), "rev-parse", "--git-common-dir"],
+                                                capture_output=True, text=True, check=True)
+                        common = Path(result.stdout.strip())
+                        roots.append((repo / common).resolve() if not common.is_absolute() else common.resolve())
+                    owned_link = roots[0] == roots[1]
+            except (OSError, RuntimeError, subprocess.CalledProcessError):
+                pass  # Broken, cyclic or foreign links remain conflicts.
+        legacy = '#!/bin/sh\n# everos-doubao launcher\nexec python3 ' + str(self.home / '.local/lib/everos-doubao') + '/' + {
+            'everos-mcp': 'everos_mcp.py', 'everos-doubao-ingest': 'doubao_ingest.py'}.get(name, '') + ' "$@"\n'
+        migrate = owned_link or (name in ('everos-mcp', 'everos-doubao-ingest') and link.is_file() and not link.is_symlink() and link.read_text() == legacy)
+        if (link.exists() or link.is_symlink()) and not migrate:
             raise ValueError("路径已被其他文件占用，未覆盖：{}".format(link))
         if self.dry:
-            print("  [dry-run] 把 {} 指向 {}".format(link, target))
+            print("  [dry-run] {}把 {} 指向 {}".format('备份旧入口后' if migrate else '', link, target))
             return
         link.parent.mkdir(parents=True, exist_ok=True)
-        link.symlink_to(target)
+        if migrate:
+            backup(link)
+            temporary = link.with_name('.everos-link-' + uuid.uuid4().hex)
+            temporary.symlink_to(target)
+            os.replace(temporary, link)
+        else:
+            link.symlink_to(target)
         print("  命令已安装：{}".format(link))
         if str(link.parent) not in os.environ.get("PATH", "").split(os.pathsep):
             print("  使用短命令前，请把 {} 加入 PATH。".format(link.parent))
@@ -644,6 +663,9 @@ class Installer:
         if not source.is_file():
             raise ValueError("skill 源文件不存在：{}".format(source))
         text = source.read_text(encoding="utf-8")
+        if label == "SKILL.md":
+            text = text.replace("~/.everos/PROTOCOL.md", str(self.repo / "PROTOCOL.md"))
+            text = text.replace("（软链到本仓 `PROTOCOL.md`）", "（本次豆包接入的规则源）")
         digest = hashlib.sha256(text.encode()).hexdigest()
         old = target.read_text(encoding="utf-8") if target.exists() else None
         marker = self.everos / "state/install/doubao-everos-memory-{}.sha256".format(
@@ -891,7 +913,7 @@ def main():
     scope.add_argument("--rules-only", action="store_true", help="只同步已安装宿主原生规则与增量；不调用API或安装插件")
     parser.add_argument("--rules-host", action="append", choices=["claude", "codex", "trae", "gemini", "kimi", "kimi_desktop", "cursor"],
                         help="与--rules-only配合，显式指定云端/未启动的原生指令宿主，可重复")
-    scope.add_argument("--only", choices=["trae"], help="只刷新 TraeX，不改其他宿主")
+    scope.add_argument("--only", choices=["trae", "doubao"], help="只刷新指定宿主，不改其他宿主")
     args = parser.parse_args()
     if args.rules_host and not args.rules_only:
         parser.error("--rules-host requires --rules-only")
@@ -906,6 +928,8 @@ def main():
             installer.install_bin("everos-doubao-ingest")
         elif args.rules_only:
             installer.sync_rules()
+        elif args.only == "doubao":
+            installer.doubao()
         else:
             installer.install()
     except (OSError, ValueError, subprocess.CalledProcessError) as error:

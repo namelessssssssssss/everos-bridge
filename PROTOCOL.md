@@ -28,6 +28,7 @@
 - Kimi Work 桌面端：hook 挂在 App 内嵌 runtime 的 `config.toml`（daimon 托管，App 升级会重写，丢了重跑 `install.sh`）；hook 命令带 `EVEROS_HOST=kimi_desktop` 显式指定宿主；`ctitle-*` 标题侧会话不采集。
 - MiMoCode：无 hooks.json，L3/L4 走 Plugin API；轨迹在 `session.post` 内存直传，v2 每轮只确认 add，不自动 flush；配置写 `~/.config/mimocode/mimocode.jsonc`，新会话生效。
 - Doubao Work（豆包办公）：harness 不支持 agent 注册 MCP、没有 hook/全局指令/插件。L1 用命令行 stdio 客户端 `everos-mcp` 调未改动的 `mcp_server.py`；L2 是安装器同步的用户级 skill；L3/L4 靠模型按 skill 每轮主动执行（`everos-doubao-ingest --all`），不是平台强制。采集只读 main agent 的 `system/trajectory.jsonl`，消息无时间戳，按 `system/assignment.md` 的需求标题顺序对齐；只写用户原话（剥 `<system-reminder>`、同请求去重）和无 `tool_calls` 的最终回复，不写工具镜像/工具结果/reasoning；当轮最终回复在下一轮补写。接入细节见 `docs/doubao-integration.md`。
+- Doubao 采集以需求正文匹配时间，忽略空需求段，不用另一轮日期兜底；未知时间使用采集时刻。旧无单位偏移按来源区分字节/行，来源不明时只允许核对后对单会话显式指定 --legacy-offset-unit；不得凭数值猜测或批量指定。迁移保留原始备份，完成回复后的同文请求不去重。dry-run 不改状态，单会话不隐式 sweep；多个主 Agent 候选、坏 JSON、未知偏移单位停止并报告。仅豆包安装使用 `install.sh --only doubao`，保留其他客户端配置。
 - botmux 转来的飞书消息按 `<sender>` 标注真实发送者：owner 本人（命中 `EVEROS_OWNER_ALIASES`）记为 owner，其他人记为 `feishu_<邮箱前缀>`。
 
 ## 2. 写什么

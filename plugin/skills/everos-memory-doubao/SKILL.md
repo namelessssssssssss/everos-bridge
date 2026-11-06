@@ -11,6 +11,9 @@ Doubao Work 没有 MCP 注册入口和生命周期 hook，读写都通过本仓�
 
 首次使用按 `docs/doubao-integration.md` 安装：`install.sh` 会把 `everos-mcp` 和
 `everos-doubao-ingest` 链到 `~/.local/bin`，并在检测到用户 skill 目录时同步本 skill。
+仅更新豆包用 `install.sh --only doubao`，不改变其他宿主或凭据。旧独立入口只在内容精确匹配时备份迁移。
+旧无单位偏移须区分 bridge 字节账本和独立采集器行账本；来源不明时核对后对单会话指定 `--legacy-offset-unit bytes-v1|rows-v1`，先 dry-run，禁止按数值猜测或批量指定。迁移前保留原始备份，成功后使用 bytes-v1。同轮重放去重，完成回复后同文请求保留。测试只用隔离合成数据。
+采集不隐式 sweep；维护其他会话须单独授权。凭据与内部信息不得上传。
 
 ```bash
 bash <本skill目录>/scripts/check.sh   # 环境自检；缺什么会给修复提示
