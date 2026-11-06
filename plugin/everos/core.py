@@ -39,6 +39,7 @@ from pathlib import Path
 
 import trae
 import quota
+from config_env import env_values
 
 CST = timezone(timedelta(hours=8))
 MAX_MSG_CHARS = 20000          # 只截断超长粘贴
@@ -120,11 +121,7 @@ def cfg() -> dict:
     out = {}
     path = HOME / "config.env"
     if path.is_file():
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, v = line.split("=", 1)
-                out[k.strip()] = v.strip()
+        out = env_values(path.read_text(encoding="utf-8"))
     for k in ("EVEROS_API_KEY", "EVEROS_USER_ID", "EVEROS_API_BASE", "EVEROS_BASE_URL",
               "EVEROS_OWNER_ALIASES", "EVEROS_INJECT", "EVEROS_WRITE", "EVEROS_API_VERSION",
               "EVEROS_READ_V1", "EVEROS_AGENT_ID", "EVEROS_MIN_SCORE", "EVEROS_RECALL_TIMEOUT",

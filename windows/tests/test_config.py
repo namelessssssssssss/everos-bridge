@@ -9,11 +9,16 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "windows"))
-from config_helpers import enable_codex_hooks, set_codex_tool_timeout
+from config_helpers import enable_codex_hooks, env_values, set_codex_tool_timeout
 from host import WindowsHost
 
 
 class WindowsConfigurationTests(unittest.TestCase):
+    def test_file_values_handle_quotes_and_keep_literals(self):
+        text = 'EVEROS_USER_ID="name"\nEVEROS_API_KEY=\'ab=c\'\nEVEROS_WRITE="0"\nEMPTY=""\nLITERAL="${NAME}#value"\n'
+        self.assertEqual(env_values(text), {"EVEROS_USER_ID": "name", "EVEROS_API_KEY": "ab=c",
+                                           "EVEROS_WRITE": "0", "EMPTY": "", "LITERAL": "${NAME}#value"})
+
     def test_timeout_and_hooks_preserve_unrelated_tables_multiline_strings_and_larger_timeout(self):
         original = 'model = "keep"\nnote = """\n[features]\nhooks = false\n"""\n[features]\nhooks = false\nother = true\n[mcp_servers.other]\ncommand = "keep"\n[mcp_servers.everos]\ntool_timeout_sec = 300\n'
         updated = set_codex_tool_timeout(enable_codex_hooks(original), 190)

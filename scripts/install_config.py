@@ -21,6 +21,7 @@ from datetime import datetime
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "plugin/everos"))
 import rules as rulebook
+from config_env import env_values
 
 
 def backup(path):
@@ -56,20 +57,6 @@ def write_text(path, text, mode=None):
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
-
-
-def env_values(text):
-    values = {}
-    for line in text.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-            value = value[1:-1]
-        values[key.strip()] = value
-    return values
 
 
 # Table headers are scanned outside multiline TOML strings. Configs remain in
