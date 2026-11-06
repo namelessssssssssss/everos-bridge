@@ -69,7 +69,8 @@ class QuotaReviewTests(IsolatedCore):
         self.assertFalse(result['isError'])
         self.assertIn('没有相关记忆',result['content'][0]['text'])
 
-    def test_cached_session_end_and_sweep_flushes_are_silent_and_keep_pending(self):
+    def test_cached_legacy_session_end_and_sweep_flushes_are_silent_and_keep_pending(self):
+        self.stack.enter_context(patch.dict(core.os.environ,{'EVEROS_API_VERSION':'v1'}))
         payload=self.transcript();core.write_turns(payload)
         offset=self.ledger()['offset'];core.LOG.write_text('')
         self.api.side_effect=quota.QuotaError('mcu',0,cached=True)
@@ -81,7 +82,8 @@ class QuotaReviewTests(IsolatedCore):
         self.assertTrue(self.ledger()['pending']);self.assertEqual(self.ledger()['offset'],offset)
         self.assertEqual(core.LOG.read_text(),'')
 
-    def test_real_flush_failure_is_still_logged_and_pending_is_kept(self):
+    def test_real_legacy_flush_failure_is_still_logged_and_pending_is_kept(self):
+        self.stack.enter_context(patch.dict(core.os.environ,{'EVEROS_API_VERSION':'v1'}))
         payload=self.transcript();core.write_turns(payload);core.LOG.write_text('')
         self.api.side_effect=RuntimeError('synthetic offline')
         payload['hook_event_name']='SessionEnd';core.write_turns(payload)
@@ -112,10 +114,12 @@ class QuotaReviewTests(IsolatedCore):
             result=self.call('memory_record_practice',{
                 'topic':'synthetic','task':'synthetic','steps':steps(),'conclusion':'synthetic'})
         self.assertTrue(result['isError'])
-        self.assertIn('v2 accumulated/extracted',result['content'][0]['text'])
+        self.assertIn('v2 accumulated/deferred',result['content'][0]['text'])
+        self.assertIn('v1 failed',result['content'][0]['text'])
         self.assertIn('practice incomplete',core.LOG.read_text())
 
-    def test_acknowledged_add_then_cached_flush_remains_visible(self):
+    def test_legacy_acknowledged_add_then_cached_flush_remains_visible(self):
+        self.stack.enter_context(patch.dict(core.os.environ,{'EVEROS_API_VERSION':'v1'}))
         self.api.side_effect=[response('accumulated'),quota.QuotaError('mcu',0,cached=True)]
         with patch.object(core.time,'sleep'):
             result=self.call('memory_record_practice',{

@@ -19,12 +19,14 @@
 | flush | `extracted` | 把缓冲里的消息抽取了 |
 | flush | `no_extraction` | 缓冲为空、内容已去重，或排队的 add 还没落地；不是错误 |
 
-- bridge 日志和工具返回里的 `A/B` 是同一版本的「add 状态/flush 状态」，不是「v1/v2」。做法双写的返回形如 `v2 extracted/no_extraction; v1 accumulated/extracted`。
-- v2 带 `async_mode=false` 时，add 当场抽取，紧接着的 flush 必然返回 `no_extraction`，属于正常。
+- 旧 bridge 日志或 v1 回执中的 `A/B` 是同一版本的「add 状态/flush 状态」，不是「v1/v2」。当前 v2 写入不自动 flush，回执分别说明 add 与抽取状态。
+- `async_mode=false` 确认消息已被接受，既可能返回 `accumulated`，也可能返回 `extracted`，不能假设每次当场抽取。`no_extraction` 本身不证明丢失。
 - 含非文本内容的请求总是排队，返回 202。
 - 缓冲里最新的消息要等下一次 add、flush，或在 Cloud 上闲置 2 小时才会落盘。
 - 抽取成功不等于检索立刻可见。写完要用 get 或 search 回读。
 - MCP 参数校验失败时，请求根本没有发出去，例如缺 `conclusion`、做法少于 3 步。看到 `-32602` 或 `isError` 要修正参数重写，不能当成已入库。
+
+当前 Bridge 的 v2 策略是按需显式 flush：交接、流程完成、话题转移或立即检索需要时，由 agent 判断必要性并调用 `memory_flush` / `everos flush`；普通写入、压缩与 sweep 不强制切段。官方 [Cookbook](https://docs.evermind.ai/cookbook/quickstart) 说明生产环境无需逐轮 flush，Cloud 无新消息两小时后处理尾段。自托管和 v1 不能直接套用该 Cloud 保证。API、状态与兼容边界见 [按需抽取](flush-policy.zh-CN.md)。
 
 ## 2. v1 与 v2
 
@@ -33,14 +35,14 @@
 | 项 | v1 | v2 |
 | --- | --- | --- |
 | 库 | 与 v2 相互独立，同一个 key 两边都能用 | 主库 |
-| 写后抽取 | 默认异步；add 后立刻 flush 会漏抽，单次写入的会话永不抽取 | 自动抽取，不丢 |
+| 写后抽取 | 历史异步 add 存在 flush 早于落地的时序问题；Bridge 保留同步 add 与兼容 flush | 确认 add 与完成抽取分开；服务端按边界处理，需要时显式 flush |
 | 旧时间戳 | 约 2 个月前的时间戳返回 `accumulated`，但永不抽取 | 实测 62 天前可以入库 |
 | 检索得分 | hybrid 得分全为 0，无法按相关度过滤 | 有得分，可设 `min_score` |
 | 画像 | 不能改 | `/api/v2/memory/edit` 可改 |
 | 做法 case | 几乎每条做法都出 case | 有提炼筛选，见第 3 节 |
 | 前景 | 即将退役，官方代迁数据 | 长期使用 |
 
-- **bridge 的写入分工**：对话入库、`memory_remember`、本地记忆同步只写 v2；只有 `memory_record_practice` 同时写 v1 和 v2。`EVEROS_READ_V1=1` 时，检索、画像、最近记忆合并读两个库。
+- **bridge 的写入分工**：对话入库、`memory_remember`、本地记忆同步写配置的版本，默认 v2。`memory_record_practice` 在配置 v2 且 `EVEROS_READ_V1=1` 时兼容双写，否则只写配置版本。`EVEROS_READ_V1=1` 时，检索、画像、最近记忆合并读两个库。
 - **消息归属**：每条消息都要带 `sender_id`。用户原话用 user_id，助手和工具消息用 agent_id。get 和 search 的 `user_id`、`agent_id` 二选一。
 - **按谁查**：v2 的普通记忆（episode）只能按 `user_id` 查，按 `agent_id` 查返回 422。做法 case 和技能按 `agent_id` 查。
 
@@ -91,7 +93,7 @@ Cloud 上的情况：
 - `why` 写当时的判断：为什么这么做、排除了什么。
 - `conclusion` 写根因、解法、怎么验证、踩过的坑。
 - 不要补写没发生的步骤来凑轮次，也不要重复提交同一条想刷出 case。前者是编造轨迹，后者会留下重复的普通记忆。
-- bridge 写完后会回读 v2，默认最多等 30 秒，`EVEROS_CASE_WAIT` 可调，设成 0 关闭。回读结果写在工具返回里；没生成不算失败。
+- v2 add 已返回 `extracted` 时，Bridge 有界回读 case，默认最多等 30 秒，`EVEROS_CASE_WAIT` 可调，设成 0 关闭。仅接受入缓冲时不自动 flush 或轮询，回执说明抽取与 case 待确认。需要立即抽取时再按当前任务判断，显式操作一个目标；没有 case 不等于写入失败。
 
 ## 5. 读取与检索
 
@@ -129,12 +131,12 @@ Cloud 上的情况：
 - 画像、agentic和显式hybrid都要区分“成功为空”和“全部来源被配额拒绝”。fallback的硬配额不能被primary的旧错误覆盖；已有成功来源时保留其结果，并提示失败轨道。
 - 缓存拒绝标记须穿过内部flush与多版本做法聚合，不能只过滤最外层异常。只抑制无写入进展的全缓存拒绝；普通错误、混合错误、已有确认批次以及已确认add后的flush失败仍记录诊断。
 - 本机熔断按后端/凭据摘要共享，正常成功请求保持并发；熔断过期或人工`quota retry`后只允许单次带租约探测。失败不会推进采集游标或清除pending，迟到成功不会清除较新的熔断。
-- 充值后先`everos quota retry --resource mcu`，再实际写入、flush和回读。该命令只是解除本机探测等待，不增加服务端额度。需要恢复历史时从已保存的会话路径和偏移生成清单，先冻结证据，再按会话锁串行补写；只回读不重发已确认的add。
+- 充值后先`everos quota retry --resource mcu`，再验证实际写入与回读，需要最新内容立即抽取时才显式 flush。该命令只是解除本机探测等待，不增加服务端额度。需要恢复历史时从已保存的会话路径和偏移生成清单，先冻结证据，再按会话锁串行补写；只回读不重发已确认的add。
 - 只有检索账本而没有原文不能证明用户对话可恢复；源文件截短时不能将偏移重置成0后声称无重复。手工结构化工具失败应从原始调用参数补写，正文标注原日期，避免历史结论被误作当前状态。
 
 ## 8. 排查配方
 
-- **判断写入是否丢了**：先看版本，再看 add 状态，再用 get 或 search 回读。v2 下 `extracted/no_extraction` 是正常的。只有 v1 下 add 返回 `queued` 或 `accumulated`、flush 返回 `no_extraction`、而且回读查不到，才按丢失处理：补一次 flush，或运行 `python3 plugin/everos/hook.py --sweep`。
+- **判断写入是否丢了**：先看版本和 add 状态，再核对原始记录、抽取及索引可见性。`no_extraction` 或一次回读为空都不足以判定丢失。已确认 add 不应无条件重发；需要检查尾段时，对明确目标按需 flush 后回读。`hook.py --sweep` 仅处理旧 v1 的兼容 flush 与本地记忆同步，不再批量 flush v2。
 - **分库核对**：合并读取分不清条目来自哪个库。要分别调 v2 的 `/api/v2/memory/get` 和 v1 的 `/api/v1/memories/get`，再按 `session_id` 对齐。
 - **做法 case 覆盖率**：v2 用 `memory_type=agent_case` 加 `agent_id` 查，v1 用 `memory_type=agent_case` 加 `filters.user_id` 查，两边按 `session_id` 求交集。
-- **回读统计**：`state/hook.log` 里每次写做法都会记一行 `practice case <session> found`、`missing` 或 `check failed`，可以直接统计 v2 生成 case 的比例。
+- **回读统计**：只有触发了 case 回读的写入才有 `practice case <session> found`、`missing` 或 `check failed`。未回读或仍待抽取的轨迹不能计作缺失，日志样本也不能替代全部写入量或 MCU 账单。

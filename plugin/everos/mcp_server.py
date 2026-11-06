@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """EverOS MCP 服务（stdio，纯标准库）：任何支持 MCP 的 agent 都能用同一套记忆。
 
-工具：memory_profile / memory_search / memory_recent / memory_remember / memory_record_practice / memory_fix_profile。
+工具包括检索、结构化写入、按需 memory_flush 和画像编辑。
 配置同 core.py（环境变量或 ~/.everos/config.env）。stdout 只走协议消息，日志写 stderr。
 """
 from __future__ import annotations
@@ -19,7 +19,7 @@ import core  # noqa: E402
 import recall  # noqa: E402
 import rules as rulebook  # noqa: E402
 
-VERSION = "0.9.3"
+VERSION = "0.10.0"
 MAX_PENDING_TOOL_CALLS = 16
 INSTRUCTIONS = (
     "EverOS 是用户跨 agent、跨设备共用的长期记忆。会话开始调用 memory_profile 了解用户，"
@@ -27,7 +27,12 @@ INSTRUCTIONS = (
     + recall.POLICY + "问「以前怎么做的」用 kind=practices。任务交付、用户纠错、偏好暴露、决策形成时调用 memory_remember"
     "（content 写结论、做了什么、证据；user_said 放用户原话）；排障或工具用法闭环时调用 "
     "memory_record_practice（至少 3 个真实步骤，没走通或出乎意料的步骤标 outcome，用户纠正原话填 user_correction）；"
-    "用户纠正画像里的偏好或背景时调用 memory_fix_profile。检索结果仅供参考，与当前对话冲突时以当前为准。"
+    "用户纠正画像里的偏好或背景时调用 memory_fix_profile。"
+    "v2 写入不自动flush；交接、流程完成、话题转移或需要最新内容立即可检索时，"
+    "由agent判断必要性，再用memory_flush指定一个目标并说明reason，其他时候交给服务端处理。"
+    "hook给出的原生session_id传conversation_id；写入回执中的EverOS ID传session_id，二者不能混用。"
+    "flush只处理已送达服务端的消息，不采集当前尚未保存的最终回复。"
+    "检索结果仅供参考，与当前对话冲突时以当前为准。"
     + rulebook.notice(Path(__file__).resolve().parents[1])
 )
 PRACTICE_DESCRIPTION = (
@@ -36,7 +41,8 @@ PRACTICE_DESCRIPTION = (
     "EverOS v2 只提炼有试错、意外发现、非显然诊断或用户纠正的轨迹，顺利执行的线性流程通常不会生成做法 case："
     "走错的路和失败的尝试单独记一步并标 outcome=failed，出乎意料的结果标 outcome=unexpected；"
     "result 第一句写这一步的发现；这一步之后用户纠正或改向的原话填 user_correction；"
-    "conclusion 写根因、解法、怎么验证、踩过的坑。写完会回读 v2 是否生成做法 case，并在返回里说明。"
+    "conclusion 写根因、解法、怎么验证、踩过的坑。v2 add已抽取时有界回读case；"
+    "仅接受入缓冲时不自动flush或轮询，返回session_id供必要时显式抽取。"
 )
 
 TOOLS = [
@@ -88,8 +94,8 @@ TOOLS = [
          "days": {"type": "integer", "default": 7, "minimum": 1, "maximum": 90},
          "limit": {"type": "integer", "default": 20, "minimum": 1, "maximum": 100}}}},
     {"name": "memory_remember",
-     "description": "写一条结构化记忆并立即入库：结论、决策及理由、纠错、项目事实、任务结果。"
-                    "同一话题沿用同一个 topic。",
+     "description": "写一条结构化记忆：结论、决策及理由、纠错、项目事实、任务结果。"
+                    "同一话题沿用同一个 topic。v2确认add后返回session_id，不自动flush；确认写入不等于已抽取或可检索。",
      "inputSchema": {"type": "object", "required": ["topic", "content"], "properties": {
          "topic": {"type": "string", "minLength": 1, "description": "话题短名，如 signin_eval_v4"},
          "content": {"type": "string", "minLength": 1, "description": "结论 + 做了什么 + 证据（文件:行、MR、commit、链接）"},
@@ -110,6 +116,22 @@ TOOLS = [
              "user_correction": {"type": "string",
                                  "description": "这一步之后用户纠正或改向的原话（真实发生才填，不要改写）"}}}},
          "conclusion": {"type": "string", "minLength": 1, "description": "根因、解法、怎么验证、踩过的坑"}}}},
+    {"name": "memory_flush",
+     "description": "按需抽取一个明确会话的已写入消息。仅当agent判断交接、流程完成、话题转移或立即检索需要时调用，"
+                    "reason说明本次必要性；不要每次写入后机械调用。session_id是写入回执的EverOS ID，"
+                    "conversation_id是hook给出的宿主原生ID，必须二选一；后者只处理本机账本已确认写入的内容，"
+                    "不采集当前尚未保存的最终回复。成功不保证case生成或搜索立即可见。",
+     "inputSchema": {"type": "object", "required": ["reason"],
+                     "oneOf": [{"required": ["session_id"]}, {"required": ["conversation_id"]}], "properties": {
+         "reason": {"type": "string", "minLength": 1, "maxLength": 500},
+         "session_id": {"type": "string", "minLength": 1, "maxLength": 128,
+                        "description": "写入回执里的EverOS会话ID；与conversation_id二选一"},
+         "conversation_id": {"type": "string", "minLength": 1, "maxLength": 160,
+                             "description": "hook给出的宿主原生会话ID；须已有本机采集账本"},
+         "api_version": {"type": "string", "enum": ["v1", "v2"],
+                         "description": "省略时按配置或会话账本；版本切换后可选择保留的旧版本目标"},
+         "kind": {"type": "string", "enum": ["episodes", "practices"], "default": "episodes",
+                  "description": "v1做法使用practices；conversation_id只支持episodes"}}}},
     {"name": "memory_fix_profile",
      "description": "直接修改用户画像（v2）：用户纠正了某个偏好或背景、或画像里的进度已过期时使用。"
                     "先用 memory_profile 看现有条目，update/delete 需要 item_id。每条操作都写 reason。",
@@ -130,7 +152,7 @@ for tool in TOOLS:
         "destructiveHint": tool["name"] == "memory_fix_profile", "openWorldHint": False}
 
 _TOOL_SCHEMAS = {tool["name"]: tool["inputSchema"] for tool in TOOLS}
-_WRITE_TOOLS = {"memory_remember", "memory_record_practice", "memory_fix_profile"}
+_WRITE_TOOLS = {"memory_remember", "memory_record_practice", "memory_flush", "memory_fix_profile"}
 
 
 class RpcError(Exception):
@@ -196,6 +218,11 @@ def validate_tool(name, args) -> None:
             and len(args["steps"]) < core.PRACTICE_MIN_STEPS):
         raise RpcError(-32602, "Invalid params: arguments.steps " + core.PRACTICE_STEPS_HINT)
     _validate(args, _TOOL_SCHEMAS[name], "arguments")
+    if name == "memory_flush":
+        if bool(args.get("session_id")) == bool(args.get("conversation_id")):
+            raise RpcError(-32602, "Invalid params: provide exactly one of session_id or conversation_id")
+        if args.get("conversation_id") and args.get("kind", "episodes") != "episodes":
+            raise RpcError(-32602, "Invalid params: conversation_id only supports kind=episodes")
     if name == "memory_fix_profile":
         for index, op in enumerate(args["operations"]):
             path = f"arguments.operations[{index}]"
@@ -268,6 +295,10 @@ class Server:
         if name == "memory_record_practice":
             return "已写入 " + core.record_practice(self.host, args["topic"], args["task"], args["steps"],
                                                     args["conclusion"])
+        if name == "memory_flush":
+            return core.flush_memory(args["reason"], session_id=args.get("session_id", ""),
+                                     conversation_id=args.get("conversation_id", ""),
+                                     api_version=args.get("api_version"), kind=args.get("kind", "episodes"))
         if name == "memory_fix_profile":
             return "已修改画像 " + core.fix_profile(args["operations"])
         raise RpcError(-32602, "Invalid params: unknown tool")

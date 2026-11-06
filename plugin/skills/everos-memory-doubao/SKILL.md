@@ -14,7 +14,7 @@ Doubao Work 没有 MCP 注册入口和生命周期 hook，读写都通过本仓�
 
 ```bash
 bash <本skill目录>/scripts/check.sh   # 环境自检；缺什么会给修复提示
-everos-mcp list                       # 应列出 9 个 memory_* 工具
+everos-mcp list                       # 应包含 memory_flush 等 memory_* 工具
 ```
 
 ## 读（L3，没有 hook，每轮主动执行）
@@ -69,6 +69,8 @@ everos-mcp list                       # 应列出 9 个 memory_* 工具
   `{"topic","content","user_said"}`；同一话题沿用同一个 topic。
 - 排障/工具用法闭环：`everos-mcp memory_record_practice @<args.json>`，至少 3 个真实步骤；
   失败的步骤标 `"outcome":"failed"`，意外标 `"unexpected"`，用户纠正原话填 `user_correction`。
+- v2 写入确认 add 后不自动 flush；交接、流程完成、话题转移或检索必须依赖最新内容时，由 agent 判断必要性，调用 `memory_flush` 或 `everos flush` 指定一个目标并说明 `reason`，不要每次写入后机械调用。其余交给服务端处理；Cloud 两小时无新消息的自动抽取不代表所有自托管或旧版服务都有此保证。hook 注入的原生 `session_id` 传 `conversation_id`；结构化写入回执中的 EverOS ID 传 `session_id`，二选一。只抽取已送达的内容，不采集当前尚未保存的最终回复。v1 保留兼容抽取行为。
+- `everos-mcp memory_flush @<args.json>`：使用写入回执中的 EverOS `session_id` 和必要性 `reason`。Doubao 采集也可对指定会话显式使用 `everos-doubao-ingest --current --flush`，但不要每轮默认开启；它不能采集尚未产生的最终回复。
 - 画像写错或过期：先 `memory_profile` 拿 item_id，再 `memory_fix_profile`，每条写 reason。
 - 参数含中文/引号时先把 JSON 写成文件再用 `@/abs/path.json`。
 - `EVEROS_WRITE=0` 时所有写工具与采集都不能入库；`-32602` 参数校验失败表示请求没发出，不算已写入。

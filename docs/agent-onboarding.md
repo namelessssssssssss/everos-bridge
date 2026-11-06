@@ -8,7 +8,7 @@
 
 | 层级 | 做什么 | 必做 | 得到什么 |
 | --- | --- | --- | --- |
-| L1 MCP | 注册 `plugin/everos/mcp_server.py`（stdio） | 是 | 8 个 `memory_*` 工具（含正文展开和本机任务上下文），模型可以主动读写 |
+| L1 MCP | 注册 `plugin/everos/mcp_server.py`（stdio） | 是 | 10 个 `memory_*` 工具（含正文展开和本机任务上下文），模型可以主动读写 |
 | L2 指令规则 | 把 AGENTS.md「日常读写」那段写进宿主的全局指令文件 | 是 | 没有 hook 时，靠模型自觉在每条提问前检索 |
 | L3 提问前注入 | 挂「提问前」hook（如 UserPromptSubmit），会话开始的 hook 能注入时也挂上 | 宿主支持就做 | 自动读画像，每条提问自动检索 |
 | L4 回合结束采集 | 挂「回合结束」hook（如 Stop），并给它的会话记录写解析器 | 宿主支持就做 | 对话原文自动入库 |
@@ -69,7 +69,7 @@
 | Kimi Code | `~/.kimi-code/mcp.json` | — （没有 config.toml 时安装脚本会新建） | 只有 UserPromptSubmit 能注入，输出纯文本；画像放到首条提问 | Stop，按 session_id 找 `wire.jsonl` | `[[hooks]]` 只允许 event / matcher / command / timeout 四个字段 |
 | Kimi Work 桌面端（Kimi.app） | 内嵌 home 的 `mcp.json` | —（指令层由桌面端 skill 承担） | 同 Kimi Code（输出纯文本，画像放首条提问） | Stop，按 session_id 先查 `session_index.jsonl` 再找 `wire.jsonl` | 内嵌 kimi-code 0.15.7；`config.toml` 随 App 升级重写，丢了重跑 install.sh；hook 在会话启动时加载，改配置要新开会话；`ctitle-*` 标题侧会话要排除；用户消息带 `<meta>` 前导脚手架要剥掉；hook 命令经 shell 执行，用 `EVEROS_HOST=kimi_desktop` 指定宿主 |
 | MiMoCode / MiMo Desktop | `~/.config/mimocode/mimocode.jsonc` 的 `mcp.everos` | 同文件 `instructions` → `everos-rules.md` | Plugin `chat.message` + `experimental.chat.system.transform`（画像）→ synthetic text part | Plugin `session.post`，trajectory 内存直传 `hook.py --mimo-write` | 无 hooks.json；L3/L4 走 `@mimo-ai/plugin` 的 `session.*` / `chat.message`；MCP timeout 默认至少190s，需大于实际agentic预算；配置变更新会话生效；session 前缀 `mc_` |
-| TraeX ≥ 0.209.1（traecli / traex / coco 别名） | CLI mcp add，配置在 `$TRAE_HOME/traecli.toml` | `$TRAE_HOME/AGENTS.md` | SessionStart + UserPromptSubmit，JSON additionalContext；PostCompact 标记下轮补画像 | Stop 读 history_mutation v1 append / 旧 response_item；SessionEnd / PreCompact flush | `$TRAECLI_HOME/hooks.json`，默认 `~/.trae/cli/hooks.json`；正常信任后运行；支持 transcript_path 为空时精确定位，详见 [TraeX 验证](traex-integration.md) |
+| TraeX ≥ 0.209.1（traecli / traex / coco 别名） | CLI mcp add，配置在 `$TRAE_HOME/traecli.toml` | `$TRAE_HOME/AGENTS.md` | SessionStart + UserPromptSubmit，JSON additionalContext；PostCompact 标记下轮补画像 | Stop 读 history_mutation v1 append / 旧 response_item；SessionEnd / PreCompact 补采集；v2 由 agent 按需显式 flush | `$TRAECLI_HOME/hooks.json`，默认 `~/.trae/cli/hooks.json`；正常信任后运行；支持 transcript_path 为空时精确定位，详见 [TraeX 验证](traex-integration.md) |
 | 旧 TraeCode CLI（Coco） | `coco mcp add` | `$TRAE_HOME/AGENTS.md` | 未适配 | 未适配 | 仅 MCP + 规则；升级 TraeX 后重跑安装器 |
 | Claude Desktop / Cowork | `claude_desktop_config.json`（App 退出时写，或在 App 设置里加） | claude.ai 上的 skill | — | — | App 运行时会覆盖外部改动；Cowork 靠 skill |
 | Cursor、Gemini CLI | `mcp.json` / `settings.json` | `~/.gemini/GEMINI.md` | — | — | 只有 MCP |

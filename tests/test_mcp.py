@@ -56,7 +56,7 @@ class McpTests(unittest.TestCase):
         tools = self.server.respond(request("tools/list"))["result"]["tools"]
         self.assertEqual({tool["name"] for tool in tools}, {
             "memory_profile", "memory_search", "memory_recent", "memory_remember",
-            "memory_record_practice", "memory_fix_profile", "memory_open", "memory_context", "memory_rules"})
+            "memory_record_practice", "memory_fix_profile", "memory_open", "memory_context", "memory_rules", "memory_flush"})
 
     def test_invalid_envelopes_return_invalid_request(self):
         invalid = [None, [], 3, "text", {}, {"jsonrpc": "2.0", "id": 1},
@@ -262,11 +262,11 @@ class McpTests(unittest.TestCase):
     def test_valid_practice_with_outcomes_reaches_core_unchanged(self):
         steps = [{"action": "a", "result": "r"}, {"action": "b", "result": "r", "outcome": "failed"},
                  {"action": "c", "result": "r", "outcome": "unexpected", "user_correction": "use d"}]
-        with mock.patch.object(mcp_server.core, "record_practice", return_value="sid: v2 extracted/no_extraction") as call:
+        with mock.patch.object(mcp_server.core, "record_practice", return_value="sid: v2 extracted/deferred") as call:
             result = self.call_tool("memory_record_practice", {"topic": "t", "task": "task", "steps": steps,
                                                                "conclusion": "done"})["result"]
         self.assertFalse(result["isError"])
-        self.assertEqual(result["content"][0]["text"], "已写入 sid: v2 extracted/no_extraction")
+        self.assertEqual(result["content"][0]["text"], "已写入 sid: v2 extracted/deferred")
         call.assert_called_once_with("mcp", "t", "task", steps, "done")
 
     def test_server_and_plugin_manifests_share_one_version(self):

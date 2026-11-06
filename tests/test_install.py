@@ -89,6 +89,7 @@ class InstallerTests(unittest.TestCase):
         (self.repo / "scripts").mkdir(parents=True)
         (self.repo / "plugin/everos").mkdir(parents=True)
         shutil.copy2(ROOT / "plugin/everos/core.py", self.repo / "plugin/everos/core.py")
+        shutil.copy2(ROOT / "plugin/everos/config_env.py", self.repo / "plugin/everos/config_env.py")
         shutil.copy2(ROOT / "plugin/everos/trae.py", self.repo / "plugin/everos/trae.py")
         shutil.copy2(ROOT / "plugin/everos/quota.py", self.repo / "plugin/everos/quota.py")
         shutil.copy2(ROOT / "plugin/everos/rules.py", self.repo / "plugin/everos/rules.py")
@@ -158,6 +159,16 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("缺少 EVEROS_API_KEY", result.stderr)
         self.assertEqual(path.read_text(), "# Empty existing config\n")
         self.assertEqual(self.calls(), [])
+
+    def test_existing_quoted_config_is_accepted_without_rewriting_values(self):
+        original = 'EVEROS_USER_ID="test-owner"\nEVEROS_API_KEY=\'not-a-real-key\'\n'
+        path = self.put(".everos/config.env", original)
+        self.env.pop("EVEROS_USER_ID")
+        self.env.pop("EVEROS_API_KEY")
+        self.run_install()
+        self.assertEqual(path.read_text(), original)
+        self.assertEqual(install.env_values(path.read_text()),
+                         {"EVEROS_USER_ID": "test-owner", "EVEROS_API_KEY": "not-a-real-key"})
 
     def test_cli_only_installs_idempotently_without_credentials_or_host_calls(self):
         self.cli("codex")

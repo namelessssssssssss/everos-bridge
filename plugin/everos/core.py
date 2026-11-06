@@ -39,6 +39,7 @@ from pathlib import Path
 
 import trae
 import quota
+from config_env import env_values
 
 CST = timezone(timedelta(hours=8))
 MAX_MSG_CHARS = 20000          # 只截断超长粘贴
@@ -120,11 +121,7 @@ def cfg() -> dict:
     out = {}
     path = HOME / "config.env"
     if path.is_file():
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, v = line.split("=", 1)
-                out[k.strip()] = v.strip()
+        out = env_values(path.read_text(encoding="utf-8"))
     for k in ("EVEROS_API_KEY", "EVEROS_USER_ID", "EVEROS_API_BASE", "EVEROS_BASE_URL",
               "EVEROS_OWNER_ALIASES", "EVEROS_INJECT", "EVEROS_WRITE", "EVEROS_API_VERSION",
               "EVEROS_READ_V1", "EVEROS_AGENT_ID", "EVEROS_MIN_SCORE", "EVEROS_RECALL_TIMEOUT",
@@ -876,8 +873,82 @@ def flush(session_id: str, agent: bool = False, ver: str | None = None) -> str:
     return _write_status(out, {"extracted", "no_extraction"}, "flush")
 
 
+def flush_memory(reason: str, session_id: str = "", conversation_id: str = "",
+                 api_version: str | None = None, kind: str = "episodes") -> str:
+    """Explicit extraction of one backend session or an already captured conversation.
+
+    Conversation resolution and confirmation share the writer's lock. A flush never
+    captures unsent text, and cannot prove that an episode/case is searchable.
+    """
+    if not isinstance(reason, str) or not reason.strip() or len(reason) > 500:
+        raise ValueError("reason 须为 1–500 字，说明为何现在需要抽取")
+    if not isinstance(session_id, str) or not isinstance(conversation_id, str) or bool(session_id) == bool(conversation_id):
+        raise ValueError("session_id 与 conversation_id 必须且只能提供一个")
+    if api_version not in (None, "v1", "v2") or kind not in ("episodes", "practices"):
+        raise ValueError("api_version 须为 v1/v2；kind 须为 episodes/practices")
+    ensure_writable()
+    if session_id:
+        if not session_id.strip() or session_id != session_id.strip() or len(session_id) > 128:
+            raise ValueError("session_id 须为写入回执中的完整标识，长度 1–128")
+        ver = api_version or version()
+        result = flush(session_id, agent=kind == "practices", ver=ver)
+    else:
+        if not re.fullmatch(r"[\w.-]{1,160}", conversation_id) or conversation_id in (".", ".."):
+            raise ValueError("conversation_id 不是有效的本机会话标识")
+        if kind != "episodes":
+            raise ValueError("conversation_id 只用于对话采集；做法请使用写入回执的 session_id")
+        sp = SESS_DIR / f"{conversation_id}.json"
+        if not sp.is_file() or sp.is_symlink():
+            raise ValueError("该对话尚无已采集的会话账本；不能 flush 尚未写入的消息")
+        with open(sp.with_suffix(".lock"), "w") as lk:
+            fcntl.flock(lk, fcntl.LOCK_EX)
+            st = load_state(sp)
+            if st.get("identity") not in (None, _write_identity()):
+                raise ValueError("会话账本与当前后端/用户身份不匹配")
+            session_id = st.get("everos_session_id", "")
+            ver = api_version or st.get("api", "v1")
+            deferred = st.get("deferred_flush", {})
+            if ver != st.get("api", "v1") and ver not in deferred:
+                raise ValueError("该会话没有所选 API 版本的已确认写入")
+            if not session_id or len(session_id) > 128:
+                raise ValueError("会话账本缺少有效的 EverOS session_id")
+            if ver == st.get("api", "v1") and not st.get("pending") and ver not in deferred:
+                return f"{session_id}: api={ver}; 无待确认写入；未发送 flush。未采集文本不在本次范围内。"
+            result = flush(session_id, ver=ver)
+            if ver == st.get("api", "v1"):
+                st["pending"] = False
+            deferred.pop(ver, None)
+            st.update(deferred_flush=deferred, last_flush_ms=int(time.time() * 1000), last_flush_status=result)
+            save_state(sp, st)
+    return (f"{session_id}: api={ver}; flush={result}；仅处理已确认写入，"
+            "不包含未采集文本；episode/case 生成及搜索可见性须另行核对")
+
+
+def _write_identity() -> str:
+    return hashlib.sha256(json.dumps([cfg()["EVEROS_API_BASE"].rstrip("/"), owner(), agent_id()],
+                                    ensure_ascii=False).encode()).hexdigest()
+
+
+def prepare_session_version(st: dict, path: Path) -> None:
+    """Preserve unconfirmed v2 metadata on a version switch; only v1 needs legacy flush."""
+    if st.get("identity") not in (None, _write_identity()):
+        raise ValueError("会话账本与当前后端/用户身份不匹配；请使用对应的数据目录")
+    st["identity"] = _write_identity()
+    previous = st.get("api", "v1")
+    if previous == version() or not st.get("pending"):
+        return
+    if previous == "v1":
+        res = flush(st["everos_session_id"], ver="v1")
+        st.update(pending=False, last_flush_ms=int(time.time() * 1000), last_flush_status=res)
+    else:
+        st.setdefault("deferred_flush", {})[previous] = {
+            "last_write_ms": st.get("last_write_ms"), "last_write_status": st.get("last_write_status")}
+        st["pending"] = False
+    save_state(path, st)
+
+
 def remember(host: str, topic: str, content: str, user_said: str = "") -> str:
-    """结构化记录：用户原话（可空）+ 结论/动作/证据，立即抽取。"""
+    """结构化记录：确认消息写入；v2 抽取交给服务端或 agent 显式决定。"""
     ensure_writable()
     t = int(time.time() * 1000)
     sid = f"{host}_{datetime.now(CST):%Y%m%d}_{slug(topic) or 'note'}"
@@ -885,8 +956,10 @@ def remember(host: str, topic: str, content: str, user_said: str = "") -> str:
              "content": clip(user_said or f"（{host} 记录）{topic}")},
             {"role": "assistant", "sender_id": host, "timestamp": t, "content": clip(content)}]
     add = post_messages(sid, msgs)
-    time.sleep(1)
-    return f"{sid}: {add}/{flush(sid)}"
+    if version() == "v1":
+        time.sleep(1)
+        return f"{sid}: v1 {add}/{flush(sid)}"
+    return f"{sid}: v2 {add}/deferred；session_id={sid}；写入已确认，抽取及搜索可见性须另行核对"
 
 
 def _text_field(step: dict, key: str) -> str:
@@ -988,7 +1061,7 @@ def practice_case_note(session_id: str, since_ms: int, started: float) -> str:
     log(f"practice case {session_id} missing after {wait:.0f}s")
     return (f"v2 做法 case 在 {wait:.0f} 秒内没有生成。可能没通过 v2 的提炼筛选：步骤都是顺利执行、"
             "没写出失败尝试或意外发现、没有用户纠正，或者轨迹过长；也可能还在后台处理。"
-            "轨迹已作为普通记忆写入，检索仍能查到；稍后可用 memory_search(kind=practices) 复查")
+            "轨迹消息已写入，搜索可见性尚未确认；稍后可用 memory_search(kind=practices) 复查")
 
 
 def record_practice(host: str, topic: str, task: str, steps: list[dict], conclusion: str) -> str:
@@ -1005,10 +1078,13 @@ def record_practice(host: str, topic: str, task: str, steps: list[dict], conclus
         try:
             add = post_messages(sid, msgs, agent=True, ver=ver)
             progressed = True
-            time.sleep(1)
-            results.append(f"{ver} {add}/{flush(sid, agent=True, ver=ver)}")
-            if ver == "v2":
-                v2_done = time.monotonic()
+            if ver == "v1":
+                time.sleep(1)
+                results.append(f"{ver} {add}/{flush(sid, agent=True, ver=ver)}")
+            else:
+                results.append(f"v2 {add}/deferred")
+                if add == "extracted":
+                    v2_done = time.monotonic()
         except Exception as exc:
             failures.append(exc)
             phase = f"（add={add}，flush 未完成）" if add is not None else ""
@@ -1020,6 +1096,8 @@ def record_practice(host: str, topic: str, task: str, steps: list[dict], conclus
         raise error
     if v2_done is not None:
         result += "；" + practice_case_note(sid, msgs[0]["timestamp"], v2_done)
+    elif "v2" in vers:
+        result += "；v2 抽取由服务端处理，做法 case 未回读；需要立即抽取时显式调用 memory_flush"
     return result
 
 
@@ -1393,15 +1471,7 @@ def write_turns(payload: dict) -> None:
                                                      sid.removeprefix("session_"), str(payload.get("session_title") or
                                                      payload.get("thread_name") or payload.get("session_name") or "")))
         host = st.get("host") or "claude_code"
-        if st.get("api", "v1") != version() and st.get("pending"):  # 换库前把旧库里的缓冲落盘
-            try:
-                res = flush(st['everos_session_id'], ver=st.get('api', 'v1'))
-                st.update(pending=False, last_flush_ms=int(time.time() * 1000), last_flush_status=res)
-                save_state(sp, st)
-                log(f"switch flush {st['everos_session_id']} ({st.get('api', 'v1')}) -> {res}")
-            except Exception as exc:
-                log_error(f"switch flush failed {st['everos_session_id']}", exc)
-                raise  # 旧库仍 pending，不能换 api 后把旧缓冲的重试路径丢掉
+        prepare_session_version(st, sp)
         parse = {"codex": messages_codex, "trae": messages_trae,
                  "kimi": messages_kimi, "kimi_desktop": messages_kimi}.get(host, messages_claude)
         msgs = parse(entries, host)
@@ -1416,7 +1486,7 @@ def write_turns(payload: dict) -> None:
             log(f"{event} add {st['everos_session_id']} +{len(msgs)} -> {res}")
         st["offset"] = new_offset
         save_state(sp, st)
-        if event in ("SessionEnd", "PreCompact") and st.get("pending"):
+        if event in ("SessionEnd", "PreCompact") and st.get("pending") and st.get("api") == "v1":
             try:
                 res = flush(st["everos_session_id"], ver=st.get("api"))
                 st.update(pending=False, last_flush_ms=int(time.time() * 1000), last_flush_status=res)
@@ -1428,7 +1498,7 @@ def write_turns(payload: dict) -> None:
 
 
 def write_mimo_turns(payload: dict) -> None:
-    """MiMoCode Plugin session.post：轨迹已在内存，无需 transcript；每轮写完即 flush。"""
+    """MiMoCode Plugin session.post：轨迹已在内存，无需 transcript；v2 每轮只确认 add。"""
     ensure_writable()
     sid = str(payload.get("session_id") or "")
     if not sid:
@@ -1445,13 +1515,14 @@ def write_mimo_turns(payload: dict) -> None:
         if not st.get("everos_session_id"):
             st.update(claude_session_id=sid, host=host, cwd=cwd,
                       everos_session_id=session_name([], host, cwd, sid.removeprefix("session_"), title))
+        prepare_session_version(st, sp)
         if msgs:
             res = post_messages(st["everos_session_id"], msgs)
             st.update(pending=True, api=version(), last_write_ms=int(time.time() * 1000), last_write_status=res,
                       writes=st.get("writes", 0) + 1, messages=st.get("messages", 0) + len(msgs))
             log(f"mimocode add {st['everos_session_id']} +{len(msgs)} -> {res}")
         save_state(sp, st)
-        if st.get("pending"):
+        if st.get("pending") and st.get("api") == "v1":
             try:
                 res = flush(st["everos_session_id"], ver=st.get("api"))
                 st.update(pending=False, last_flush_ms=int(time.time() * 1000), last_flush_status=res)
@@ -1510,10 +1581,12 @@ def sync_local_memory(limit: int | None = None) -> None:
                     {"role": "assistant", "sender_id": "claude_code", "timestamp": t, "content": clip(body)}]
             try:
                 add = post_messages(sid, msgs)
-                time.sleep(1)
-                res = flush(sid)
-                # flush 已验证 extracted/no_extraction：后者是空缓冲或内容去重，同样完成。
-                ledger[key] = {"mtime": mtime, "attempted_mtime": mtime, "session": sid, "add": add, "flush": res,
+                res = "deferred"
+                if version() == "v1":
+                    time.sleep(1)
+                    res = flush(sid)
+                # mtime confirms accepted upload, not extraction or index visibility.
+                ledger[key] = {"mtime": mtime, "attempted_mtime": mtime, "session": sid, "api": version(), "add": add, "flush": res,
                                "attempts": 0,
                                "synced_at": datetime.now(CST).isoformat(timespec="seconds")}
                 save_state(LOCALMEM_LEDGER, ledger)
@@ -1535,7 +1608,7 @@ def sync_local_memory(limit: int | None = None) -> None:
 
 
 def sweep(force: bool = False) -> None:
-    """补 flush 闲置会话并同步本地记忆；限频，避免每轮都扫。"""
+    """补 legacy v1 flush 并同步本地记忆；v2（包括 force）由服务端或显式工具抽取。"""
     ensure_writable()
     now = time.time()
     STATE.mkdir(parents=True, exist_ok=True)
@@ -1549,8 +1622,10 @@ def sweep(force: bool = False) -> None:
             except OSError:
                 continue
             st = load_state(p)
+            if st.get("identity") not in (None, _write_identity()):
+                continue
             idle_h = (now * 1000 - st.get("last_write_ms", 0)) / 3_600_000
-            if st.get("pending") and (force or idle_h >= IDLE_FLUSH_H):
+            if st.get("pending") and st.get("api", "v1") == "v1" and (force or idle_h >= IDLE_FLUSH_H):
                 try:
                     res = flush(st["everos_session_id"], ver=st.get("api", "v1"))
                     st.update(pending=False, last_flush_ms=int(now * 1000), last_flush_status=res)
