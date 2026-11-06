@@ -26,7 +26,7 @@
 - 抽取成功不等于检索立刻可见。写完要用 get 或 search 回读。
 - MCP 参数校验失败时，请求根本没有发出去，例如缺 `conclusion`、做法少于 3 步。看到 `-32602` 或 `isError` 要修正参数重写，不能当成已入库。
 
-当前 Bridge 的 v2 策略是按需显式 flush：交接、流程完成、话题转移或立即检索需要时，由 agent 判断必要性并调用 `memory_flush` / `everos flush`；普通写入、压缩与 sweep 不强制切段。官方 [Cookbook](https://docs.evermind.ai/cookbook/quickstart) 说明生产环境无需逐轮 flush，Cloud 无新消息两小时后处理尾段。自托管和 v1 不能直接套用该 Cloud 保证。API、状态与兼容边界见 [按需抽取](flush-policy.md)。
+当前 Bridge 的 v2 策略是按需显式 flush：交接、流程完成、话题转移或立即检索需要时，由 agent 判断必要性并调用 `memory_flush` / `everos flush`；普通写入、压缩与 sweep 不强制切段。官方 [Cookbook](https://docs.evermind.ai/cookbook/quickstart) 说明生产环境无需逐轮 flush，Cloud 无新消息两小时后处理尾段。自托管和 v1 不能直接套用该 Cloud 保证。API、状态与兼容边界见 [按需抽取](flush-policy.zh-CN.md)。
 
 ## 2. v1 与 v2
 

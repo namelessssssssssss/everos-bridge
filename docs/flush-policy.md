@@ -1,5 +1,7 @@
 # On-demand memory extraction
 
+English · [简体中文](flush-policy.zh-CN.md)
+
 Bridge confirms writes before advancing capture progress. For v2, it leaves extraction to EverOS unless the agent decides that a particular task needs the latest saved content now.
 
 Use explicit flush at a meaningful boundary: a handoff, completion of a workflow, a topic change, or a search that depends on the latest saved messages. Do not call it mechanically after every memory write. [EverOS's production guidance](https://docs.evermind.ai/cookbook/quickstart) does not require flushing each turn; Cloud processes an idle session after two hours without new messages. That Cloud behavior is not a guarantee for every self-hosted or legacy server.
@@ -56,7 +58,7 @@ For practice records, an `extracted` v2 add can trigger the existing bounded cas
 - v1 retains its compatibility flush behavior. Practice writes use both versions only when v2 is configured and legacy v1 access is enabled.
 - Before switching away from v1, Bridge retains its old-buffer confirmation requirement. Switching away from v2 preserves the old target for explicit handling instead of silently forcing extraction or discarding its pending metadata.
 
-For capture-ledger diagnostics, an unconfirmed v2 target from a version switch is retained in `deferred_flush["v2"]`. A conversation flush with `api_version="v2"` can confirm that target without clearing the current version's pending write. New capture ledgers also bind the backend, user, and agent identity; a changed identity is rejected instead of silently reusing the previous mapping. Older ledgers without that field retain their compatibility path.
+For capture-ledger diagnostics, an unconfirmed v2 target from a version switch is retained in `deferred_flush["v2"]`. A conversation flush with `api_version="v2"` can confirm that target without clearing the current version's pending write. New capture ledgers also bind the backend, user, and agent identity. API base URLs that differ only by trailing slashes identify the same backend, matching request construction. A changed identity is rejected during capture and conversation flush; sweeps skip identity-mismatched v1 ledgers and preserve their pending state. Older ledgers without that field retain their compatibility path.
 
 All explicit writes, including flush, obey `EVEROS_WRITE=0` and quota controls. These changes do not alter the synchronous add confirmation used for recoverable capture. They do not establish a measured MCU saving or an improvement in extraction quality.
 

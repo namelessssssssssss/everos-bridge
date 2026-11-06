@@ -103,6 +103,74 @@ class ExplicitFlushTests(IsolatedCore):
             core.flush_memory("handoff", conversation_id="test_session")
         self.api.assert_not_called()
 
+    def test_equivalent_api_bases_keep_capture_and_conversation_flush(self):
+        base = "https://synthetic.example/api"
+        for index, (initial, changed) in enumerate(((base, base + "/"), (base + "///", base))):
+            with self.subTest(initial=initial, changed=changed):
+                payload = self.transcript()
+                payload["session_id"] = f"equivalent_{index}"
+                state_path = core.SESS_DIR / (payload["session_id"] + ".json")
+                with patch.dict(os.environ, {"EVEROS_API_BASE": initial}):
+                    core.write_turns(payload)
+                    identity = core.load_state(state_path)["identity"]
+                with Path(payload["transcript_path"]).open("a") as out:
+                    out.write(json.dumps(codex_message("user", "continue")) + "\n")
+                with patch.dict(os.environ, {"EVEROS_API_BASE": changed}):
+                    core.write_turns(payload)
+                    core.flush_memory("handoff", conversation_id=payload["session_id"])
+                state = core.load_state(state_path)
+                self.assertEqual(state["identity"], identity)
+                self.assertEqual(state["messages"], 2)
+                self.assertFalse(state["pending"])
+
+    def test_sweep_preserves_identity_mismatched_v1_ledgers_without_network(self):
+        for key, value in (("EVEROS_API_BASE", "https://other.example"),
+                           ("EVEROS_USER_ID", "other-owner"),
+                           ("EVEROS_AGENT_ID", "other-agent")):
+            with self.subTest(changed=key):
+                state_path = core.SESS_DIR / "test_session.json"
+                state_path.unlink(missing_ok=True)
+                payload = self.transcript()
+                with patch.dict(os.environ, {"EVEROS_API_VERSION": "v1"}):
+                    core.write_turns(payload)
+                before = state_path.read_bytes()
+                self.api.reset_mock()
+                self.api.return_value = response("no_extraction")
+                with patch.dict(os.environ, {key: value}), patch.object(core, "sync_local_memory"):
+                    REAL_SWEEP(force=True)
+                self.api.assert_not_called()
+                self.assertEqual(state_path.read_bytes(), before)
+                self.assertTrue(self.ledger()["pending"])
+                state_path.unlink()
+
+    def test_sweep_accepts_matching_and_legacy_unbound_v1_ledgers(self):
+        for bound in (False, True):
+            state = {"everos_session_id": "legacy", "api": "v1", "pending": True}
+            if bound:
+                state["identity"] = core._write_identity()
+            core.save_state(core.SESS_DIR / "test_session.json", state)
+            self.api.reset_mock()
+            self.api.return_value = response("no_extraction")
+            with patch.object(core, "sync_local_memory"):
+                REAL_SWEEP(force=True)
+            self.api.assert_called_once()
+            self.assertEqual(self.api.call_args.args[0], "/api/v1/memories/flush")
+            self.assertFalse(self.ledger()["pending"])
+
+    def test_real_backend_path_change_still_rejects_capture_and_flush(self):
+        payload = self.transcript()
+        with patch.dict(os.environ, {"EVEROS_API_BASE": "https://synthetic.example/api"}):
+            core.write_turns(payload)
+        before = self.ledger()
+        self.api.reset_mock()
+        with patch.dict(os.environ, {"EVEROS_API_BASE": "https://synthetic.example/other"}):
+            with self.assertRaises(ValueError):
+                core.write_turns(payload)
+            with self.assertRaises(ValueError):
+                core.flush_memory("handoff", conversation_id="test_session")
+        self.api.assert_not_called()
+        self.assertEqual(self.ledger(), before)
+
     def test_v2_to_v1_preserves_old_target_without_forcing_v2_extraction(self):
         payload = self.transcript()
         core.write_turns(payload)

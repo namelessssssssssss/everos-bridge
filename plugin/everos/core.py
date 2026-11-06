@@ -925,7 +925,7 @@ def flush_memory(reason: str, session_id: str = "", conversation_id: str = "",
 
 
 def _write_identity() -> str:
-    return hashlib.sha256(json.dumps([cfg().get("EVEROS_API_BASE"), owner(), agent_id()],
+    return hashlib.sha256(json.dumps([cfg()["EVEROS_API_BASE"].rstrip("/"), owner(), agent_id()],
                                     ensure_ascii=False).encode()).hexdigest()
 
 
@@ -1622,6 +1622,8 @@ def sweep(force: bool = False) -> None:
             except OSError:
                 continue
             st = load_state(p)
+            if st.get("identity") not in (None, _write_identity()):
+                continue
             idle_h = (now * 1000 - st.get("last_write_ms", 0)) / 3_600_000
             if st.get("pending") and st.get("api", "v1") == "v1" and (force or idle_h >= IDLE_FLUSH_H):
                 try:
