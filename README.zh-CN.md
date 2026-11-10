@@ -76,6 +76,7 @@ flowchart LR
 | Agent | 召回与采集体验 |
 | --- | --- |
 | Claude Code · Codex CLI / App | 自动召回与对话采集 |
+| Google Antigravity | 自动召回与对话采集 |
 | Kimi Code · Kimi Work 桌面端 | 自动召回与对话采集 |
 | MiMoCode · MiMo Desktop | 自动召回与对话采集 |
 | TraeX ≥ 0.209.1 | 自动召回与对话采集 |

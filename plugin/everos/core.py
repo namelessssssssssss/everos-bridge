@@ -1143,9 +1143,19 @@ def read_new_entries(path: Path, offset: int) -> tuple[list[dict], int]:
     return entries, offset + end
 
 
+def is_antigravity_transcript(entries: list[dict], transcript: str = "") -> bool:
+    if "/.gemini/antigravity" in transcript.replace("\\", "/"):
+        return True
+    return any(isinstance(o, dict) and "step_index" in o
+               and o.get("type") in ("USER_INPUT", "PLANNER_RESPONSE", "SYSTEM_MESSAGE", "CHECKPOINT", "GENERIC")
+               for o in entries[:50])
+
+
 def detect_host(entries: list[dict], transcript: str = "") -> str:
     if trae.is_trae(entries, transcript):
         return "trae"
+    if is_antigravity_transcript(entries, transcript):
+        return "antigravity"
     if "/.codex/" in transcript or any(o.get("type") in ("session_meta", "response_item") for o in entries[:50]):
         return "codex"
     # 桌面端（Kimi Work）与 Kimi Code CLI 的 wire.jsonl 同构，只能靠路径区分；必须先于 kimi 判断
@@ -1155,6 +1165,29 @@ def detect_host(entries: list[dict], transcript: str = "") -> str:
                                            for o in entries[:50]):
         return "kimi"
     return "claude_code"
+
+
+def antigravity_transcript(session_id: str = "", transcript_path: str = "") -> Path | None:
+    """Antigravity 优先读取同目录未截断的 transcript_full.jsonl；缺少路径时按 conversationId 查找。"""
+    if transcript_path:
+        p = Path(transcript_path)
+        if p.name == "transcript.jsonl":
+            full = p.with_name("transcript_full.jsonl")
+            if full.is_file():
+                return full
+        if p.is_file():
+            return p
+    if not session_id:
+        return None
+    gemini = Path(os.environ.get("EVEROS_INSTALL_HOME") or Path.home()) / ".gemini"
+    for pattern in (
+        f"antigravity*/brain/{session_id}/.system_generated/logs/transcript_full.jsonl",
+        f"antigravity*/brain/{session_id}/.system_generated/logs/transcript.jsonl",
+    ):
+        hits = sorted(gemini.glob(pattern))
+        if hits:
+            return hits[0]
+    return None
 
 
 def kimi_transcript(session_id: str) -> Path | None:
@@ -1426,17 +1459,79 @@ def messages_mimo(rows: list[dict], host: str = "mimocode") -> list[dict]:
     return _monotonic(msgs)
 
 
+_ANTIGRAVITY_META = re.compile(
+    r"<(?:ADDITIONAL_METADATA|USER_SETTINGS_CHANGE|CONTEXT_SUMMARY)>.*?"
+    r"</(?:ADDITIONAL_METADATA|USER_SETTINGS_CHANGE|CONTEXT_SUMMARY)>",
+    re.S,
+)
+
+
+def clean_antigravity_text(content) -> str | None:
+    """提取 Antigravity 用户提问正文：剥离 <USER_REQUEST> 包装、附加元数据与系统提醒。"""
+    if not isinstance(content, str):
+        return None
+    requests = [m.strip() for m in re.findall(r"<USER_REQUEST>(.*?)</USER_REQUEST>", content, re.S) if m.strip()]
+    text = "\n\n".join(requests) if requests else _ANTIGRAVITY_META.sub("", content)
+    text = _REMINDER.sub("", text).strip()
+    if not text or text.startswith(_SKIP_PREFIX):
+        return None
+    return text
+
+
+def messages_antigravity(entries: list[dict], host: str = "antigravity") -> list[dict]:
+    """Google Antigravity transcript(_full).jsonl：USER_INPUT 为用户提问，PLANNER_RESPONSE 为助手回复。"""
+    msgs: list[dict] = []
+    buf: list[str] = []
+    buf_ts = 0
+
+    def flush_assistant():
+        nonlocal buf, buf_ts
+        if buf:
+            msgs.append({"role": "assistant", "sender_id": host, "timestamp": buf_ts,
+                         "content": clip("\n\n".join(buf))})
+            buf, buf_ts = [], 0
+
+    for o in entries:
+        if not isinstance(o, dict) or o.get("status") == "ERROR":
+            continue
+        t = o.get("type")
+        src = o.get("source")
+        stamp = ts_ms(o.get("created_at") or o.get("timestamp"))
+        if t == "USER_INPUT" and src in (None, "USER_EXPLICIT"):
+            text = clean_antigravity_text(o.get("content"))
+            if text:
+                flush_assistant()
+                text, sender = split_botmux(text)
+                msgs.append({"role": "user", **sender, "timestamp": stamp, "content": clip(text)})
+        elif t == "PLANNER_RESPONSE" and src in (None, "MODEL"):
+            text = str(o.get("content") or "").strip()
+            if text:
+                buf.append(text)
+                buf_ts = stamp
+            for tc in o.get("tool_calls") or []:
+                if not isinstance(tc, dict) or tc.get("name") != "run_command":
+                    continue
+                args = tc.get("args") or {}
+                cmd = str(args.get("CommandLine") or args.get("command") or "")
+                reply = botmux_reply(cmd)
+                if reply:
+                    buf.append(f"（经 botmux 发到飞书）{reply}")
+                    buf_ts = stamp
+    flush_assistant()
+    return _monotonic(msgs)
+
+
 def session_name(entries: list[dict], host: str, cwd: str, sid: str, title: str = "") -> str:
     first_ts = None
     for o in entries:
         if o.get("type") == "custom-title" and o.get("customTitle"):
             title = o["customTitle"]
-        if first_ts is None and o.get("timestamp"):
-            first_ts = o["timestamp"]
+        if first_ts is None and (o.get("timestamp") or o.get("created_at")):
+            first_ts = o.get("timestamp") or o.get("created_at")
     day = (datetime.fromisoformat(first_ts.replace("Z", "+00:00")).astimezone(CST) if first_ts
            else datetime.now(CST))
     prefix = {"claude_code": "cc", "codex": "cx", "trae": "tx", "kimi": "km", "kimi_desktop": "kw",
-              "mimocode": "mc"}.get(host, slug(host, 12) or "agent")
+              "mimocode": "mc", "antigravity": "ag"}.get(host, slug(host, 12) or "agent")
     # TraeX uses UUIDv7: the first eight characters are a coarse timestamp,
     # shared by sessions started within about a minute. Keep the complete ID.
     session_suffix = sid if host == "trae" else sid[:8]
@@ -1445,15 +1540,24 @@ def session_name(entries: list[dict], host: str, cwd: str, sid: str, title: str 
 
 def write_turns(payload: dict) -> None:
     ensure_writable()
-    sid = str(payload.get("session_id") or "")
-    tpath = Path(str(payload.get("transcript_path") or ""))
-    event = str(payload.get("hook_event_name") or "")
+    sid = str(payload.get("session_id") or payload.get("conversationId") or "")
+    raw_tpath = str(payload.get("transcript_path") or payload.get("transcriptPath") or "")
+    tpath = Path(raw_tpath)
+    event = str(payload.get("hook_event_name") or os.environ.get("EVEROS_HOOK_EVENT") or "")
     host_hint = os.environ.get("EVEROS_HOST", "")
+    cwd = str(payload.get("cwd") or ((payload.get("workspacePaths") or [""])[0]
+              if isinstance(payload.get("workspacePaths"), list) and payload.get("workspacePaths") else ""))
+    if host_hint == "antigravity" or "conversationId" in payload or "transcriptPath" in payload:
+        resolved = antigravity_transcript(sid, raw_tpath)
+        if resolved is not None:
+            tpath = resolved
     if not tpath.is_file() and sid:
         if host_hint == "trae":
             tpath = trae.transcript(sid) or tpath
             if not tpath.is_file():
                 raise FileNotFoundError(f"TraeX rollout not found for session {sid}")
+        elif host_hint == "antigravity":
+            tpath = antigravity_transcript(sid, raw_tpath) or tpath
         elif host_hint == "kimi_desktop" or sid.startswith(("conv-", "ctitle-")):
             tpath = desktop_transcript(sid) or tpath
         elif host_hint == "kimi" or str(payload.get("client_type", "")).startswith("kimi"):
@@ -1465,18 +1569,22 @@ def write_turns(payload: dict) -> None:
     with open(sp.with_suffix(".lock"), "w") as lk:
         fcntl.flock(lk, fcntl.LOCK_EX)  # 同一会话的 Stop / SessionEnd 串行
         st = load_state(sp)
+        if st.get("transcript_path") and Path(str(st.get("transcript_path"))) != tpath:
+            st["offset"] = 0
+            st["transcript_path"] = str(tpath)
         offset = int(st.get("offset", 0))
         entries, new_offset = read_new_entries(tpath, offset)
         if not st.get("everos_session_id"):
             head, _ = read_new_entries(tpath, 0) if offset else (entries, 0)
-            host = "trae" if host_hint == "trae" else detect_host(head, str(tpath))
-            st.update(claude_session_id=sid, host=host, cwd=str(payload.get("cwd") or ""), transcript_path=str(tpath),
-                      everos_session_id=session_name(head, host, str(payload.get("cwd") or ""),
+            host = ("trae" if host_hint == "trae" else
+                    "antigravity" if host_hint == "antigravity" else detect_host(head, str(tpath)))
+            st.update(claude_session_id=sid, host=host, cwd=cwd, transcript_path=str(tpath),
+                      everos_session_id=session_name(head, host, cwd,
                                                      sid.removeprefix("session_"), str(payload.get("session_title") or
                                                      payload.get("thread_name") or payload.get("session_name") or "")))
         host = st.get("host") or "claude_code"
         prepare_session_version(st, sp)
-        parse = {"codex": messages_codex, "trae": messages_trae,
+        parse = {"codex": messages_codex, "trae": messages_trae, "antigravity": messages_antigravity,
                  "kimi": messages_kimi, "kimi_desktop": messages_kimi}.get(host, messages_claude)
         msgs = parse(entries, host)
         # Persist validated source identity before the first network write, but

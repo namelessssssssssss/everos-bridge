@@ -43,6 +43,73 @@ def is_kimi_like(payload: dict) -> bool:
     return str(payload.get("client_type") or "").startswith("kimi")
 
 
+def is_antigravity(payload: dict) -> bool:
+    if os.environ.get("EVEROS_HOST", HOST_OVERRIDE) == "antigravity":
+        return True
+    return any(k in payload for k in ("conversationId", "transcriptPath", "invocationNum", "terminationReason", "toolCall"))
+
+
+def normalize_antigravity(payload: dict) -> dict:
+    data = dict(payload)
+    if isinstance(data.get("common"), dict):
+        for k, v in data["common"].items():
+            data.setdefault(k, v)
+    for sub in ("preToolHookArgs", "postToolHookArgs", "preInvocationHookArgs",
+                "postInvocationHookArgs", "stopHookArgs", "sessionStartHookArgs"):
+        if isinstance(data.get(sub), dict):
+            for k, v in data[sub].items():
+                data.setdefault(k, v)
+    event = str(data.get("hook_event_name") or os.environ.get("EVEROS_HOOK_EVENT") or "")
+    if not event:
+        if any(k in data for k in ("terminationReason", "fullyIdle", "finalModelOutput", "executionNum")):
+            event = "Stop"
+        elif "toolCall" in data:
+            event = "PostToolUse" if ("error" in data or "result" in data) else "PreToolUse"
+        elif any(k in data for k in ("modelOutput", "modelThinking")):
+            event = "PostInvocation"
+        elif any(k in data for k in ("invocationNum", "initialNumSteps", "lastUserInput")):
+            event = "PreInvocation"
+        elif "conversationId" in data:
+            event = "SessionStart"
+    data["hook_event_name"] = event
+    if data.get("conversationId") and not data.get("session_id"):
+        data["session_id"] = str(data["conversationId"])
+    if data.get("transcriptPath") and not data.get("transcript_path"):
+        data["transcript_path"] = str(data["transcriptPath"])
+    if isinstance(data.get("workspacePaths"), list) and data["workspacePaths"] and not data.get("cwd"):
+        data["cwd"] = str(data["workspacePaths"][0])
+    if "lastUserInput" in data and not data.get("prompt"):
+        data["prompt"] = core.clean_antigravity_text(data.get("lastUserInput")) or ""
+    if isinstance(data.get("toolCall"), dict):
+        tc = data["toolCall"]
+        data.setdefault("tool_name", str(tc.get("name") or ""))
+        data.setdefault("tool_input", tc.get("args") if isinstance(tc.get("args"), dict) else {})
+    if ("error" in data or "result" in data) and "tool_response" not in data:
+        data["tool_response"] = {"error": data.get("error", ""), "result": data.get("result", "")}
+    return data
+
+
+def antigravity_checkpoint_step(tpath_str: str, sid: str) -> int:
+    tpath = core.antigravity_transcript(sid, tpath_str)
+    if not tpath or not tpath.is_file():
+        return -1
+    entries, _ = core.read_new_entries(tpath, 0)
+    steps = [int(o.get("step_index", -1)) for o in entries
+             if isinstance(o, dict) and o.get("type") == "CHECKPOINT"]
+    return max(steps) if steps else -1
+
+
+def emit_antigravity(event: str, text: str = "") -> None:
+    if event == "PreToolUse":
+        print(json.dumps({"decision": "allow"}, ensure_ascii=False))
+    elif event == "SessionStart" and text:
+        print(json.dumps({"injectSteps": [{"systemMessage": {"systemMessage": text}}]}, ensure_ascii=False))
+    elif event in ("PreInvocation", "UserPromptSubmit", "PostInvocation") and text:
+        print(json.dumps({"injectSteps": [{"ephemeralMessage": text}]}, ensure_ascii=False))
+    else:
+        print("{}")
+
+
 def emit(event: str, text: str) -> None:
     print(json.dumps({"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}},
                      ensure_ascii=False))
@@ -62,7 +129,7 @@ def build_prompt_blocks(sid: str, prompt: str, *, need_profile: bool = False) ->
     chars = int(core._num("EVEROS_RECALL_CHARS", 2000))
     blocks = []
     need_profile = need_profile or bool(st.get("needs_profile")) or (
-        HOST_OVERRIDE == "trae" and not st.get("profile_injected"))
+        os.environ.get("EVEROS_HOST", HOST_OVERRIDE) in ("trae", "antigravity") and not st.get("profile_injected"))
     if need_profile:
         profile = core.profile_text(budget=max(0.0, min(core.READ_TIMEOUT, budget, deadline - time.monotonic())))
         if profile:
@@ -118,12 +185,20 @@ def main() -> int:
             print(report)
             return 0 if healthy else 1
         if args[:1] == ["--dry-run"]:
-            entries, _ = core.read_new_entries(Path(args[1]), 0)
+            raw_path = Path(args[1])
+            entries, _ = core.read_new_entries(raw_path, 0)
             host = core.detect_host(entries, args[1])
-            parse = {"codex": core.messages_codex, "trae": core.messages_trae, "kimi": core.messages_kimi,
-                     "kimi_desktop": core.messages_kimi}.get(host, core.messages_claude)
+            if host == "antigravity":
+                resolved = core.antigravity_transcript("", args[1])
+                if resolved and resolved != raw_path:
+                    entries, _ = core.read_new_entries(resolved, 0)
+            parse = {"codex": core.messages_codex, "trae": core.messages_trae, "antigravity": core.messages_antigravity,
+                     "kimi": core.messages_kimi, "kimi_desktop": core.messages_kimi}.get(host, core.messages_claude)
             msgs = parse(entries, host)
-            print(core.session_name(entries, host, "", Path(args[1]).stem))
+            sid_hint = raw_path.stem
+            if host == "antigravity" and sid_hint in ("transcript", "transcript_full") and len(raw_path.parents) >= 3:
+                sid_hint = raw_path.parents[2].name
+            print(core.session_name(entries, host, "", sid_hint))
             for m in msgs:
                 print(f"{m['role']:9s} {m['timestamp']} {len(m['content']):6d} | {m['content'][:90]!r}")
             return 0
@@ -176,19 +251,37 @@ def main() -> int:
 
         raw = sys.stdin.read()
         payload = json.loads(raw or "{}")
+        antigravity = is_antigravity(payload)
+        if antigravity:
+            payload = normalize_antigravity(payload)
         event = str(payload.get("hook_event_name") or "")
         sid0 = str(payload.get("session_id") or "")
         if sid0.startswith("ctitle-"):  # 桌面端标题生成侧会话：不检索、不采集
+            if antigravity:
+                emit_antigravity(event)
             return 0
         c = core.cfg()
         if not core.ready():
+            if antigravity:
+                emit_antigravity(event)
             return 0
         kimi = is_kimi_like(payload)
         if event in ("PreToolUse", "PostToolUse"):
             if c.get("EVEROS_INJECT") != "0":
                 text = recall.tool_reminder(payload)
+                if antigravity:
+                    if text:
+                        with recall.locked(sid0 or "nosession") as state:
+                            pending = list(state.get("pending_reminders") or [])
+                            if text not in pending:
+                                pending.append(text)
+                            state["pending_reminders"] = pending[-8:]
+                    emit_antigravity(event)
+                    return 0
                 if text:
                     emit(event, text)
+            elif antigravity:
+                emit_antigravity(event)
             return 0
         if event in ("PreCompact", "PostCompact") or (event == "SessionStart" and
                 str(payload.get("source") or "") in ("compact", "resume")):
@@ -202,8 +295,62 @@ def main() -> int:
             st.update(needs_profile=True, ids=[])
             recall.save_state(state_p, st)
             return 0
-        if event in ("SessionStart", "UserPromptSubmit"):
+        if event in ("SessionStart", "UserPromptSubmit", "PreInvocation"):
             if c.get("EVEROS_INJECT") == "0":
+                if antigravity:
+                    emit_antigravity(event)
+                return 0
+            if antigravity:
+                checkpoint = antigravity_checkpoint_step(str(payload.get("transcript_path") or ""), sid0)
+                with recall.locked(sid0 or "nosession") as st:
+                    prev_checkpoint = int(st.get("last_checkpoint_step", -1))
+                    if checkpoint > prev_checkpoint:
+                        if st.get("turns", 0) > 0:
+                            recall.reset_context(st)
+                            st["needs_profile"] = True
+                            st["needs_retrieval_policy"] = True
+                        st["last_checkpoint_step"] = checkpoint
+                    if event == "SessionStart":
+                        source = payload.get("source") or "startup"
+                        if (st.get("last_profile_source") == source and
+                                time.time() - st.get("last_profile_at", 0) < 2):
+                            emit_antigravity("SessionStart")
+                            return 0
+                        text = core.profile_text(budget=min(core.READ_TIMEOUT, core._num("EVEROS_RECALL_TIMEOUT", 18)))
+                        if text:
+                            emit_antigravity(
+                                "SessionStart",
+                                f"【EverOS 用户画像】{HEADER}\n{text}"
+                                + ("\n" + recall.POLICY if payload.get("source") in ("compact", "resume") else ""),
+                            )
+                            st.update(profile_injected=True, needs_profile=False,
+                                      last_profile_source=source, last_profile_at=time.time())
+                        else:
+                            emit_antigravity("SessionStart")
+                        return 0
+                    pending_reminders = list(st.pop("pending_reminders", None) or [])
+                    prompt = str(payload.get("prompt") or "").strip()
+                    inv_num = int(payload.get("invocationNum") or 0)
+                    turn_id = payload.get("turn_id")
+                    if turn_id is None and "initialNumSteps" in payload:
+                        turn_id = payload.get("initialNumSteps")
+                    prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest() if prompt else ""
+                    turn_key = f"{turn_id}:{prompt_hash}" if turn_id is not None else ""
+                    skip_prompt = bool(
+                        not prompt
+                        or prompt.startswith(core._SKIP_PREFIX + ("<system-reminder>",))
+                        or (inv_num > 1 and st.get("last_prompt_hash") == prompt_hash)
+                        or (turn_key and st.get("last_turn_key") == turn_key)
+                    )
+                blocks = []
+                if not skip_prompt:
+                    blocks = build_prompt_blocks(sid0, prompt)
+                    with recall.locked(sid0 or "nosession") as st:
+                        st["last_prompt_hash"] = prompt_hash
+                        if turn_key:
+                            st["last_turn_key"] = turn_key
+                blocks.extend(pending_reminders)
+                emit_antigravity(event, "\n\n".join(blocks))
                 return 0
             if HOST_OVERRIDE == "trae":
                 # A home-directory workspace can discover the same hooks.json
@@ -245,16 +392,22 @@ def main() -> int:
             return 0
         if event in ("Stop", "SessionEnd", "PreCompact") and c.get("EVEROS_WRITE") != "0":
             # 转交后台子进程，自己马上退出（SessionEnd 只有约 1.5 秒预算）
+            worker_env = {**os.environ, "EVEROS_HOST": "antigravity"} if antigravity else {**os.environ}
+            worker_input = json.dumps(payload, ensure_ascii=False) if antigravity else raw
             child = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--worker"],
                                      stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
                                      stderr=subprocess.DEVNULL, start_new_session=True,
-                                     env={**os.environ})
-            child.stdin.write(raw.encode("utf-8"))
+                                     env=worker_env)
+            child.stdin.write(worker_input.encode("utf-8"))
             child.stdin.close()
+        if antigravity:
+            emit_antigravity(event)
     except Exception as exc:  # fail-open：记忆读写永远不值得打断一次对话
         core.log_error(f"error {args[:1] or 'hook'}", exc)
         if args[:1] == ["--doctor"]:
             return 1
+        if os.environ.get("EVEROS_HOST", HOST_OVERRIDE) == "antigravity":
+            print("{}")
     return 0
 
 

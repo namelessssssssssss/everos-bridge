@@ -139,6 +139,7 @@ All-source technical failure is reported as an error, not “no memories.” Par
 | Host | Notes |
 | --- | --- |
 | Codex | Plugin installation copies files. Rerun the installer after updates, then open a new session and review current hook definitions. |
+| Google Antigravity | Configures `~/.gemini/config/mcp_config.json`, `~/.gemini/config/hooks.json`, `~/.gemini/config/skills/everos-memory/SKILL.md`, and `~/.gemini/GEMINI.md`. Use `./install.sh --only antigravity` to update only Antigravity, then start a new conversation. |
 | Kimi Code | The installer also checks `~/.kimi-code/bin/kimi` when `kimi` is absent from `PATH`. Profile injection occurs on the first prompt. |
 | Kimi Work desktop | App upgrades may overwrite runtime configuration. Rerun `install.sh`, or `install.ps1 -KimiDesktop` on Windows, then open a new session. |
 | TraeX | Requires 0.209.1 or later for lifecycle hooks. Use `./install.sh --only trae` to update only TraeX, then review hooks through `/hooks`. [Details](traex-integration.md). |

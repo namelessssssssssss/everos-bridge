@@ -21,7 +21,7 @@
 | TraeX / Trae CLI / Coco | `$TRAE_HOME/AGENTS.md` |
 | Kimi Code | `$KIMI_CODE_HOME/AGENTS.md` |
 | Kimi Work桌面端 | 已配置的运行时home中的 `AGENTS.md`，保留原有共享skill同步 |
-| Gemini CLI | `~/.gemini/GEMINI.md`；已有配置但当前无CLI也同步 |
+| Gemini CLI / Google Antigravity | `~/.gemini/GEMINI.md`（两者共用同一全局规则入口，同次安装自动去重；Antigravity 同时同步 `~/.gemini/config/skills/everos-memory/SKILL.md`） |
 | Cursor | `~/.cursor/rules/everos-bridge.mdc`，`alwaysApply: true`；全局skill继续同步 |
 | MiMoCode / MiMo Desktop | 既有 `instructions` 引用源仓 `plugin/rules/everos-rules.md`，更新源文件即更新该指令来源；安装报告回读引用是否存在 |
 | Claude Desktop / Cowork / 其它仅MCP入口 | MCP声明当前版本并提供 `memory_rules`。不猜测未公开的全局记忆文件；若宿主提供原生记忆/指令工具，接入Agent在本次授权内保存规则摘要和版本，否则明确报告原生持久化缺口 |

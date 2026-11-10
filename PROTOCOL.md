@@ -14,15 +14,16 @@
 
 ## 1. 接线：谁负责什么
 
-| 能力 | Claude Code / Codex / TraeX | Kimi Code / Kimi Work 桌面端 | MiMoCode / MiMo Desktop | Doubao Work（无 hook 云端宿主） | 其他 MCP 客户端 |
+| 能力 | Claude Code / Codex / TraeX / Google Antigravity | Kimi Code / Kimi Work 桌面端 | MiMoCode / MiMo Desktop | Doubao Work（无 hook 云端宿主） | 其他 MCP 客户端 |
 | --- | --- | --- | --- | --- | --- |
 | 会话开始读画像 | SessionStart hook 自动注入（压缩后会再注入一次） | 首条提问时一起注入 | Plugin `system.transform` / 首条提问注入 | 模型按用户 skill 主动调 `memory_profile`（`everos-mcp`） | 调 `memory_profile` |
-| 每条提问检索 | UserPromptSubmit hook 自动注入 | 同左 | Plugin `chat.message` 注入 synthetic part | 模型按用户 skill 每轮主动调 `memory_search(method=agentic)`，任务中按缺口补查、`memory_open` 展开 | 每条提问先调 `memory_search` |
+| 每条提问检索 | UserPromptSubmit / PreInvocation hook 自动注入 | 同左 | Plugin `chat.message` 注入 synthetic part | 模型按用户 skill 每轮主动调 `memory_search(method=agentic)`，任务中按缺口补查、`memory_open` 展开 | 每条提问先调 `memory_search` |
 | 对话原文入库 | Stop hook 每轮自动写入 | 同左 | Plugin `session.post` → `--mimo-write` | 每轮主动跑 `everos-doubao-ingest --all`（main agent 的用户原话与最终回复） | 不自动；靠 3.2 的结构化记录 |
 | 结构化记录、做法、改画像 | MCP：`memory_remember` / `memory_record_practice` / `memory_fix_profile` | 同左 | 同左 | `everos-mcp` 调同一个 mcp_server，工具与校验一致 | 同左 |
 
 - 代码都在 `plugin/everos/`，纯 Python 标准库：`core.py` 是读写核心，`hook.py` 是 hook 入口和命令行，`mcp_server.py` 是 MCP 服务。MiMoCode 的 L3/L4 入口是 `plugin/mimo/everos.mjs`，经 `hook.py --mimo-recall/--mimo-write` 复用同一套读写。
-- session_id：一个 agent 会话对应一个，跨天沿用。Claude Code 用 `cc_<首日>_<标题>_<会话id前8位>`，Codex 用 `cx_…`，Kimi Code 用 `km_…`，Kimi Work 桌面端用 `kw_…`，MiMoCode 用 `mc_…`，Doubao Work 用 `dw_<首日>_<标题>_<完整会话id>`。TraeX 用 `tx_<首日>_<标题>_<完整会话id>`，避免 UUIDv7 时间前缀相同导致跨会话混写。
+- session_id：一个 agent 会话对应一个，跨天沿用。Claude Code 用 `cc_<首日>_<标题>_<会话id前8位>`，Codex 用 `cx_…`，Google Antigravity 用 `ag_…`，Kimi Code 用 `km_…`，Kimi Work 桌面端用 `kw_…`，MiMoCode 用 `mc_…`，Doubao Work 用 `dw_<首日>_<标题>_<完整会话id>`。TraeX 用 `tx_<首日>_<标题>_<完整会话id>`，避免 UUIDv7 时间前缀相同导致跨会话混写。
+- Google Antigravity（`Gemini.app` / `Antigravity.app` / `agy`）：MCP 写 `~/.gemini/config/mcp_config.json`，hook 写 `~/.gemini/config/hooks.json`，共享 skill 写 `~/.gemini/config/skills/everos-memory/SKILL.md`，全局指令与 Gemini CLI 共用 `~/.gemini/GEMINI.md`；只刷新它可用 `install.sh --only antigravity`。`SessionStart` 返回 `injectSteps[].systemMessage`，`PreInvocation` 返回 `injectSteps[].ephemeralMessage`（按 `invocationNum` 首轮触发提问检索；检测到 `transcript.jsonl` 新增 `CHECKPOINT` 步骤时自动清除旧覆盖并恢复画像与规则），`PostToolUse` 将工具异常提醒暂存到紧邻的下一次 `PreInvocation` 注入而不覆盖工具输出。`Stop` 优先读取未截断的同目录 `transcript_full.jsonl`（回退 `transcript.jsonl`），提取 `<USER_REQUEST>` 原话并剥离 `<ADDITIONAL_METADATA>` / `<CONTEXT_SUMMARY>` 脚手架，跳过 `status=ERROR` 的失败规划步。
 - TraeX ≥ 0.209.1：`SessionStart` / `UserPromptSubmit` 注入，`Stop` 增量采集，`SessionEnd` / `PreCompact` 补写与落盘；`PostCompact` 只标记下轮补读画像。当前注入已存在时，规则不再重复调用 MCP。hook 必须启用且被信任。
 - TraeX 读取原始 rollout 的 `history_mutation` v1 append（兼容旧 `response_item`），只保存用户与助手的文本；用 `content_item_kinds` 区分用户输入与环境/规则/注入，不采集工具镜像或 reasoning。替换/压缩快照不作为新对话重新入库。`transcript_path` 为空时按精确 session_id 只读查索引或匹配 rollout 文件，找不到会记录错误且不推进采集进度。
 - Kimi Work 桌面端：hook 挂在 App 内嵌 runtime 的 `config.toml`（daimon 托管，App 升级会重写，丢了重跑 `install.sh`）；hook 命令带 `EVEROS_HOST=kimi_desktop` 显式指定宿主；`ctitle-*` 标题侧会话不采集。
@@ -141,7 +142,7 @@
 - 快照在 `$EVEROS_HOME/state/reads/`，按后端、owner、agent、来源、类型、原ID与投影后的内容生成标识，文件权限0600；不缓存embedding或传输凭据。跨身份拒绝读取；迁移到其他设备或快照缺失时重新检索，不猜路径、不全库扫描。
 - `memory_context` 更新本机会话goal/stage/clues。检索覆盖按问题与内容版本记录，最多保留24个问题；记录仅证明候选曾展示，不证明Agent已读懂或证据充分。目标改变或recover/压缩清除覆盖；首轮旧账本兼容迁移后按新规则处理。
 - Claude Code / Codex 的 PreToolUse 和 PostToolUse 使用短小本地提醒：方案/写入/提交动作前、失败输出后检查缺口；每种相同动作/异常只提醒一次，不递归提醒memory工具，不执行网络请求，不批准或阻止动作，失败放行。
-- TraeX 0.210.1起接入PreToolUse/PostToolUse（旧版保留六个生命周期事件）；MiMo 0.1.15 Plugin API接入tool.execute.before/after和experimental.session.compacting。MiMo的before提示进入下次模型上下文，不阻止或重写当前动作；after提示追加工具输出。Kimi及仅MCP宿主通过共享规则和工具补查，不声明未支持的自动工具事件。
+- TraeX 0.210.1起接入PreToolUse/PostToolUse（旧版保留六个生命周期事件）；Google Antigravity 接入 PostToolUse（异常提示暂存至紧邻的下一次 PreInvocation 的 `ephemeralMessage` 注入，不覆盖工具原始输出）并按 `transcript.jsonl` 的 `CHECKPOINT` 步骤触发压缩恢复；MiMo 0.1.15 Plugin API接入tool.execute.before/after和experimental.session.compacting。MiMo的before提示进入下次模型上下文，不阻止或重写当前动作；after提示追加工具输出。Kimi及仅MCP宿主通过共享规则和工具补查，不声明未支持的自动工具事件。
 - 关闭注入时不运行任务提醒；关闭写入时仍可本机检索、展开和维护临时上下文，但不写EverOS。历史权限、实时状态、记忆冲突继续按当前指令与Owning Source核实。
 
 架构、各宿主能力与隔离行为评测见 [检索工作流](docs/retrieval-workflow.md)。
@@ -168,7 +169,7 @@ MCP子进程可能过滤父进程环境，安装器在各客户端支持的env/e
 
 状态在 `$EVEROS_HOME/state/`：`sessions/*.json` 是会话账本，`recall/*.json` 记录本会话已注入过的条目，`localmem.json` 是本地记忆同步账本，`hook.log` 是日志。
 
-MCP 客户端外层超时需大于实际检索预算。安装器为 Codex 的 `tool_timeout_sec` 和 MiMo 的毫秒 `timeout` 设置至少配置预算 + 10 秒，默认 190 秒，并保留更大的现值。调大配置后重跑 `install.sh`；Kimi / TraeX hook 和 MiMo 插件外层同样随预算更新。Claude Code / Codex 插件及云端静态 hook 定义默认 190 秒，预算超过 180 秒时须同步提高其 UserPromptSubmit timeout 并重新审阅、信任；按次增加预算时也需保证外层允许等待。其他宿主按自身协议配置，不猜测字段。`memory_record_practice` 的耗时是写入（通常 10 到 20 秒）加回读等待（与 v1 双写重叠，最多 `EVEROS_CASE_WAIT` 秒），默认值在 190 秒内；宿主外层超时更短时调小 `EVEROS_CASE_WAIT`。
+MCP 客户端外层超时需大于实际检索预算。安装器为 Codex 的 `tool_timeout_sec` 和 MiMo 的毫秒 `timeout` 设置至少配置预算 + 10 秒，默认 190 秒，并保留更大的现值。调大配置后重跑 `install.sh`；Kimi / TraeX / Google Antigravity hook 和 MiMo 插件外层同样随预算更新。Claude Code / Codex 插件及云端静态 hook 定义默认 190 秒，预算超过 180 秒时须同步提高其 UserPromptSubmit timeout 并重新审阅、信任；按次增加预算时也需保证外层允许等待。其他宿主按自身协议配置，不猜测字段。`memory_record_practice` 的耗时是写入（通常 10 到 20 秒）加回读等待（与 v1 双写重叠，最多 `EVEROS_CASE_WAIT` 秒），默认值在 190 秒内；宿主外层超时更短时调小 `EVEROS_CASE_WAIT`。
 
 Codex 升级前必须保存已有 EverOS 插件版本缓存，CLI 操作后恢复被移除的旧目录（操作失败时也恢复）。运行中的聊天仍可能持有旧版 hook 的绝对路径；不能仅安装新版本就删除旧入口，也不能把旧版本路径指向不同内容。新聊天加载新版本，旧缓存不自动清理。
 

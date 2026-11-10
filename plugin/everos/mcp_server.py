@@ -253,7 +253,8 @@ def _error(mid, code: int, message: str) -> dict:
 def host_label(client: str) -> str:
     name = client.lower()
     for key, label in (("claude-code", "claude_code"), ("claude code", "claude_code"), ("codex", "codex"),
-                       ("cursor", "cursor"), ("gemini", "gemini"), ("kimi", "kimi"), ("trae", "trae"),
+                       ("cursor", "cursor"), ("antigravity", "antigravity"), ("agy", "antigravity"),
+                       ("gemini", "gemini"), ("kimi", "kimi"), ("trae", "trae"),
                        ("coco", "trae"), ("claude", "claude_desktop")):
         if key in name:
             return label

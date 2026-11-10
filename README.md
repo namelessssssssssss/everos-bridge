@@ -76,6 +76,7 @@ flowchart LR
 | Agent | Recall and capture experience |
 | --- | --- |
 | Claude Code · Codex CLI / App | Automatic recall and conversation capture |
+| Google Antigravity | Automatic recall and conversation capture |
 | Kimi Code · Kimi Work desktop | Automatic recall and conversation capture |
 | MiMoCode · MiMo Desktop | Automatic recall and conversation capture |
 | TraeX ≥ 0.209.1 | Automatic recall and conversation capture |

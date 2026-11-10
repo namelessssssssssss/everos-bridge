@@ -244,6 +244,55 @@ def trae_hooks(text, hook, runtime, recall_timeout=190, tool_events=False):
     return json.dumps(data, ensure_ascii=False, indent=2) + "\n"
 
 
+def antigravity_hooks(text, hook, everos_home=None, recall_timeout=190):
+    """Merge only the named 'everos' hook spec in ~/.gemini/config/hooks.json."""
+    data = json.loads(text.strip() or "{}")
+    if not isinstance(data, dict):
+        raise ValueError("Antigravity hooks.json top-level must be an object")
+    cleaned = {}
+    for name, spec in data.items():
+        if name == "everos" or not isinstance(spec, dict):
+            continue
+        retained_spec = {}
+        for key, value in spec.items():
+            if key in ("SessionStart", "PreInvocation", "PostInvocation", "Stop") and isinstance(value, list):
+                handlers = [h for h in value if not (isinstance(h, dict) and is_everos_hook(h.get("command", "")))]
+                if handlers:
+                    retained_spec[key] = handlers
+            elif key in ("PreToolUse", "PostToolUse") and isinstance(value, list):
+                groups = []
+                for group in value:
+                    if not isinstance(group, dict):
+                        continue
+                    hooks = [h for h in group.get("hooks", [])
+                             if not (isinstance(h, dict) and is_everos_hook(h.get("command", "")))]
+                    if hooks or not group.get("hooks"):
+                        groups.append(dict(group, hooks=hooks))
+                if groups:
+                    retained_spec[key] = groups
+            else:
+                retained_spec[key] = value
+        if any(k in retained_spec for k in ("SessionStart", "PreInvocation", "PostInvocation",
+                                            "PreToolUse", "PostToolUse", "Stop")):
+            cleaned[name] = retained_spec
+    env_prefix = "EVEROS_HOST=antigravity"
+    if everos_home is not None:
+        env_prefix += " EVEROS_HOME=" + shlex.quote(str(everos_home))
+    cmd = lambda event: "{} EVEROS_HOOK_EVENT={} python3 {}".format(
+        env_prefix, event, shlex.quote(str(hook)))
+    everos_spec = {}
+    if isinstance(data.get("everos"), dict) and "enabled" in data["everos"]:
+        everos_spec["enabled"] = data["everos"]["enabled"]
+    everos_spec.update({
+        "SessionStart": [{"type": "command", "command": cmd("SessionStart"), "timeout": 10}],
+        "PreInvocation": [{"type": "command", "command": cmd("PreInvocation"), "timeout": recall_timeout}],
+        "PostToolUse": [{"matcher": ".*", "hooks": [{"type": "command", "command": cmd("PostToolUse"), "timeout": 3}]}],
+        "Stop": [{"type": "command", "command": cmd("Stop"), "timeout": 10}],
+    })
+    cleaned["everos"] = everos_spec
+    return json.dumps(cleaned, ensure_ascii=False, indent=2) + "\n"
+
+
 class Installer:
     def __init__(self, repo, dry=False, only=None, rule_hosts=None):
         self.repo, self.dry = Path(repo).resolve(), dry
@@ -419,10 +468,13 @@ class Installer:
         def add(host, path, prefix=""):
             targets.append(dict(self.rules(path, prefix), host=host))
 
-        trae = Path(self.environment.get("TRAE_HOME", str(self.home / ".trae"))).expanduser()
-        if want("trae", any(shutil.which(cli) for cli in ("traecli", "traex", "coco")) or (trae / "traecli.toml").exists()):
-            add("trae", trae / "AGENTS.md")
-        if self.only != "trae":
+        if self.only == "antigravity":
+            add("antigravity", self.home / ".gemini/GEMINI.md")
+        else:
+            trae = Path(self.environment.get("TRAE_HOME", str(self.home / ".trae"))).expanduser()
+            if want("trae", any(shutil.which(cli) for cli in ("traecli", "traex", "coco")) or (trae / "traecli.toml").exists()):
+                add("trae", trae / "AGENTS.md")
+        if self.only not in ("trae", "antigravity"):
             codex = Path(self.environment.get("CODEX_HOME", str(self.home / ".codex")))
             if want("codex", shutil.which("codex") or (codex / "config.toml").exists()):
                 # Codex prefers the nonempty override over AGENTS.md at this level.
@@ -432,8 +484,14 @@ class Installer:
             if want("claude", shutil.which("claude") or (claude / "settings.json").exists()):
                 add("claude", claude / "CLAUDE.md")
             gemini = self.home / ".gemini"
-            if want("gemini", shutil.which("gemini") or (gemini / "settings.json").exists()):
-                add("gemini", gemini / "GEMINI.md")
+            gemini_want = want("gemini", shutil.which("gemini") or (gemini / "settings.json").exists())
+            antigravity_want = want("antigravity", self.antigravity_installed())
+            if gemini_want or antigravity_want:
+                gemini_rule = self.rules(gemini / "GEMINI.md")
+                if gemini_want:
+                    targets.append(dict(gemini_rule, host="gemini"))
+                if antigravity_want:
+                    targets.append(dict(gemini_rule, host="antigravity"))
             kimi = Path(self.environment.get("KIMI_CODE_HOME", str(self.home / ".kimi-code")))
             if want("kimi", shutil.which("kimi") or (kimi / "bin/kimi").exists() or (kimi / "config.toml").exists()):
                 add("kimi", kimi / "AGENTS.md")
@@ -817,6 +875,12 @@ class Installer:
             self.edit(config, set_codex_tool_timeout(
                 enable_codex_hooks(config.read_text() if config.exists() else ""), timeout))
             print("  新或更新的 hook 定义需在新会话中按 Codex 提示审阅并信任，之后自动读写才生效。")
+        if self.only == "antigravity":
+            if not self.antigravity_installed() and not self.dry:
+                raise ValueError("未找到 Google Antigravity（agy、Gemini.app 或 ~/.gemini/config）")
+            self.antigravity()
+            self.finish()
+            return
         for cli in ("traecli", "traex", "coco"):
             if shutil.which(cli):
                 print("== " + cli)
@@ -864,6 +928,8 @@ class Installer:
             self.edit(cursor_home / "skills/everos-memory/SKILL.md",
                       (self.repo / "plugin/skills/everos-memory/SKILL.md").read_text())
         self.mcp_json(self.home / ".gemini/settings.json", create=bool(shutil.which("gemini")))
+        if self.antigravity_installed():
+            self.antigravity()
         kimi_home = Path(self.environment.get("KIMI_CODE_HOME", str(self.home / ".kimi-code")))
         kimi_cli = shutil.which("kimi")
         if not kimi_cli:
@@ -895,6 +961,31 @@ class Installer:
             self.mimocode()
         self.finish()
 
+    def antigravity_installed(self):
+        gemini = self.home / ".gemini"
+        apps = [self.home / "Applications/Gemini.app", self.home / "Applications/Antigravity.app"]
+        if self.home == Path.home():
+            apps.extend([Path("/Applications/Gemini.app"), Path("/Applications/Antigravity.app")])
+        return bool(
+            shutil.which("agy")
+            or (gemini / "config").is_dir()
+            or (gemini / "antigravity").is_dir()
+            or (gemini / "antigravity-cli").is_dir()
+            or any(app.is_dir() for app in apps)
+        )
+
+    def antigravity(self):
+        """Google Antigravity / agy CLI: MCP + hooks + skill in ~/.gemini/config/."""
+        print("== Google Antigravity")
+        config_dir = self.home / ".gemini/config"
+        self.mcp_json(config_dir / "mcp_config.json", create=True)
+        hooks = config_dir / "hooks.json"
+        self.edit(hooks, antigravity_hooks(hooks.read_text() if hooks.exists() else "",
+                                           self.hook, self.everos, self.mcp_timeout_seconds()))
+        self.edit(config_dir / "skills/everos-memory/SKILL.md",
+                  (self.repo / "plugin/skills/everos-memory/SKILL.md").read_text())
+        print("  Antigravity L1–L4 已配置；新会话生效。")
+
     def finish(self):
         self.sync_rules()
         print("== 自检")
@@ -911,9 +1002,9 @@ def main():
     scope = parser.add_mutually_exclusive_group()
     scope.add_argument("--cli-only", action="store_true", help="只安装手动检索命令，不接线宿主或调用 API")
     scope.add_argument("--rules-only", action="store_true", help="只同步已安装宿主原生规则与增量；不调用API或安装插件")
-    parser.add_argument("--rules-host", action="append", choices=["claude", "codex", "trae", "gemini", "kimi", "kimi_desktop", "cursor"],
+    parser.add_argument("--rules-host", action="append", choices=["claude", "codex", "trae", "gemini", "antigravity", "kimi", "kimi_desktop", "cursor"],
                         help="与--rules-only配合，显式指定云端/未启动的原生指令宿主，可重复")
-    scope.add_argument("--only", choices=["trae", "doubao"], help="只刷新指定宿主，不改其他宿主")
+    scope.add_argument("--only", choices=["trae", "doubao", "antigravity"], help="只刷新指定宿主，不改其他宿主")
     args = parser.parse_args()
     if args.rules_host and not args.rules_only:
         parser.error("--rules-host requires --rules-only")

@@ -139,6 +139,7 @@ Agentic 的默认总预算是 180 秒。优先级依次为单次 MCP `timeout` /
 | 宿主 | 说明 |
 | --- | --- |
 | Codex | 插件安装会复制文件。更新后需重跑安装器，新开会话，并审阅当前 hook 定义。 |
+| Google Antigravity | 配置 `~/.gemini/config/mcp_config.json`、`~/.gemini/config/hooks.json`、`~/.gemini/config/skills/everos-memory/SKILL.md` 和 `~/.gemini/GEMINI.md`。可用 `./install.sh --only antigravity` 只更新 Antigravity，随后新开会话。 |
 | Kimi Code | `PATH` 中找不到 `kimi` 时，安装器也会检查 `~/.kimi-code/bin/kimi`。画像在首次提问时注入。 |
 | Kimi Work 桌面端 | App 升级可能覆盖 runtime 配置。重跑 `install.sh`，或在 Windows 上运行 `install.ps1 -KimiDesktop`，再新开会话。 |
 | TraeX | 生命周期 hook 需要 0.209.1 或更新版本。用 `./install.sh --only trae` 只更新 TraeX，再通过 `/hooks` 审阅 hook。[详情](traex-integration.md)。 |

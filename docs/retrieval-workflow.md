@@ -32,6 +32,7 @@
 | --- | --- | --- | --- | --- |
 | Claude Code / Codex | UserPromptSubmit | 共享规则＋8个MCP工具 | PreToolUse方案/修改前，PostToolUse失败后；均无网络、失败放行 | PreCompact失效，SessionStart compact/resume恢复规则 |
 | TraeX | 既有UserPromptSubmit | 共享规则＋MCP | 0.210.1起接入PreToolUse/PostToolUse本地提醒；旧版保留规则补查 | 既有PreCompact/PostCompact |
+| Google Antigravity | PreInvocation（首轮 invocationNum） | 共享规则＋MCP＋skill | PostToolUse记录异常并在紧邻PreInvocation以ephemeralMessage注入；不覆盖工具输出 | 检测transcript.jsonl新增CHECKPOINT步骤自动失效与恢复 |
 | Kimi Code / Kimi Work | 既有提问hook | MCP指令；桌面端同步skill | 不添加未核实事件 | 既有PreCompact或显式memory_context recover |
 | MiMoCode / Desktop | 既有Plugin chat.message | 共享规则＋MCP | tool.execute.before提示进入下次模型上下文；after提示追加工具输出 | experimental.session.compacting本机失效与规则恢复 |
 | 仅MCP客户端 | Agent主动首轮agentic | MCP指令与工具 | 无宿主hook时由Agent判断 | 显式recover |
