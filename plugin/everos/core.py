@@ -1480,6 +1480,15 @@ def clean_antigravity_text(content) -> str | None:
 
 def messages_antigravity(entries: list[dict], host: str = "antigravity") -> list[dict]:
     """Google Antigravity transcript(_full).jsonl：USER_INPUT 为用户提问，PLANNER_RESPONSE 为助手回复。"""
+    deduped: list[dict] = []
+    for o in entries:
+        if not isinstance(o, dict) or o.get("status") == "ERROR":
+            continue
+        idx = o.get("step_index")
+        if isinstance(idx, int):
+            while deduped and isinstance(deduped[-1].get("step_index"), int) and deduped[-1]["step_index"] >= idx:
+                deduped.pop()
+        deduped.append(o)
     msgs: list[dict] = []
     buf: list[str] = []
     buf_ts = 0
@@ -1491,9 +1500,7 @@ def messages_antigravity(entries: list[dict], host: str = "antigravity") -> list
                          "content": clip("\n\n".join(buf))})
             buf, buf_ts = [], 0
 
-    for o in entries:
-        if not isinstance(o, dict) or o.get("status") == "ERROR":
-            continue
+    for o in deduped:
         t = o.get("type")
         src = o.get("source")
         stamp = ts_ms(o.get("created_at") or o.get("timestamp"))

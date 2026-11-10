@@ -19,7 +19,7 @@
     "plugin/doubao/doubao.py": "a26d8c266110ad804b5e694cd39839cdf9915ac3720a5f6e1f23bd67addcfade",
     "plugin/doubao/mcp_call.py": "6b950e6a4edd704e08cedfd3f39ca6093e677affdb72266519db33ad13e3a552",
     "plugin/everos/cli.py": "8f1360fc9c9f669d8b44732922deac5f841f24d310585d3de98d75379c958fa6",
-    "plugin/everos/core.py": "735333d761a8b80960340c13f42246bf0d552c406fd0e4f9e2dfb1a2059c24a9",
+    "plugin/everos/core.py": "c0a3074c4b0bb52d3f1bdd5459b4610932a781fd50c2caa0c8ed72d0e05bb401",
     "plugin/everos/hook.py": "3444fe14402d0d09229cc0a71fabcef29f8bd7351f5c52a88fe9a033a46a3526",
     "plugin/everos/mcp_server.py": "6176752d6af54a752b3b46826037737f602c41857a861fb2390d4ca003058617",
     "plugin/everos/recall.py": "ccb08a78c228cb6479f8f1cb9143e667a3852cd842cecf3ffc826942e73f95b0",
@@ -58,7 +58,7 @@
     "tests/test_config_env.py": "d45bc611a5a41be2567aa1dfb077a87cd03e10726f25f95b3230c47b55b3dca2",
     "tests/test_explicit_flush.py": "c30d42a9945975e23392c228e62c7117fc039f7f5951ac7ca11dd30e89853897",
     "tests/test_flush_interfaces.py": "5bf0198617653719b80b1d0f2fb966bfbfb770293a01686cfadf1fdd84eb7f31",
-    "tests/test_antigravity.py": "ddc527f378fefc5bf39e42335904eec4b3b744488a0fff50d18317b0976db165"
+    "tests/test_antigravity.py": "d8d47ce0bc2ac4ce7c9dc69beeea196d9cd91e65eab4e6344c33e61b76abbcfe"
   },
   "reviewed_changes": [
     "Google Antigravity host integration: add L1-L4 support (mcp_config.json, hooks.json, GEMINI.md, everos-memory skill, SessionStart/PreInvocation/PostToolUse/Stop lifecycle hooks, transcript_full.jsonl dialogue parser, and CHECKPOINT compaction recovery) plus isolated unit/installer regressions; shared Windows lock/subprocess overlay anchors unchanged.",

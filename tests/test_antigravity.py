@@ -82,6 +82,7 @@ class AntigravityTests(IsolatedCore):
 
     def test_dialogue_parses_user_request_planner_responses_and_botmux(self):
         rows = [
+            user_step(0, "被重试覆盖的提问", created_at="2026-11-10T01:59:00Z"),
             user_step(0, "接入 everos-bridge 并提 PR"),
             planner_step(1, tool_calls=[{"name": "run_command", "args": {"CommandLine": "git status"}}]),
             {"step_index": 2, "source": "MODEL", "type": "GENERIC", "status": "DONE",
