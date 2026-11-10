@@ -826,6 +826,40 @@ class InstallerTests(unittest.TestCase):
         backups = [path for path in link.parent.glob("PROTOCOL.md.bak-everos-*")]
         self.assertEqual([path.read_text() for path in backups], ["stale copy\n"])
 
+    def test_antigravity_installs_mcp_hooks_skill_and_rules_preserving_user_hooks(self):
+        (self.home / "Applications/Gemini.app").mkdir(parents=True)
+        hooks_path = self.put(".gemini/config/hooks.json", json.dumps({
+            "linter": {
+                "PreInvocation": [{"type": "command", "command": "./scripts/lint.sh", "timeout": 5}],
+                "PostToolUse": [{"matcher": "run_command", "hooks": [
+                    {"type": "command", "command": "python3 /old/everos/hook.py", "timeout": 3},
+                    {"type": "command", "command": "./scripts/post.sh", "timeout": 3},
+                ]}],
+            },
+            "everos": {"enabled": True},
+        }))
+        mcp_path = self.put(".gemini/config/mcp_config.json", json.dumps({
+            "mcpServers": {"other": {"command": "node", "args": ["srv.js"]}}
+        }))
+        self.run_install("--only", "antigravity")
+        mcp_data = json.loads(mcp_path.read_text())
+        self.assertIn("other", mcp_data["mcpServers"])
+        self.assertEqual(mcp_data["mcpServers"]["everos"]["env"]["EVEROS_HOME"], str(self.home / ".everos"))
+        hooks_data = json.loads(hooks_path.read_text())
+        self.assertIn("linter", hooks_data)
+        self.assertEqual(len(hooks_data["linter"]["PostToolUse"][0]["hooks"]), 1)
+        self.assertEqual(hooks_data["linter"]["PostToolUse"][0]["hooks"][0]["command"], "./scripts/post.sh")
+        everos_spec = hooks_data["everos"]
+        self.assertTrue(everos_spec["enabled"])
+        self.assertEqual(everos_spec["PreInvocation"][0]["timeout"], 190)
+        self.assertEqual(everos_spec["PostToolUse"][0]["matcher"], ".*")
+        self.assertIn("EVEROS_HOOK_EVENT=Stop", everos_spec["Stop"][0]["command"])
+        self.assertEqual((self.home / ".gemini/config/skills/everos-memory/SKILL.md").read_text(), "repo skill v1\n")
+        self.assertIn("每条提问检索；每轮对话入库。", (self.home / ".gemini/GEMINI.md").read_text())
+
+    def test_antigravity_only_without_host_fails(self):
+        self.run_install("--only", "antigravity", expect=1)
+
 
 def shlex_split(command):
     import shlex

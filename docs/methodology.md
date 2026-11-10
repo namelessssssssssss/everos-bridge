@@ -127,6 +127,9 @@ EverOS 是所有 agent、所有设备共用的记忆主库。
 | TraeX config API 的 keyPath 按点分割 | hook 路径含点时，带引号的 keyPath 仍可能拆错 | 对 `hooks.state` 写完整键对象，并用 hooks/list 回读信任状态；安装器本身不自动信任 |
 | TraeX 主目录重复发现同一 hook | 同一路径同时显示为 user / project，事件触发两次 | 读侧按 session 加锁、按 turn + prompt 去重，SessionStart 同来源两秒内去重；写侧沿用文件锁与偏移 |
 | TraeX UUIDv7 前八位相同 | 一分钟内创建的两个同名工作区会话可能混写 | TraeX 的 EverOS session 保留完整 UUID，其他宿主命名保持兼容 |
+| Google Antigravity 的 `transcript.jsonl` 截断长消息 | 含 `truncated_fields` 的长对话在 `transcript.jsonl` 中被截断 | `antigravity_transcript()` 优先读取同目录未截断的 `transcript_full.jsonl`，不存在时回退 `transcript.jsonl` |
+| Google Antigravity 的 `PreInvocation` 在单轮工具调用循环中触发多次 | 工具返回后再次调用模型时若重复跑提问检索，会浪费预算并重复注入 | 只在 `invocationNum <= 1`（或该轮 `initialNumSteps` 首次调用）时执行用户提问检索；后续调用只消费 `PostToolUse` 暂存的本地异常提醒 |
+| Google Antigravity 的 `PostToolUse` 仅支持 `overwriteResult` | 直接在 `PostToolUse` 返回文本会覆盖工具的真实输出 | `PostToolUse` 返回 `{}` 并把本地异常提醒暂存到会话状态，由紧邻的下一次 `PreInvocation` 以 `ephemeralMessage` 注入 |
 
 ## 演进路线
 

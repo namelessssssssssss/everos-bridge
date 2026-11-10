@@ -68,6 +68,7 @@ def entries(home):
         ('claude_desktop_linux', home/'.config/Claude/claude_desktop_config.json', 'mcpServers'),
         ('cursor', home/'.cursor/mcp.json', 'mcpServers'),
         ('gemini', home/'.gemini/settings.json', 'mcpServers'),
+        ('antigravity', home/'.gemini/config/mcp_config.json', 'mcpServers'),
     ]
     result = []
     for host, path, kind in paths:

@@ -59,6 +59,7 @@
    - 原生 Windows 的 Codex 使用 `install.ps1`（先 `-DryRun`），Kimi Work 桌面端使用 `install.ps1 -KimiDesktop`；都不运行 Bash 安装器，解释器可用 `-Python` 指定。详见 [Windows 接入](docs/windows-integration.md)，其他 Windows 宿主尚未覆盖。
    - 各宿主的原生默认指令在首次接入、更新时都同步Bridge管理块及版本（AGENTS/CLAUDE/GEMINI、Cursor常驻规则、MiMo instructions等）；用户其它内容保留。接入Agent要读 `memory_rules(section="changes")` 理解增删改，再读当前规则并回读原生入口；仅刷新规则可用 `install.sh --rules-only`。基线缺失、仅MCP宿主的原生记忆工具缺失须如实报告，见 [docs/rule-sync.md](docs/rule-sync.md)。
    - TraeX ≥ 0.209.1 已覆盖 L3/L4；只刷新它用 `install.sh --only trae`。用户级 hook 在 `$TRAECLI_HOME/hooks.json`，默认 `~/.trae/cli/hooks.json`。安装后在 `/hooks` 审阅并信任当前定义，再验收新会话的自动注入和采集。
+   - Google Antigravity 已覆盖 L1–L4（`~/.gemini/config/mcp_config.json`、`~/.gemini/config/hooks.json`、`~/.gemini/config/skills/everos-memory/SKILL.md` 及 `~/.gemini/GEMINI.md`）；只刷新它用 `install.sh --only antigravity`。
    - Claude Desktop 运行时会用内存里的配置覆盖外部改动，脚本检测到它在运行就不写，会给出指引：退出 App 后重跑，或在 App 设置里手动加。
    - 发现规则包、安装记录或宿主原生指令与已确认的当前规则源不一致时，自动执行更新流程，无需再次询问：先核实规则源与目标宿主，读取增量及当前规则，再运行对应安装器并回读版本和管理块；仅规则差异走规则刷新，接线或运行版本差异走完整安装。旧缓存不得反向覆盖较新规则；来源不明、文件冲突、权限或宿主信任受限时保留现场并报告具体阻碍，不伪称更新完成。 具体步骤见 [原生规则同步](docs/rule-sync.md#发现差异后的自动更新)。
 4. **验证**：分别核对文件同步、工具可用和真实新会话行为，不能互相替代；权限、信任或配额阻止某项时，保留已完成结果并明确该项待验证。
