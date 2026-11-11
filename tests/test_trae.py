@@ -182,7 +182,9 @@ class TraeTests(IsolatedCore):
             self.lifecycle("Stop")
             proc.assert_not_called()
         with patch.object(core, "profile_text", side_effect=RuntimeError("offline")):
-            self.assertEqual(self.lifecycle("SessionStart"), "")
+            text = json.loads(self.lifecycle("SessionStart"))["hookSpecificOutput"]["additionalContext"]
+            self.assertTrue(text.startswith("【EverOS 使用说明】"))
+            self.assertIn("画像读取失败", text)
         self.assertIn("offline", core.LOG.read_text())
 
     def test_profile_once_then_postcompact_restores_on_next_prompt(self):

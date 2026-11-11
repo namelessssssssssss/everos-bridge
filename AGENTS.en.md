@@ -25,7 +25,7 @@ When installation/update is already authorized, continue through preflight → d
 
 Restore the default memory workflow according to the current host's actual capabilities. Do not describe an MCP-only or skill-based host as already running automatically:
 
-- Read the profile at session start, through automatic injection or an explicit agent call as supported by the host.
+- Provide proactive-retrieval usage guidance before the profile at session start, through automatic injection or an explicit agent call as supported by the host.
 - Use agentic retrieval for the first search prompted by each user message, falling back to hybrid per source on failure or no matches. Inject automatically where supported; otherwise the agent follows its instructions to call the tool.
 - Save conversation text each turn in hosts with automatic capture. Other hosts explicitly save available content through their skill or tools.
 - Add structured records through MCP at important milestones, reporting automatic and agent-invoked capabilities separately.

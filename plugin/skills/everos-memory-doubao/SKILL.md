@@ -22,6 +22,8 @@ everos-mcp list                       # 应包含 memory_flush 等 memory_* 工�
 
 ## 读（L3，没有 hook，每轮主动执行）
 
+- 遇到不熟悉的概念、缩写、项目/系统、人物关系或任务背景时，主动结合当前任务查询 EverOS；摘要不足用 memory_open 读正文，再沿一两条关键线索补查。证据充分或无新增时停止，不必等用户要求回忆。
+
 - 首轮先读画像：`everos-mcp memory_profile '{}'`
 - **每条用户消息的首次检索必须用 agentic**（首轮和后续轮都一样），不要先跑 hybrid 再决定是否深查。
   **一律用 Bash 后台运行**（`run_in_background: true`），拿到任务 ID 后继续干活：
