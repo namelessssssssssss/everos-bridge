@@ -124,6 +124,14 @@ In 0.10.0+, v2 remember/practice writes, conversation lifecycle events, MiMo cap
 
 An acknowledged add can advance capture progress. A failed flush retains its pending confirmation without resending that add. Local pending state records the absence of a confirmed local flush; it does not prove that Cloud still has unprocessed messages. A successful flush also does not guarantee immediate search visibility or a practice case. All explicit flushes obey `EVEROS_WRITE=0` and quota controls. After upgrading, reconnect MCP or open a new agent session to load the new tool and instructions.
 
+## Session-start guidance
+
+On hosts with injection support, Bridge puts a short EverOS usage guide before the profile. It asks the agent to investigate unfamiliar concepts, abbreviations, projects, systems, relationships, and task background without waiting for an explicit request to remember.
+
+The guide gives an actionable path: combine the concept and current task in `memory_search(method="agentic")`, expand incomplete summaries with `memory_open`, then follow one or two relevant entities, decisions, or dependencies. Reuse sufficient evidence, stop when the branch adds nothing, and check historical memories against current facts.
+
+The guide is local text and adds no network request. It can appear with an empty profile or a read failure; failures are reported rather than treated as empty successful retrievals. It is deduplicated by context and guide version, and returns after a context reset. Kimi receives it on the first prompt; MiMo receives it at its first injection entry point. A first-prompt fallback covers a missed SessionStart. `EVEROS_INJECT=0` disables it together with automatic injection. Existing retrieval budgets and memory-result deduplication remain in effect.
+
 ## Retrieval timeouts
 
 Hooks and MCP `memory_search` start with `agentic`; the standalone CLI defaults to `hybrid`. Failure, timeout, or no matches can trigger per-source hybrid fallback within the same deadline. Legacy v1 queries always use hybrid.

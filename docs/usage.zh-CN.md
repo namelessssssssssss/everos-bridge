@@ -124,6 +124,14 @@ everos flush --conversation-id NATIVE_SESSION_ID \
 
 已确认的 add 可以推进采集进度。Flush 失败时保留待确认状态，不会重新发送该次已确认的 add。本机 pending 状态表示尚未取得本机 flush 确认，不能据此断言 Cloud 中仍有未处理的消息。Flush 成功也不保证立即可检索或一定生成做法 case。所有显式 flush 都受 `EVEROS_WRITE=0` 和配额控制。升级后，重连 MCP 或新开 agent 会话，才能加载新工具和指令。
 
+## 会话启动说明
+
+在支持注入的宿主上，Bridge 会在画像前放一段简短的 EverOS 使用说明，引导 Agent 主动了解陌生概念、缩写、项目、系统、人物关系和任务背景，不必等用户明确要求回忆。
+
+说明给出具体路径：结合概念与当前任务调用 `memory_search(method="agentic")`，用 `memory_open` 展开不完整摘要，再沿一两条相关实体、历史决定或依赖定向补查。证据充分时复用，没有新增信息时停止，并将历史记忆与当前事实核对。
+
+说明是本机文本，不额外发起网络请求。空画像或读取失败时也能提供；失败会明确呈现，不会当成成功的空检索。说明按上下文和说明版本去重，上下文重置后重新提供。Kimi 在首条提问收到，MiMo 在首次可注入入口收到；首次提问的兜底会补齐漏收的 SessionStart。`EVEROS_INJECT=0` 会随自动注入一起关闭它。既有检索预算和记忆结果去重继续生效。
+
 ## 检索超时
 
 Hook 和 MCP `memory_search` 首次使用 `agentic`；独立 CLI 默认使用 `hybrid`。失败、超时或未命中时，可在同一截止时间内按来源回退到 hybrid。旧版 v1 查询始终使用 hybrid。

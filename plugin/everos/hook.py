@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """生命周期 hook 入口：Claude Code、Codex（插件，都设置 CLAUDE_PLUGIN_ROOT）与 Kimi Code / Kimi Work 桌面端（config.toml [[hooks]]）共用。
 
-  SessionStart      注入用户画像
+  SessionStart      先注入主动检索使用说明，再注入用户画像
   UserPromptSubmit  每条提问都按提问检索并注入相关记忆（得分门槛 + 会话内去重 + 预算上限）
   Stop              把新增的完整轮次写入 EverOS（转交后台子进程，立即返回）
   SessionEnd / PreCompact  补写剩余轮次；v2 抽取由服务端或显式 memory_flush 处理
@@ -115,6 +115,29 @@ def emit(event: str, text: str) -> None:
                      ensure_ascii=False))
 
 
+def usage_blocks(state: dict) -> list[str]:
+    """Local instructions, once per context; independent of profile contents."""
+    revision = recall.digest(recall.STARTUP_GUIDE)
+    if state.get("usage_guide_revision") == revision:
+        return []
+    state["usage_guide_revision"] = revision
+    return ["【EverOS 使用说明】\n" + recall.STARTUP_GUIDE]
+
+
+def profile_blocks(state: dict, budget: float) -> list[str]:
+    blocks = usage_blocks(state)
+    try:
+        profile = core.profile_text(budget=budget)
+    except Exception as exc:
+        core.log_error("startup profile failed", exc)
+        blocks.append("【EverOS 读取提示】本次画像读取失败；已有使用说明仍适用，后续按需补查。")
+        return blocks
+    if profile:
+        blocks.append(f"【EverOS 用户画像】{HEADER}\n{profile}")
+        state.update(profile_injected=True, needs_profile=False)
+    return blocks
+
+
 def build_prompt_blocks(sid: str, prompt: str, *, need_profile: bool = False) -> list[str]:
     """按提问检索并可选补画像；会话内去重。返回待注入文本块。"""
     state_p = recall.state_path(sid or "nosession")
@@ -127,17 +150,20 @@ def build_prompt_blocks(sid: str, prompt: str, *, need_profile: bool = False) ->
     budget = core.agentic_timeout()
     deadline = time.monotonic() + max(0.0, budget)
     chars = int(core._num("EVEROS_RECALL_CHARS", 2000))
-    blocks = []
+    blocks = usage_blocks(st)
     need_profile = need_profile or bool(st.get("needs_profile")) or (
         os.environ.get("EVEROS_HOST", HOST_OVERRIDE) in ("trae", "antigravity") and not st.get("profile_injected"))
     if need_profile:
-        profile = core.profile_text(budget=max(0.0, min(core.READ_TIMEOUT, budget, deadline - time.monotonic())))
-        if profile:
-            blocks.append(f"【EverOS 用户画像】{HEADER}\n{profile}")
-            st.update(profile_injected=True, needs_profile=False)
+        blocks.extend(profile_blocks(st, max(0.0, min(core.READ_TIMEOUT, budget, deadline - time.monotonic()))))
     notices = []
-    items = core.search_items(question, top_k=5, budget=max(0.0, min(budget, deadline - time.monotonic())),
-                              v1_episodes=3 if core.substantial(prompt) else 0, method="agentic", notices=notices)
+    retrieved = True
+    try:
+        items = core.search_items(question, top_k=5, budget=max(0.0, min(budget, deadline - time.monotonic())),
+                                  v1_episodes=3 if core.substantial(prompt) else 0, method="agentic", notices=notices)
+    except Exception as exc:
+        core.log_error("prompt recall failed", exc)
+        items, retrieved = [], False
+        blocks.append("【EverOS 读取提示】本次自动召回失败；不能据此判断没有相关记忆，后续按需补查。")
     if notices:
         blocks.append("【EverOS 检索提示】\n" + "\n".join(notices))
     seen = set(st.get("ids") or [])
@@ -146,7 +172,8 @@ def build_prompt_blocks(sid: str, prompt: str, *, need_profile: bool = False) ->
     if text:
         blocks.append(f"【EverOS 相关记忆】{HEADER}\n{text}")
         seen.update(shown_ids)
-    recall.record_coverage(st, question, fresh, shown_ids)
+    if retrieved:
+        recall.record_coverage(st, question, fresh, shown_ids)
     if not st.get("turns") or st.pop("needs_retrieval_policy", False):
         blocks.append(f"【EverOS 检索用法】session_id={sid}\n" + recall.POLICY +
                       f"\n需要按需抽取本会话已采集的消息时，memory_flush 使用 conversation_id={sid} 并说明 reason。"
@@ -218,15 +245,12 @@ def main() -> int:
                 return 0
             sid = str(data.get("session_id") or "")
             if data.get("profile_only"):
-                state_p = recall.state_path(sid or "nosession")
-                st = core.load_state(state_p)
-                if st.get("profile_injected") and not st.get("needs_profile"):
-                    return 0
-                profile = core.profile_text(budget=core._num("EVEROS_RECALL_TIMEOUT", 18))
-                if profile:
-                    st.update(profile_injected=True, needs_profile=False)
-                    recall.save_state(state_p, st)
-                    print(f"【EverOS 用户画像】{HEADER}\n{profile}")
+                with recall.locked(sid or "nosession") as st:
+                    blocks = usage_blocks(st)
+                    if not st.get("profile_injected") or st.get("needs_profile"):
+                        blocks.extend(profile_blocks(st, core._num("EVEROS_RECALL_TIMEOUT", 18)))
+                    if blocks:
+                        print("\n\n".join(blocks))
                 return 0
             prompt = str(data.get("query") or "").strip()
             if not prompt or prompt.startswith(core._SKIP_PREFIX + ("<system-reminder>",)):
@@ -316,15 +340,14 @@ def main() -> int:
                                 time.time() - st.get("last_profile_at", 0) < 2):
                             emit_antigravity("SessionStart")
                             return 0
-                        text = core.profile_text(budget=min(core.READ_TIMEOUT, core._num("EVEROS_RECALL_TIMEOUT", 18)))
-                        if text:
+                        blocks = profile_blocks(st, min(core.READ_TIMEOUT, core._num("EVEROS_RECALL_TIMEOUT", 18)))
+                        if blocks:
                             emit_antigravity(
                                 "SessionStart",
-                                f"【EverOS 用户画像】{HEADER}\n{text}"
+                                "\n\n".join(blocks)
                                 + ("\n" + recall.POLICY if payload.get("source") in ("compact", "resume") else ""),
                             )
-                            st.update(profile_injected=True, needs_profile=False,
-                                      last_profile_source=source, last_profile_at=time.time())
+                            st.update(last_profile_source=source, last_profile_at=time.time())
                         else:
                             emit_antigravity("SessionStart")
                         return 0
@@ -361,6 +384,9 @@ def main() -> int:
                 with open(state_p.with_suffix(".lock"), "w") as lock:
                     fcntl.flock(lock, fcntl.LOCK_EX)
                     st = core.load_state(state_p)
+                    if st.get("identity") not in (None, recall.identity()):
+                        st = {}
+                    st["identity"] = recall.identity()
                     if event == "UserPromptSubmit":
                         turn = payload.get("turn_id")
                         key = str(turn) + ":" + hashlib.sha256(str(payload.get("prompt", "")).encode()).hexdigest()
@@ -376,17 +402,17 @@ def main() -> int:
                         if (st.get("last_profile_source") == source and
                                 time.time() - st.get("last_profile_at", 0) < 2):
                             return 0
-                        text = core.profile_text(budget=min(core.READ_TIMEOUT, core._num("EVEROS_RECALL_TIMEOUT", 18)))
-                        if text:
-                            emit("SessionStart", f"【EverOS 用户画像】{HEADER}\n{text}" + ("\n" + recall.POLICY if payload.get("source") in ("compact", "resume") else ""))
-                            st.update(profile_injected=True, needs_profile=False,
-                                      last_profile_source=source, last_profile_at=time.time())
+                        blocks = profile_blocks(st, min(core.READ_TIMEOUT, core._num("EVEROS_RECALL_TIMEOUT", 18)))
+                        if blocks:
+                            emit("SessionStart", "\n\n".join(blocks) + ("\n" + recall.POLICY if payload.get("source") in ("compact", "resume") else ""))
+                            st.update(last_profile_source=source, last_profile_at=time.time())
                             recall.save_state(state_p, st)
                 return 0
             if event == "SessionStart" and not kimi:
-                text = core.profile_text(budget=min(core.READ_TIMEOUT, core._num("EVEROS_RECALL_TIMEOUT", 18)))
-                if text:
-                    emit("SessionStart", f"【EverOS 用户画像】{HEADER}\n{text}" + ("\n" + recall.POLICY if payload.get("source") in ("compact", "resume") else ""))
+                with recall.locked(sid0 or "nosession") as st:
+                    blocks = profile_blocks(st, min(core.READ_TIMEOUT, core._num("EVEROS_RECALL_TIMEOUT", 18)))
+                    if blocks:
+                        emit("SessionStart", "\n\n".join(blocks) + ("\n" + recall.POLICY if payload.get("source") in ("compact", "resume") else ""))
             elif event == "UserPromptSubmit":
                 on_prompt(payload, kimi=kimi)
             return 0
