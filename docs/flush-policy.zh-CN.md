@@ -15,7 +15,7 @@ MCP 工具 `memory_flush` 与 CLI 命令 `everos flush` 的行为相同。两者
 | `session_id` / `--session-id` | 结构化写入回执返回的 EverOS 会话 ID |
 | `conversation_id` / `--conversation-id` | 提问 hook 中显示的宿主原生会话 ID；通过已有的本机采集账本解析 |
 
-这两种 ID 不同。不要将宿主原生会话 UUID 当成 EverOS session ID 传入。尚未采集并写入消息的会话没有可供此命令抽取的内容。宿主尚未保存当前最终回复时，此命令不会先读取或上传它。如果交接需要立即使用某个结论，先用 `memory_remember` 保存结论，再在有必要时使用回执中的目标 ID 触发抽取。
+这两种 ID 不同。不要将宿主原生会话 UUID 当成 EverOS session ID 传入。尚未采集并写入消息的会话没有可供此命令抽取的内容。宿主尚未保存当前最终回复时，此命令不会先读取或上传它。如果交接需要立即使用某个结论，先用 `memory_remember` 保存结论（已有本机采集账本时可一并传入 `conversation_id` 并入同一 EverOS 会话缓冲，无账本则自动归入宿主当日连续会话缓冲），再在有必要时使用回执中的目标 ID 触发抽取。
 
 MCP 参数示例；请将占位符替换为实际写入回执中的 ID：
 

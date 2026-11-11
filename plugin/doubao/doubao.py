@@ -50,8 +50,8 @@ def parse_ts(value: str) -> int:
 
 
 def clean_user(text: str) -> str:
-    """Strip system-reminder blocks; the harness repeats them on every turn."""
-    return core._REMINDER.sub("", text).strip()
+    """Strip injected memory and system-reminder blocks; the harness repeats them on every turn."""
+    return core._REMINDER.sub("", core.strip_injected_memory(text)).strip()
 
 
 def text_of(content) -> str:

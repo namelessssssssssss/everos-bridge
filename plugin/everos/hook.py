@@ -138,7 +138,20 @@ def profile_blocks(state: dict, budget: float) -> list[str]:
     return blocks
 
 
-def build_prompt_blocks(sid: str, prompt: str, *, need_profile: bool = False) -> list[str]:
+def record_turn_prompt(state: dict, turn_id: object, prompt: str) -> None:
+    if turn_id is None or not str(turn_id).strip() or not prompt:
+        return
+    prompts = dict(state.get("turn_prompts") or {})
+    tid = str(turn_id).strip()
+    prompts.pop(tid, None)
+    prompts[tid] = prompt[:2000]
+    while len(prompts) > 32:
+        prompts.pop(next(iter(prompts)))
+    state["turn_prompts"] = prompts
+
+
+def build_prompt_blocks(sid: str, prompt: str, *, need_profile: bool = False,
+                        turn_id: object = None) -> list[str]:
     """按提问检索并可选补画像；会话内去重。返回待注入文本块。"""
     state_p = recall.state_path(sid or "nosession")
     st = core.load_state(state_p)
@@ -146,6 +159,7 @@ def build_prompt_blocks(sid: str, prompt: str, *, need_profile: bool = False) ->
         st = {}
     st["identity"] = recall.identity()
     st.setdefault("goal", prompt[:500])
+    record_turn_prompt(st, turn_id, prompt)
     question = recall.query_text(prompt, recall.context_text(st) if st.get("clues") or st.get("stage") else "")
     budget = core.agentic_timeout()
     deadline = time.monotonic() + max(0.0, budget)
@@ -176,7 +190,8 @@ def build_prompt_blocks(sid: str, prompt: str, *, need_profile: bool = False) ->
         recall.record_coverage(st, question, fresh, shown_ids)
     if not st.get("turns") or st.pop("needs_retrieval_policy", False):
         blocks.append(f"【EverOS 检索用法】session_id={sid}\n" + recall.POLICY +
-                      f"\n需要按需抽取本会话已采集的消息时，memory_flush 使用 conversation_id={sid} 并说明 reason。"
+                      f"\n结构化补写 memory_remember 可传 conversation_id={sid} 并入本会话缓冲；"
+                      f"需要按需抽取本会话已采集的消息时，memory_flush 使用 conversation_id={sid} 并说明 reason。"
                       "不要把这个原生ID当成EverOS session_id；尚未采集的当前最终回复不在flush范围内。"
                       "仅在交接、流程完成、话题转移或立即检索有需要时调用，其他时候由服务端处理。")
     st.update(turns=st.get("turns", 0) + 1, ids=sorted(seen)[-500:])
@@ -195,7 +210,7 @@ def on_prompt(payload: dict, kimi: bool = False) -> None:
     st = core.load_state(state_p)
     first = not st.get("turns") or st.get("identity") not in (None, recall.identity())
     need_profile = bool(kimi and first)  # Kimi 的 SessionStart 只通知不注入，画像放到首条提问一起给
-    blocks = build_prompt_blocks(sid, prompt, need_profile=need_profile)
+    blocks = build_prompt_blocks(sid, prompt, need_profile=need_profile, turn_id=payload.get("turn_id"))
     if not blocks:
         return
     if kimi:
@@ -416,7 +431,7 @@ def main() -> int:
             elif event == "UserPromptSubmit":
                 on_prompt(payload, kimi=kimi)
             return 0
-        if event in ("Stop", "SessionEnd", "PreCompact") and c.get("EVEROS_WRITE") != "0":
+        if event in ("Stop", "SessionEnd", "PreCompact") and c.get("EVEROS_WRITE") != "0" and not core.is_subagent_payload(payload):
             # 转交后台子进程，自己马上退出（SessionEnd 只有约 1.5 秒预算）
             worker_env = {**os.environ, "EVEROS_HOST": "antigravity"} if antigravity else {**os.environ}
             worker_input = json.dumps(payload, ensure_ascii=False) if antigravity else raw

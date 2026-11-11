@@ -237,3 +237,89 @@ class ExplicitFlushTests(IsolatedCore):
         self.assertFalse(f.is_alive() or w.is_alive())
         self.assertTrue(self.ledger()['pending'])
         self.assertEqual(self.ledger()['messages'], 2)
+
+    def test_remember_without_conversation_id_aggregates_same_day_topics_and_keeps_topic_tag(self):
+        self.api.return_value = response("accumulated")
+        first = core.remember("codex", "topic_alpha", "decision A", "user raw words")
+        second = core.remember("codex", "topic_beta", "[topic_beta]\ndecision B", "second raw")
+        third = core.remember("codex", "topic_gamma", "decision C")
+        self.assertEqual(self.api.call_count, 3)
+        sids = [call.args[1]["session_id"] for call in self.api.call_args_list]
+        self.assertEqual(len(set(sids)), 1)
+        self.assertRegex(sids[0], r"^codex_\d{8}$")
+        self.assertIn("session_id=" + sids[0], first)
+        self.assertIn("session_id=" + sids[0], second)
+        self.assertIn("session_id=" + sids[0], third)
+        m1 = self.api.call_args_list[0].args[1]["messages"]
+        self.assertEqual(m1[0]["content"], "user raw words")
+        self.assertEqual(m1[1]["content"], "[topic_alpha]\ndecision A")
+        m2 = self.api.call_args_list[1].args[1]["messages"]
+        self.assertEqual(m2[1]["content"], "[topic_beta]\ndecision B")
+        m3 = self.api.call_args_list[2].args[1]["messages"]
+        self.assertEqual(m3[0]["content"], "（codex 记录）topic_gamma")
+        self.assertEqual(m3[1]["content"], "decision C")
+
+    def test_remember_with_conversation_id_coalesces_into_ledger_or_falls_back_cleanly(self):
+        self.api.return_value = response("accumulated")
+        turn1 = core.remember("antigravity", "init_topic", "turn 1 note", conversation_id="unseen_conv")
+        first_sid = self.api.call_args.args[1]["session_id"]
+        self.assertRegex(first_sid, r"^antigravity_\d{8}$")
+        self.assertIn("session_id=" + first_sid, turn1)
+
+        self.api.reset_mock()
+        self.api.return_value = response("extracted")
+        payload = self.transcript("real turn")
+        core.write_turns(payload)
+        before = self.ledger()
+        core.flush_memory("checkpoint", conversation_id="test_session")
+        self.assertFalse(self.ledger()["pending"])
+
+        self.api.reset_mock()
+        self.api.return_value = response("accumulated")
+        receipt = core.remember("codex", "turn_summary", "final conclusion", "real turn",
+                                conversation_id="test_session")
+        after = self.ledger()
+        self.assertEqual(self.api.call_args.args[1]["session_id"], before["everos_session_id"])
+        self.assertIn("session_id=" + before["everos_session_id"], receipt)
+        self.assertEqual(after["offset"], before["offset"])
+        self.assertTrue(after["pending"])
+        self.assertEqual(after["messages"], before["messages"] + 2)
+
+        doubao_ledger = core.SESS_DIR / "doubao_12345678.json"
+        core.save_state(doubao_ledger, {
+            "everos_session_id": "dw_20261111_demo_12345678", "api": "v2",
+            "pending": False, "offset": 42, "identity": core._write_identity(),
+        })
+        self.api.reset_mock()
+        dw_receipt = core.remember("doubao_work", "topic", "note", conversation_id="dw_12345678")
+        self.assertIn("session_id=dw_20261111_demo_12345678", dw_receipt)
+        self.assertEqual(core.load_state(doubao_ledger)["offset"], 42)
+        self.assertTrue(core.load_state(doubao_ledger)["pending"])
+        self.api.return_value = response("extracted")
+        core.flush_memory("done", conversation_id="dw_12345678")
+        self.assertFalse(core.load_state(doubao_ledger)["pending"])
+
+        self.api.reset_mock()
+        for bad in ("../escape", ".."):
+            with self.assertRaises(ValueError):
+                core.remember("codex", "t", "c", conversation_id=bad)
+        with patch.dict(os.environ, {"EVEROS_USER_ID": "other_owner"}), self.assertRaises(ValueError):
+            core.remember("codex", "t", "c", conversation_id="test_session")
+        self.api.assert_not_called()
+
+    def test_localmem_groups_notes_by_project_with_monotonic_timestamps(self):
+        first = self.local_note()
+        second = first.parent / "second.md"
+        first.write_text("---\nname: alpha\ndescription: first desc\ntype: project\n---\nbody A", encoding="utf-8")
+        second.write_text("---\nname: beta\ndescription: second desc\ntype: user\n---\nbody B", encoding="utf-8")
+        self.api.return_value = response("accumulated")
+        core.sync_local_memory()
+        self.assertEqual(self.api.call_count, 2)
+        sids = [call.args[1]["session_id"] for call in self.api.call_args_list]
+        self.assertEqual(sids, ["cc_localmem_project", "cc_localmem_project"])
+        msgs_a = self.api.call_args_list[0].args[1]["messages"]
+        msgs_b = self.api.call_args_list[1].args[1]["messages"]
+        self.assertIn("alpha", msgs_a[0]["content"])
+        self.assertIn("beta", msgs_b[0]["content"])
+        stamps = [m["timestamp"] for m in (*msgs_a, *msgs_b)]
+        self.assertEqual(stamps, sorted(set(stamps)))

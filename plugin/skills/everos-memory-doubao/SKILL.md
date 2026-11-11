@@ -71,7 +71,7 @@ everos-mcp list                       # 应包含 memory_flush 等 memory_* 工�
 ## 写（结构化记录，关键节点主动调用）
 
 - 结论、决策、纠错、偏好、项目事实：`everos-mcp memory_remember @<args.json>`，参数
-  `{"topic","content","user_said"}`；同一话题沿用同一个 topic。
+  `{"topic","content","user_said","conversation_id":"dw_<会话id>"}`；同一话题沿用同一个 topic。已采集过本会话时自动并入同一 `dw_...` 会话缓冲，首轮尚未采集时归入 `doubao_work_<YYYYMMDD>` 当日连续缓冲，不再按 topic 拆碎成 2 条消息一个 MemCell。
 - 排障/工具用法闭环：`everos-mcp memory_record_practice @<args.json>`，至少 3 个真实步骤；
   失败的步骤标 `"outcome":"failed"`，意外标 `"unexpected"`，用户纠正原话填 `user_correction`。
 - v2 写入确认 add 后不自动 flush；交接、流程完成、话题转移或检索必须依赖最新内容时，由 agent 判断必要性，调用 `memory_flush` 或 `everos flush` 指定一个目标并说明 `reason`，不要每次写入后机械调用。其余交给服务端处理；Cloud 两小时无新消息的自动抽取不代表所有自托管或旧版服务都有此保证。hook 注入的原生 `session_id` 传 `conversation_id`；结构化写入回执中的 EverOS ID 传 `session_id`，二选一。只抽取已送达的内容，不采集当前尚未保存的最终回复。v1 保留兼容抽取行为。

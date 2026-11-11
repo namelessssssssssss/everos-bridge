@@ -63,16 +63,30 @@ RECALL_WORDS = ("上次", "之前", "以前", "我说过", "记得", "按我习�
                 "remember", "previously", "as before")
 
 _REMINDER = re.compile(r"<system-reminder>.*?</system-reminder>", re.S)
+_INJECTED_MEMORY = re.compile(
+    r"^\s*(?:<(?:everos_memory|system-reminder)>.*?</(?:everos_memory|system-reminder)>\s*)+",
+    re.S,
+)
 # Kimi Work 桌面端给每条用户提问加的前导脚手架（不是用户原话）
 _DESKTOP_META = re.compile(r"^<meta\b[^>]*?/?>\s*", re.S)
 _SKIP_PREFIX = ("<local-command-", "<task-notification>", "[SYSTEM NOTIFICATION",
                 "Caveat: The messages below",
                 "This is an app-generated request for a suggested next user message.",
                 "# Overview\n\nGenerate 0 to 3 hyperpersonalized suggestions")
-# Codex 以 role=user 注入的脚手架（环境、AGENTS.md、插件推荐等），不是用户原话
+# Codex 以 role=user 注入的脚手架（环境、AGENTS.md、插件推荐、IDE Companion 页面等），不是用户原话
 _CODEX_SCAFFOLD = ("<environment_context>", "<user_instructions>", "<recommended_plugins>",
-                   "<app-context>", "# AGENTS.md", "<INSTRUCTIONS>", "<user_shell_command>",
-                   "<turn_aborted>", "<skill>")
+                   "<app-context>", "<codex_internal_context", "<companion", "<ide_",
+                   "<current_open_file", "<open_files", "<attached_files",
+                   "<skills_instructions>", "<plugins_instructions>", "<permissions",
+                   "<collaboration_mode>", "<multi_agent_mode>", "<subagent_notification>",
+                   "<system-reminder>", "<everos_memory>", "# AGENTS.md",
+                   "# Context from my IDE setup:", "# Environment", "<INSTRUCTIONS>",
+                   "<user_shell_command>", "<turn_aborted>", "<skill>")
+
+
+def strip_injected_memory(text: str) -> str:
+    """剥离宿主在用户消息开头拼入的 <everos_memory> / <system-reminder> 注入块。"""
+    return _INJECTED_MEMORY.sub("", str(text or ""))
 
 
 def _home() -> Path:
@@ -877,6 +891,22 @@ def flush(session_id: str, agent: bool = False, ver: str | None = None) -> str:
     return _write_status(out, {"extracted", "no_extraction"}, "flush")
 
 
+def _conversation_ledger_path(conversation_id: str) -> Path | None:
+    if not re.fullmatch(r"[\w.-]{1,160}", conversation_id) or conversation_id in (".", ".."):
+        raise ValueError("conversation_id 不是有效的本机会话标识")
+    candidates = [SESS_DIR / f"{conversation_id}.json"]
+    if conversation_id.startswith("dw_") and len(conversation_id) > 3:
+        candidates.append(SESS_DIR / f"doubao_{conversation_id[3:]}.json")
+    elif re.fullmatch(r"\d{6,32}", conversation_id):
+        candidates.append(SESS_DIR / f"doubao_{conversation_id}.json")
+    for sp in candidates:
+        if sp.is_symlink():
+            raise ValueError("会话账本路径不能是符号链接")
+        if sp.is_file():
+            return sp
+    return None
+
+
 def flush_memory(reason: str, session_id: str = "", conversation_id: str = "",
                  api_version: str | None = None, kind: str = "episodes") -> str:
     """Explicit extraction of one backend session or an already captured conversation.
@@ -897,12 +927,10 @@ def flush_memory(reason: str, session_id: str = "", conversation_id: str = "",
         ver = api_version or version()
         result = flush(session_id, agent=kind == "practices", ver=ver)
     else:
-        if not re.fullmatch(r"[\w.-]{1,160}", conversation_id) or conversation_id in (".", ".."):
-            raise ValueError("conversation_id 不是有效的本机会话标识")
+        sp = _conversation_ledger_path(conversation_id)
         if kind != "episodes":
             raise ValueError("conversation_id 只用于对话采集；做法请使用写入回执的 session_id")
-        sp = SESS_DIR / f"{conversation_id}.json"
-        if not sp.is_file() or sp.is_symlink():
+        if sp is None:
             raise ValueError("该对话尚无已采集的会话账本；不能 flush 尚未写入的消息")
         with open(sp.with_suffix(".lock"), "w") as lk:
             fcntl.flock(lk, fcntl.LOCK_EX)
@@ -951,14 +979,48 @@ def prepare_session_version(st: dict, path: Path) -> None:
     save_state(path, st)
 
 
-def remember(host: str, topic: str, content: str, user_said: str = "") -> str:
-    """结构化记录：确认消息写入；v2 抽取交给服务端或 agent 显式决定。"""
+def remember(host: str, topic: str, content: str, user_said: str = "",
+             conversation_id: str = "") -> str:
+    """结构化记录：对齐官方连续 session_id 最佳实践，优先并入当前会话账本，否则写入宿主当日连续缓冲。"""
     ensure_writable()
+    if not isinstance(conversation_id, str):
+        raise ValueError("conversation_id 必须是字符串")
+    sp = _conversation_ledger_path(conversation_id) if conversation_id else None
     t = int(time.time() * 1000)
-    sid = f"{host}_{datetime.now(CST):%Y%m%d}_{slug(topic) or 'note'}"
-    msgs = [{"role": "user", "sender_id": owner(), "timestamp": t - 1,
-             "content": clip(user_said or f"（{host} 记录）{topic}")},
-            {"role": "assistant", "sender_id": host, "timestamp": t, "content": clip(content)}]
+    clean_topic = str(topic).strip()
+    clean_content = str(content).strip()
+    said = str(user_said).strip()
+    if said:
+        user_content = clip(said)
+        head = f"[{clean_topic}]"
+        assistant_content = clip(
+            clean_content if not clean_topic or clean_content.startswith(head) else f"{head}\n{clean_content}"
+        )
+    else:
+        user_content = clip(f"（{host} 记录）{clean_topic}")
+        assistant_content = clip(clean_content)
+    msgs = [{"role": "user", "sender_id": owner(), "timestamp": t - 1, "content": user_content},
+            {"role": "assistant", "sender_id": host, "timestamp": t, "content": assistant_content}]
+    if sp is not None:
+        with open(sp.with_suffix(".lock"), "w") as lk:
+            fcntl.flock(lk, fcntl.LOCK_EX)
+            st = load_state(sp)
+            prepare_session_version(st, sp)
+            everos_sid = str(st.get("everos_session_id") or "")
+            if 1 <= len(everos_sid) <= 128:
+                add = post_messages(everos_sid, msgs)
+                st.update(pending=True, api=version(), last_write_ms=int(time.time() * 1000),
+                          last_write_status=add, writes=st.get("writes", 0) + 1,
+                          messages=st.get("messages", 0) + len(msgs))
+                if version() == "v1":
+                    time.sleep(1)
+                    res = flush(everos_sid)
+                    st.update(pending=False, last_flush_ms=int(time.time() * 1000), last_flush_status=res)
+                    save_state(sp, st)
+                    return f"{everos_sid}: v1 {add}/{res}"
+                save_state(sp, st)
+                return f"{everos_sid}: v2 {add}/deferred；session_id={everos_sid}；写入已确认，抽取及搜索可见性须另行核对"
+    sid = f"{slug(host, 24) or 'agent'}_{datetime.now(CST):%Y%m%d}"
     add = post_messages(sid, msgs)
     if version() == "v1":
         time.sleep(1)
@@ -1244,7 +1306,7 @@ def _claude_user_text(content) -> str | None:
         text = "\n".join(x.get("text", "") for x in content if isinstance(x, dict) and x.get("type") == "text")
     else:
         return None
-    text = _REMINDER.sub("", text).strip()
+    text = _REMINDER.sub("", strip_injected_memory(text)).strip()
     if text.startswith(("<command-name>", "<command-message>")):
         name = re.search(r"<command-name>(.*?)</command-name>", text, re.S)
         cargs = re.search(r"<command-args>(.*?)</command-args>", text, re.S)
@@ -1345,23 +1407,61 @@ def messages_claude(entries: list[dict], host: str = "claude_code") -> list[dict
     return _monotonic(msgs)
 
 
-def messages_codex(entries: list[dict], host: str = "codex") -> list[dict]:
+def _codex_turn_id(entry: dict, current: str | None) -> str | None:
+    p = entry.get("payload") or {}
+    stamped = (p.get("internal_chat_message_metadata_passthrough") or {}).get("turn_id") or p.get("turn_id")
+    if stamped is not None and str(stamped).strip():
+        return str(stamped).strip()
+    return current
+
+
+def _codex_user_text(raw: str, user_prompt: str | None = None) -> str | None:
+    """对齐官方 EverMind-AI/Plugins/codex：有 turn_id 提问记录时精确比对用户原话，无记录时按脚手架特征剔除。"""
+    text = strip_injected_memory(raw).strip()
+    if not text:
+        return None
+    if "<user_message>" in text:
+        return text
+    if isinstance(user_prompt, str) and user_prompt.strip():
+        clean_prompt = strip_injected_memory(user_prompt).strip()
+        key = clean_prompt[:200]
+        if not key or key not in text:
+            return None
+        if text.startswith(_CODEX_SCAFFOLD) and not clean_prompt.startswith(_CODEX_SCAFFOLD):
+            return clean_prompt
+        return text
+    if text.startswith(_CODEX_SCAFFOLD + _SKIP_PREFIX):
+        return None
+    return text
+
+
+def messages_codex(entries: list[dict], host: str = "codex",
+                   turn_prompts: dict[str, str] | None = None) -> list[dict]:
     """Codex rollout：response_item 里 role=user 的原话（剔除脚手架）与 role=assistant 的输出。"""
     msgs: list[dict] = []
+    current_turn: str | None = None
     for o in entries:
+        if o.get("type") == "turn_context":
+            current_turn = _codex_turn_id(o, current_turn)
+            continue
         p = o.get("payload") or {}
         if o.get("type") != "response_item" or p.get("type") != "message" or p.get("role") not in ("user", "assistant"):
             continue
+        turn_id = _codex_turn_id(o, current_turn)
+        if turn_id is not None:
+            current_turn = turn_id
         parts = [c.get("text", "") for c in p.get("content") or []
                  if isinstance(c, dict) and c.get("type") in ("input_text", "output_text")]
         text = "\n".join(x for x in parts if x).strip()
         if not text:
             continue
         if p["role"] == "user":
-            if text.startswith(_CODEX_SCAFFOLD + _SKIP_PREFIX):
+            recorded = (turn_prompts or {}).get(turn_id) if turn_id else None
+            cleaned = _codex_user_text(text, recorded)
+            if not cleaned:
                 continue
-            text, sender = split_botmux(text)
-            msgs.append({"role": "user", **sender, "timestamp": ts_ms(o.get("timestamp")), "content": clip(text)})
+            cleaned, sender = split_botmux(cleaned)
+            msgs.append({"role": "user", **sender, "timestamp": ts_ms(o.get("timestamp")), "content": clip(cleaned)})
         elif msgs and msgs[-1]["role"] == "assistant":
             msgs[-1]["content"] = clip(msgs[-1]["content"] + "\n\n" + text)
             msgs[-1]["timestamp"] = ts_ms(o.get("timestamp"))
@@ -1381,6 +1481,9 @@ def messages_trae(entries: list[dict], host: str = "trae") -> list[dict]:
         if not text:
             continue
         if item["role"] == "user":
+            text = strip_injected_memory(text).strip()
+            if not text:
+                continue
             kinds = (item.get("internal_chat_message_metadata_passthrough") or {}).get("content_item_kinds")
             # Explicit user.text wins over a prefix that merely resembles scaffolding.
             if kinds is None and text.startswith(_CODEX_SCAFFOLD + _SKIP_PREFIX + (
@@ -1405,7 +1508,7 @@ def messages_kimi(entries: list[dict], host: str = "kimi") -> list[dict]:
                 continue
             text = "\n".join(c.get("text", "") for c in m.get("content") or [] if isinstance(c, dict)
                              and c.get("type") == "text")
-            text = _DESKTOP_META.sub("", text).strip()  # 桌面端 <meta .../> 前导脚手架
+            text = strip_injected_memory(_DESKTOP_META.sub("", text)).strip()  # 桌面端 <meta .../> 前导脚手架
             if text:
                 text, sender = split_botmux(text)
                 msgs.append({"role": "user", **sender, "timestamp": int(o.get("time") or 0) or ts_ms(None),
@@ -1445,7 +1548,9 @@ def messages_mimo(rows: list[dict], host: str = "mimocode") -> list[dict]:
             if text:
                 texts.append(text)
         content = "\n".join(texts).strip()
-        if row.get("role") == "assistant":
+        if row.get("role") == "user":
+            content = strip_injected_memory(content).strip()
+        elif row.get("role") == "assistant":
             content = str(row.get("finalText") or content).strip()
         if not content:
             continue
@@ -1472,7 +1577,7 @@ def clean_antigravity_text(content) -> str | None:
         return None
     requests = [m.strip() for m in re.findall(r"<USER_REQUEST>(.*?)</USER_REQUEST>", content, re.S) if m.strip()]
     text = "\n\n".join(requests) if requests else _ANTIGRAVITY_META.sub("", content)
-    text = _REMINDER.sub("", text).strip()
+    text = _REMINDER.sub("", strip_injected_memory(text)).strip()
     if not text or text.startswith(_SKIP_PREFIX):
         return None
     return text
@@ -1545,8 +1650,26 @@ def session_name(entries: list[dict], host: str, cwd: str, sid: str, title: str 
     return f"{prefix}_{day:%Y%m%d}_{slug(title or Path(cwd or 'x').name) or 'session'}_{session_suffix}"
 
 
+def _turn_prompts(sid: str) -> dict[str, str]:
+    import recall
+    st = load_state(recall.state_path(sid))
+    if st.get("identity") not in (None, recall.identity(), _write_identity()):
+        return {}
+    raw = st.get("turn_prompts")
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k): str(v) for k, v in raw.items() if isinstance(v, str) and v.strip()}
+
+
+def is_subagent_payload(payload: dict) -> bool:
+    event = str(payload.get("hook_event_name") or os.environ.get("EVEROS_HOOK_EVENT") or "")
+    return bool(event == "SubagentStop" or payload.get("agent_transcript_path") or payload.get("parent_session_id"))
+
+
 def write_turns(payload: dict) -> None:
     ensure_writable()
+    if is_subagent_payload(payload):
+        return
     sid = str(payload.get("session_id") or payload.get("conversationId") or "")
     raw_tpath = str(payload.get("transcript_path") or payload.get("transcriptPath") or "")
     tpath = Path(raw_tpath)
@@ -1591,9 +1714,12 @@ def write_turns(payload: dict) -> None:
                                                      payload.get("thread_name") or payload.get("session_name") or "")))
         host = st.get("host") or "claude_code"
         prepare_session_version(st, sp)
-        parse = {"codex": messages_codex, "trae": messages_trae, "antigravity": messages_antigravity,
-                 "kimi": messages_kimi, "kimi_desktop": messages_kimi}.get(host, messages_claude)
-        msgs = parse(entries, host)
+        if host == "codex":
+            msgs = messages_codex(entries, host, turn_prompts=_turn_prompts(sid))
+        else:
+            parse = {"trae": messages_trae, "antigravity": messages_antigravity,
+                     "kimi": messages_kimi, "kimi_desktop": messages_kimi}.get(host, messages_claude)
+            msgs = parse(entries, host)
         # Persist validated source identity before the first network write, but
         # never acknowledge bytes when parsing or writing fails.
         if not sp.exists():
@@ -1676,7 +1802,7 @@ def sync_local_memory(limit: int | None = None) -> None:
         except OSError:
             return
         ledger = load_state(LOCALMEM_LEDGER)
-        done = fails = 0
+        done = fails = last_ts = 0
         for f in sorted(LOCALMEM_ROOT.glob("*/memory/*.md"), key=lambda f: f.stat().st_mtime):
             if f.name == "MEMORY.md":
                 continue
@@ -1689,14 +1815,16 @@ def sync_local_memory(limit: int | None = None) -> None:
                 break
             meta, body = _frontmatter(f.read_text(encoding="utf-8"))
             project = re.sub(r"^-Users-[^-]+-(GolandProjects-)?", "", f.parent.parent.name).replace("-", "_")
-            sid = f"cc_localmem_{project}_{meta.get('name') or f.stem}"[:128]
-            # 时间戳用同步时刻：v1 会静默丢弃约 2 个月前的时间戳（v2 实测 62 天前仍可入库）
-            t = int(time.time() * 1000)
+            note_name = meta.get("name") or f.stem
+            sid = f"cc_localmem_{slug(project, 96) or 'project'}"[:128]
+            # 时间戳用同步时刻并保持跨文件严格单调：同项目笔记聚合进同一 session_id，由服务端按语义边界分段
+            t = max(int(time.time() * 1000), last_ts + 2)
+            last_ts = t
             born = datetime.fromtimestamp(getattr(f.stat(), "st_birthtime", mtime), CST)
             dates = f"首次记录 {born:%Y-%m-%d}，最后更新 {datetime.fromtimestamp(mtime, CST):%Y-%m-%d}"
             msgs = [{"role": "user", "sender_id": owner(), "timestamp": t - 1,
-                     "content": f"（本地 Claude 记忆 · {meta.get('type', '?')} · {project} · {dates}）"
-                                f"{meta.get('description', f.stem)}"},
+                     "content": f"（本地 Claude 记忆 · {meta.get('type', '?')} · {project} · {note_name} · {dates}）"
+                                f"{meta.get('description', note_name)}"},
                     {"role": "assistant", "sender_id": "claude_code", "timestamp": t, "content": clip(body)}]
             try:
                 add = post_messages(sid, msgs)
