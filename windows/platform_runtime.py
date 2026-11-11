@@ -30,7 +30,7 @@ def adapt(contents, lock_source):
         text = replace(text, "import fcntl", "import windows_lock as fcntl")
         if name == "core.py":
             text = replace(text, 'open(LOG.with_suffix(".lock"), "a")', 'open(LOG.with_suffix(".lock"), "a+b")')
-            text = replace(text, 'open(sp.with_suffix(".lock"), "w")', 'open(sp.with_suffix(".lock"), "a+b")', 3)
+            text = replace(text, 'open(sp.with_suffix(".lock"), "w")', 'open(sp.with_suffix(".lock"), "a+b")', 4)
             text = replace(text, 'open(STATE / "localmem.lock", "w")', 'open(STATE / "localmem.lock", "a+b")')
             text = replace(text, 'open(p.with_suffix(".lock"), "w")', 'open(p.with_suffix(".lock"), "a+b")')
         elif name == "recall.py":

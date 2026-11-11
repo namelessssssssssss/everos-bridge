@@ -15,7 +15,7 @@ The MCP tool `memory_flush` and the CLI `everos flush` share the same behavior. 
 | `session_id` / `--session-id` | The EverOS session ID returned by a structured write |
 | `conversation_id` / `--conversation-id` | The host's native session ID shown in the prompt hook; resolves through an existing local capture ledger |
 
-These IDs are different. Do not pass a native conversation UUID as an EverOS session ID. A conversation with no captured writes yet has nothing for this command to extract. The command does not read or upload the current final response before the host has saved it. If a handoff needs a conclusion immediately, write that conclusion with `memory_remember`, then use its returned target ID when necessary.
+These IDs are different. Do not pass a native conversation UUID as an EverOS session ID. A conversation with no captured writes yet has nothing for this command to extract. The command does not read or upload the current final response before the host has saved it. If a handoff needs a conclusion immediately, write that conclusion with `memory_remember` (passing `conversation_id` when the conversation already has a local capture ledger so it coalesces into the same EverOS session buffer, or falling back to the consistent host-day session stream otherwise), then use its returned target ID when necessary.
 
 Example MCP arguments, replacing the placeholder with the actual write receipt:
 

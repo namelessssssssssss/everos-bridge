@@ -22,7 +22,8 @@
 | 结构化记录、做法、改画像 | MCP：`memory_remember` / `memory_record_practice` / `memory_fix_profile` | 同左 | 同左 | `everos-mcp` 调同一个 mcp_server，工具与校验一致 | 同左 |
 
 - 代码都在 `plugin/everos/`，纯 Python 标准库：`core.py` 是读写核心，`hook.py` 是 hook 入口和命令行，`mcp_server.py` 是 MCP 服务。MiMoCode 的 L3/L4 入口是 `plugin/mimo/everos.mjs`，经 `hook.py --mimo-recall/--mimo-write` 复用同一套读写。
-- session_id：一个 agent 会话对应一个，跨天沿用。Claude Code 用 `cc_<首日>_<标题>_<会话id前8位>`，Codex 用 `cx_…`，Google Antigravity 用 `ag_…`，Kimi Code 用 `km_…`，Kimi Work 桌面端用 `kw_…`，MiMoCode 用 `mc_…`，Doubao Work 用 `dw_<首日>_<标题>_<完整会话id>`。TraeX 用 `tx_<首日>_<标题>_<完整会话id>`，避免 UUIDv7 时间前缀相同导致跨会话混写。
+- session_id：对齐官方连续 `session_id` 推荐实践，一个 agent 会话对应一个并跨天沿用，由服务端语义边界自动切分 MemCell（约 10 条消息 1 个）。Claude Code 用 `cc_<首日>_<标题>_<会话id前8位>`，Codex 用 `cx_…`，Google Antigravity 用 `ag_…`，Kimi Code 用 `km_…`，Kimi Work 桌面端用 `kw_…`，MiMoCode 用 `mc_…`，Doubao Work 用 `dw_<首日>_<标题>_<完整会话id>`。TraeX 用 `tx_<首日>_<标题>_<完整会话id>`，避免 UUIDv7 时间前缀相同导致跨会话混写。Claude Code 本地记忆同步按项目聚合为 `cc_localmem_<项目>`；`memory_remember` 有本机采集账本时复用当前对话 `everos_session_id`，无账本或仅 MCP 宿主归入 `<host>_<YYYYMMDD>` 当日连续缓冲；`memory_record_practice` 因 v2 每个 MemCell 最多提炼一条 case，仍保持 `agent_<YYYYMMDD>_<topic>` 独立轨迹会话。
+- Codex 脚手架隔离：对齐官方 `EverMind-AI/Plugins/codex`，`UserPromptSubmit` 按 `turn_id` 记录真实用户提问，`Stop` 解析 rollout 时优先比对当轮用户原话，精确过滤 Codex / IDE 以 `role=user` 注入的 `# Context from my IDE setup:`（含 Companion Page）、`<environment_context>`、`<recommended_plugins>`、`# AGENTS.md` 等脚手架；无 `turn_id` 记录时回退脚手架前缀特征过滤。各宿主用户文本统一剥离前导 `<everos_memory>` / `<system-reminder>` 注入包装；子代理 `SubagentStop` / `agent_transcript_path` 事件不触发主会话采集。
 - Google Antigravity（`Gemini.app` / `Antigravity.app` / `agy`）：MCP 写 `~/.gemini/config/mcp_config.json`，hook 写 `~/.gemini/config/hooks.json`，共享 skill 写 `~/.gemini/config/skills/everos-memory/SKILL.md`，全局指令与 Gemini CLI 共用 `~/.gemini/GEMINI.md`；只刷新它可用 `install.sh --only antigravity`。`SessionStart` 返回 `injectSteps[].systemMessage`，`PreInvocation` 返回 `injectSteps[].ephemeralMessage`（按 `invocationNum` 首轮触发提问检索；检测到 `transcript.jsonl` 新增 `CHECKPOINT` 步骤时自动清除旧覆盖并恢复画像与规则），`PostToolUse` 将工具异常提醒暂存到紧邻的下一次 `PreInvocation` 注入而不覆盖工具输出。`Stop` 优先读取未截断的同目录 `transcript_full.jsonl`（回退 `transcript.jsonl`），提取 `<USER_REQUEST>` 原话并剥离 `<ADDITIONAL_METADATA>` / `<CONTEXT_SUMMARY>` 脚手架，跳过 `status=ERROR` 的失败规划步。
 - TraeX ≥ 0.209.1：`SessionStart` / `UserPromptSubmit` 注入，`Stop` 增量采集，`SessionEnd` / `PreCompact` 补写与落盘；`PostCompact` 只标记下轮补读画像。当前注入已存在时，规则不再重复调用 MCP。hook 必须启用且被信任。
 - TraeX 读取原始 rollout 的 `history_mutation` v1 append（兼容旧 `response_item`），只保存用户与助手的文本；用 `content_item_kinds` 区分用户输入与环境/规则/注入，不采集工具镜像或 reasoning。替换/压缩快照不作为新对话重新入库。`transcript_path` 为空时按精确 session_id 只读查索引或匹配 rollout 文件，找不到会记录错误且不推进采集进度。
@@ -64,10 +65,11 @@
 ### 3.2 结构化记录（agent 在关键节点主动写）
 
 - 时机：任务交付、用户纠错、偏好暴露、决策形成、排障闭环、调研结论、带时间的计划。
-- `memory_remember(topic, content, user_said)`：
+- `memory_remember(topic, content, user_said, conversation_id?)`：
   - content 写结论、做了什么、证据（文件:行、MR、commit、链接、logid）；
-  - user_said 放用户原话，不改写；
-  - 同一话题沿用同一个 topic。
+  - user_said 放用户原话，不改写；提供 `user_said` 时助手消息自动前置 `[topic]` 保留主题线索；
+  - 同一话题沿用同一个 topic；
+  - 有 hook 给出的宿主原生会话 ID（或 Doubao `dw_<会话id>`）时传 `conversation_id`：若本机已有该对话采集账本，则在会话锁下写入同一 `everos_session_id` 并更新 `pending`（不改写读取偏移），避免同一轮手工记结论与 Stop 自动采集双写两个 `session_id`；尚无采集账本或仅 MCP 宿主归入 `<host>_<YYYYMMDD>` 当日连续缓冲。
 - `memory_record_practice(topic, task, steps, conclusion)`：排障或工具用法闭环时写一条做法轨迹。
   - 至少 3 个真实步骤，写入前校验。只有一两步的结论改用 `memory_remember`，不补写没发生的步骤。
   - 走错的路、失败的尝试单独记一步，标 `outcome=failed`；出乎意料的结果标 `outcome=unexpected`。`result` 第一句写这一步的发现。

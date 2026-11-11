@@ -19,13 +19,14 @@ import core  # noqa: E402
 import recall  # noqa: E402
 import rules as rulebook  # noqa: E402
 
-VERSION = "0.10.2"
+VERSION = "0.10.3"
 MAX_PENDING_TOOL_CALLS = 16
 INSTRUCTIONS = (
     "EverOS 是用户跨 agent、跨设备共用的长期记忆。会话开始调用 memory_profile 了解用户，"
     "每条提问前的首次记忆检索调用 memory_search(method=agentic)，本轮同一问题已有充分hook注入时复用；"
     + recall.POLICY + "问「以前怎么做的」用 kind=practices。任务交付、用户纠错、偏好暴露、决策形成时调用 memory_remember"
-    "（content 写结论、做了什么、证据；user_said 放用户原话）；排障或工具用法闭环时调用 "
+    "（content 写结论、做了什么、证据；user_said 放用户原话；有hook给出的原生会话ID时传 conversation_id 并入当前会话缓冲）；"
+    "排障或工具用法闭环时调用 "
     "memory_record_practice（至少 3 个真实步骤，没走通或出乎意料的步骤标 outcome，用户纠正原话填 user_correction）；"
     "用户纠正画像里的偏好或背景时调用 memory_fix_profile。"
     "v2 写入不自动flush；交接、流程完成、话题转移或需要最新内容立即可检索时，"
@@ -95,11 +96,14 @@ TOOLS = [
          "limit": {"type": "integer", "default": 20, "minimum": 1, "maximum": 100}}}},
     {"name": "memory_remember",
      "description": "写一条结构化记忆：结论、决策及理由、纠错、项目事实、任务结果。"
-                    "同一话题沿用同一个 topic。v2确认add后返回session_id，不自动flush；确认写入不等于已抽取或可检索。",
+                    "同一话题沿用同一个 topic；有hook给出的原生会话ID时传conversation_id并入当前会话缓冲，"
+                    "否则自动按宿主当日连续会话聚合。v2确认add后返回session_id，不自动flush；确认写入不等于已抽取或可检索。",
      "inputSchema": {"type": "object", "required": ["topic", "content"], "properties": {
          "topic": {"type": "string", "minLength": 1, "description": "话题短名，如 signin_eval_v4"},
          "content": {"type": "string", "minLength": 1, "description": "结论 + 做了什么 + 证据（文件:行、MR、commit、链接）"},
-         "user_said": {"type": "string", "description": "用户原话（可选，不要改写）"}}}},
+         "user_said": {"type": "string", "description": "用户原话（可选，不要改写）"},
+         "conversation_id": {"type": "string", "minLength": 1, "maxLength": 160,
+                             "description": "hook给出的宿主原生会话ID（可选）；已有本机采集账本时并入同一EverOS session_id"}}}},
     {"name": "memory_record_practice",
      "description": PRACTICE_DESCRIPTION,
      "inputSchema": {"type": "object", "required": ["topic", "task", "steps", "conclusion"], "properties": {
@@ -254,8 +258,9 @@ def host_label(client: str) -> str:
     name = client.lower()
     for key, label in (("claude-code", "claude_code"), ("claude code", "claude_code"), ("codex", "codex"),
                        ("cursor", "cursor"), ("antigravity", "antigravity"), ("agy", "antigravity"),
-                       ("gemini", "gemini"), ("kimi", "kimi"), ("trae", "trae"),
-                       ("coco", "trae"), ("claude", "claude_desktop")):
+                       ("gemini", "gemini"), ("kimi", "kimi"), ("trae", "trae"), ("coco", "trae"),
+                       ("copilot", "github_copilot"), ("mimo", "mimocode"), ("doubao", "doubao_work"),
+                       ("claude", "claude_desktop")):
         if key in name:
             return label
     return re.sub(r"[^a-z0-9]+", "_", name).strip("_")[:24] or "mcp"
@@ -292,7 +297,9 @@ class Server:
         if name == "memory_recent":
             return core.recent_text(args.get("days", 7), args.get("limit", 20)) or "（这段时间没有记忆）"
         if name == "memory_remember":
-            return "已写入 " + core.remember(self.host, args["topic"], args["content"], args.get("user_said", ""))
+            extra = {"conversation_id": args["conversation_id"]} if "conversation_id" in args else {}
+            return "已写入 " + core.remember(self.host, args["topic"], args["content"], args.get("user_said", ""),
+                                             **extra)
         if name == "memory_record_practice":
             return "已写入 " + core.record_practice(self.host, args["topic"], args["task"], args["steps"],
                                                     args["conclusion"])

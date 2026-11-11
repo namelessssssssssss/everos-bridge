@@ -277,9 +277,28 @@ class McpTests(unittest.TestCase):
                                                           "clientInfo": {"name": "Kimi"}}))["result"]["serverInfo"]
         self.assertEqual(info["version"], mcp_server.VERSION)
         for args in ({}, {"topic": "topic"}, {"topic": " ", "content": "x"},
-                     {"topic": "topic", "content": "x", "user_said": []}):
+                     {"topic": "topic", "content": "x", "user_said": []},
+                     {"topic": "topic", "content": "x", "conversation_id": ""},
+                     {"topic": "topic", "content": "x", "conversation_id": " "},
+                     {"topic": "topic", "content": "x", "conversation_id": "x" * 161},
+                     {"topic": "topic", "content": "x", "conversation_id": 123}):
             with self.subTest(args=args):
                 self.assert_invalid_params(self.call_tool("memory_remember", args))
+
+    def test_remember_preserves_four_arg_call_and_forwards_optional_conversation_id(self):
+        with mock.patch.object(mcp_server.core, "remember", return_value="mcp_20261111: v2 accumulated/deferred") as rem:
+            res1 = self.call_tool("memory_remember", {"topic": "t", "content": "c"})["result"]
+            self.assertFalse(res1["isError"])
+            rem.assert_called_once_with("mcp", "t", "c", "")
+        with mock.patch.object(mcp_server.core, "remember", return_value="ag_1: v2 accumulated/deferred") as rem:
+            res2 = self.call_tool("memory_remember", {
+                "topic": "t", "content": "c", "user_said": "raw", "conversation_id": "conv-1",
+            })["result"]
+            self.assertFalse(res2["isError"])
+            rem.assert_called_once_with("mcp", "t", "c", "raw", conversation_id="conv-1")
+        for client, expected in (("GitHub Copilot", "github_copilot"), ("MiMoCode", "mimocode"),
+                                 ("doubao_work", "doubao_work"), ("Google Antigravity", "antigravity")):
+            self.assertEqual(mcp_server.host_label(client), expected)
 
     def test_profile_edits_validate_conditional_fields_and_operation_count(self):
         base = {"action": "add", "type": "explicit_info", "reason": "user correction"}

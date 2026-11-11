@@ -119,7 +119,7 @@ Cloud 上的情况：
 
 出处：官方文档、本仓库代码。
 
-- Cloud 按 MemCell 计费，大约 10 条消息算 1 个。
+- Cloud 按 MemCell 计费，大约 10 条消息算 1 个；服务端在连续 `session_id` 内按语义边界自动切分 MemCell。避免每次 `memory_remember` 或每个本地 `.md` 文件新建仅含 2 条消息的独立 `session_id`（否则每 2 条消息在闲置切段时都会单独消耗 1 个 MemCell，且与自动采集同轮双写会重复计费）；唯独 `memory_record_practice` 需要独立轨迹 `session_id`，因为 `AgentCaseExtractor` 每个 MemCell 最多生成一条做法 case。
 - bridge 把一次 add 拆成不超过约 250 KB、400 条消息的批次；单条超过 2 万字的粘贴会被截断。
 - MCP 客户端的外层超时要大于实际等待。agentic 检索默认最多 180 秒；写做法时回读默认最多 30 秒，叠加在写入耗时之上。
 

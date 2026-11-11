@@ -213,6 +213,64 @@ class ResponseAndWriteTests(IsolatedCore):
         self.assertIn("full record", msgs[-1]["content"])
         self.assertIn("answer", msgs[-1]["content"])
 
+    def test_codex_turn_prompt_filters_companion_and_ide_scaffolding_while_keeping_user_speech(self):
+        with patch.object(core, "search_items", return_value=[]), \
+                contextlib.redirect_stdout(io.StringIO()):
+            hook.on_prompt({"session_id": "cx_turn_test", "prompt": "你知道为什么吗", "turn_id": "turn-1"})
+        tpath = self.root / "rollout-codex.jsonl"
+        rows = [
+            {"type": "session_meta", "payload": {"id": "cx_turn_test"}},
+            {"type": "turn_context", "payload": {"turn_id": "turn-1"}},
+            codex_message("user", "# Context from my IDE setup:\n\n## Companion Page: Empty"),
+            codex_message("user", "<recommended_plugins>\n- foo\n</recommended_plugins>"),
+            codex_message("user", "<unknown_future_scaffold>host noise</unknown_future_scaffold>"),
+            codex_message("user", "<everos_memory>\n- prior fact\n</everos_memory>\n\n你知道为什么吗"),
+            codex_message("assistant", "因为脚手架被当成了 user 消息", "final"),
+        ]
+        tpath.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+        core.write_turns({"session_id": "cx_turn_test", "transcript_path": str(tpath), "hook_event_name": "Stop"})
+        self.api.assert_called_once()
+        sent = self.api.call_args.args[1]["messages"]
+        self.assertEqual([(m["role"], m["content"]) for m in sent],
+                         [("user", "你知道为什么吗"), ("assistant", "因为脚手架被当成了 user 消息")])
+
+        fallback = core.messages_codex([
+            codex_message("user", "# Context from my IDE setup:\n\n## Active file: none"),
+            codex_message("user", "<codex_internal_context>internal</codex_internal_context>"),
+            codex_message("user", "<everos_memory>cached</everos_memory>\n<div>为什么这里报错？</div>"),
+            codex_message("user", '<sender name="Alice" email="alice@example.com"/><user_message>飞书提问</user_message>'),
+        ])
+        self.assertEqual([m["content"] for m in fallback],
+                         ["<div>为什么这里报错？</div>", "（飞书经 botmux，发送者 Alice）飞书提问"])
+
+    def test_injected_memory_stripped_across_hosts_and_subagent_stops_ignored(self):
+        wrapped = "<everos_memory>recalled</everos_memory>\n<system-reminder>rule</system-reminder>\n真实提问"
+        self.assertEqual(core._claude_user_text(wrapped), "真实提问")
+        self.assertEqual(core.clean_antigravity_text(wrapped), "真实提问")
+        self.assertEqual(core.messages_mimo([{"role": "user", "parts": [{"type": "text", "text": wrapped}]}])[0]["content"],
+                         "真实提问")
+        self.assertEqual(core.messages_kimi([{
+            "type": "context.append_message", "time": 1000,
+            "message": {"role": "user", "origin": {"kind": "user"}, "content": [{"type": "text", "text": wrapped}]},
+        }])[0]["content"], "真实提问")
+        # Inline discussion of <everos_memory> by the user is never stripped.
+        inline = "请检查为什么 <everos_memory> 标签没有闭合"
+        self.assertEqual(core._claude_user_text(inline), inline)
+
+        payload = self.transcript("subagent text")
+        for extra in ({"hook_event_name": "SubagentStop"},
+                      {"agent_transcript_path": str(self.root / "sub.jsonl")},
+                      {"parent_session_id": "main_session"}):
+            sub_payload = {**payload, **extra, "session_id": "sub_session"}
+            core.write_turns(sub_payload)
+            with patch.object(hook.subprocess, "Popen") as popen, \
+                    patch.object(sys, "argv", ["hook.py"]), \
+                    patch.object(sys, "stdin", io.StringIO(json.dumps(sub_payload))):
+                self.assertEqual(hook.main(), 0)
+                popen.assert_not_called()
+        self.api.assert_not_called()
+        self.assertFalse((core.SESS_DIR / "sub_session.json").exists())
+
 
 class RecallTests(IsolatedCore):
     def setUp(self):

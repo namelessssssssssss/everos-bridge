@@ -57,8 +57,9 @@ description: 用户跨 agent、跨设备共用的 EverOS 长期记忆。会话�
 - `memory_remember`：
   - content 写结论、做了什么、证据（文件:行、MR、commit、链接）；
   - user_said 放用户原话，不改写；
-  - 同一话题沿用同一个 topic。
-- 排障或工具用法闭环时，用 `memory_record_practice` 写一条轨迹：需求 → 每步动作与结果 → 结论。
+  - 同一话题沿用同一个 topic（会自动在助手消息标注 `[topic]`）；
+  - 有 hook 给出的宿主原生会话 ID 时传 `conversation_id`，优先并入当前对话账本的同一 EverOS `session_id`，避免同一轮既写对话又按 topic 另开 2 条消息的小缓冲；尚无采集账本或仅 MCP 宿主自动归入 `{host}_{YYYYMMDD}` 当日连续缓冲，由服务端语义边界切分。
+- 排障或工具用法闭环时，用 `memory_record_practice` 写一条轨迹：需求 → 每步动作与结果 → 结论（保持按 topic 独立轨迹会话，因 v2 每个 MemCell 最多提炼一条 case）。
   - 至少 3 个真实步骤；只有一两步的结论改用 `memory_remember`，不补写没发生的步骤。
   - 没走通的尝试单独记一步并标 `outcome=failed`，出乎意料的结果标 `outcome=unexpected`；`result` 第一句写这一步的发现；用户中途纠正的原话填 `user_correction`。
   - EverOS v2 只把有试错、意外、非显然诊断或用户纠正的轨迹提炼成做法 case。add 已抽取时有界回读 case；仅接受入缓冲时返回抽取/case 待确认，不自动 flush 或轮询。没有 case 不等于写入失败，也不能把 add 确认当作搜索已可见。门槛和实测见 everos-bridge 仓库的 `docs/everos-notes.md`。
@@ -76,9 +77,9 @@ description: 用户跨 agent、跨设备共用的 EverOS 长期记忆。会话�
 
 ```bash
 [ -f ~/.everos/config.env ] && . ~/.everos/config.env
-B=${EVEROS_API_BASE:-https://api.evermind.ai}; U=$EVEROS_USER_ID; A=${EVEROS_AGENT_ID:-${U}_agent}; NOW=$(($(date +%s)*1000)); SID=cowork_$(date +%Y%m%d)_<topic>
+B=${EVEROS_API_BASE:-https://api.evermind.ai}; U=$EVEROS_USER_ID; A=${EVEROS_AGENT_ID:-${U}_agent}; NOW=$(($(date +%s)*1000)); SID=cowork_$(date +%Y%m%d)
 H=(-H "Content-Type: application/json"); [ -n "$EVEROS_API_KEY" ] && H+=(-H "Authorization: Bearer $EVEROS_API_KEY")
 curl -s -X POST "$B/api/v2/memory/get" "${H[@]}" -d '{"memory_type":"profile","user_id":"'$U'"}'
 curl -s -X POST "$B/api/v2/memory/search" "${H[@]}" -d '{"query":"<问题>","user_id":"'$U'","method":"agentic","top_k":5}'
-curl -s -X POST "$B/api/v2/memory/add" "${H[@]}" -d '{"session_id":"'$SID'","async_mode":false,"messages":[{"sender_id":"'$U'","role":"user","timestamp":'$NOW',"content":"<用户原话>"},{"sender_id":"'$A'","sender_name":"<agent 名>","role":"assistant","timestamp":'$((NOW+1))',"content":"<结论 + 动作 + 证据>"}]}'
+curl -s -X POST "$B/api/v2/memory/add" "${H[@]}" -d '{"session_id":"'$SID'","async_mode":false,"messages":[{"sender_id":"'$U'","role":"user","timestamp":'$NOW',"content":"<用户原话>"},{"sender_id":"'$A'","sender_name":"<agent 名>","role":"assistant","timestamp":'$((NOW+1))',"content":"[<topic>]\n<结论 + 动作 + 证据>"}]}'
 ```
