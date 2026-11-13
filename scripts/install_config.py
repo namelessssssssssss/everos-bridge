@@ -337,13 +337,10 @@ class Installer:
         config = {}
         path = self.everos / "config.env"
         if path.exists():
-            for line in path.read_text().splitlines():
-                if "=" in line and not line.lstrip().startswith("#"):
-                    key, value = line.split("=", 1)
-                    if key.strip() == "EVEROS_AGENTIC_TIMEOUT":
-                        config[key.strip()] = value.strip()
-        if self.environment.get("EVEROS_AGENTIC_TIMEOUT"):
-            config["EVEROS_AGENTIC_TIMEOUT"] = self.environment["EVEROS_AGENTIC_TIMEOUT"]
+            config.update(env_values(path.read_text()))
+        for key in ("EVEROS_AGENTIC_TIMEOUT", "EVEROS_WRITE_MODE", "EVEROS_DAILY_WRITE_BUDGET", "EVEROS_WRITE"):
+            if self.environment.get(key):
+                config[key] = self.environment[key]
         spec = importlib.util.spec_from_file_location("everos_install_core", self.repo / "plugin/everos/core.py")
         core = importlib.util.module_from_spec(spec)
         previous_bytecode = sys.dont_write_bytecode
@@ -356,6 +353,8 @@ class Installer:
         finally:
             sys.dont_write_bytecode = previous_bytecode
             sys.path[:] = previous_path
+        core.write_mode(config, strict=True)
+        core.quota.parse_daily_budget(config, strict=True)
         return math.ceil(core.agentic_timeout(config) + 10)
 
     @contextmanager
@@ -420,7 +419,8 @@ class Installer:
             additions = dict(EVEROS_API_BASE=os.environ.get("EVEROS_API_BASE", "https://api.evermind.ai"),
                              **additions, EVEROS_OWNER_ALIASES=os.environ.get("EVEROS_OWNER_ALIASES", ""),
                              EVEROS_API_VERSION=os.environ.get("EVEROS_API_VERSION", "v2"),
-                             EVEROS_READ_V1=os.environ.get("EVEROS_READ_V1", "0"))
+                             EVEROS_READ_V1=os.environ.get("EVEROS_READ_V1", "0"),
+                             EVEROS_WRITE_MODE=os.environ.get("EVEROS_WRITE_MODE", "eco"))
         if any("\n" in value or "\r" in value for value in additions.values()):
             raise ValueError("EverOS config values must be single lines")
         text = old.rstrip() + ("\n" if old.strip() else "")

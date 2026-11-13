@@ -56,6 +56,7 @@ Follow these steps in order and check each result.
      EVEROS_OWNER_ALIASES=<botmux 邮箱前缀，可留空>
      EVEROS_API_VERSION=v2
      EVEROS_READ_V1=<官方迁完 v1 旧数据前填 1，迁完填 0>
+     EVEROS_WRITE_MODE=eco
      ```
      The placeholders denote the user's memory space, API key, optional botmux email-prefix aliases, and `1` before the official legacy-v1 migration is complete or `0` afterward.
    - If the user has already supplied values directly in chat, pass them through environment variables and let the installer write the file: `EVEROS_USER_ID=… EVEROS_API_KEY=… EVEROS_READ_V1=1 $REPO/install.sh`.
@@ -98,7 +99,7 @@ These are the defaults after setup.
   - If entities, past decisions, or dependencies in the first results affect an unresolved part of the task, open the relevant content and search again using the original question, new identifier, and relationship to verify. Keep the evidence chain; stop that branch when evidence is sufficient, nothing new appears, or results repeat.
   - Memory is historical context. The current conversation takes precedence when they conflict.
 - **Write:**
-  - Hooks save conversation text automatically.
+  - Hooks save conversations automatically in quota-saving mode by default (`EVEROS_WRITE_MODE=eco`, with `full` / `curated` / `off` options) and guard background capture with a daily soft budget (`EVEROS_DAILY_WRITE_BUDGET`).
   - Call `memory_remember` at deliveries, corrections, preference changes, and decisions.
   - Use `memory_record_practice` for completed troubleshooting or tool-use work: at least three real steps; mark failed or unexpected attempts with `outcome`, and preserve the user's correction in `user_correction`. Read back the case when the v2 add has extracted; when messages are only accepted into the buffer, report pending extraction.
   - Do not automatically flush after an acknowledged v2 add. At a handoff, workflow completion, topic change, or immediate retrieval need, let the agent decide whether extraction is necessary, then use `memory_flush` with one target and a reason. Otherwise leave processing to the service. Pass a hook's native ID as `conversation_id` and an EverOS write-receipt ID as `session_id`; do not interchange them. A final response that has not been captured is outside the flush scope. See [on-demand extraction](docs/flush-policy.md).

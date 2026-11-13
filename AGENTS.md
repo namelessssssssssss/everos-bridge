@@ -52,6 +52,7 @@
      EVEROS_OWNER_ALIASES=<botmux 邮箱前缀，可留空>
      EVEROS_API_VERSION=v2
      EVEROS_READ_V1=<官方迁完 v1 旧数据前填 1，迁完填 0>
+     EVEROS_WRITE_MODE=eco
      ```
    - 用户在聊天里直接给了值的话，用环境变量传给安装脚本，由脚本写文件：`EVEROS_USER_ID=… EVEROS_API_KEY=… EVEROS_READ_V1=1 $REPO/install.sh`。
    - agent 不能代替用户回答交互输入；没有终端时脚本不会进入交互，而是提示后退出。
@@ -91,7 +92,7 @@
   - 首轮结果中的实体、旧决定或依赖若影响当前未解问题，展开正文后按“原问题＋新标识＋待核实关系”二次搜索；保留上下层证据链，充分覆盖、无新增或重复命中时停止该分支。
   - 记忆只是背景参考，和当前对话冲突时以当前为准。
 - **写**：
-  - 对话原文由 hook 自动入库；
+  - 对话由 hook 默认按省额度模式（`EVEROS_WRITE_MODE=eco`，可选 `full` / `curated` / `off`）自动入库，并受每日自动预算软上限（`EVEROS_DAILY_WRITE_BUDGET`）保护；
   - 交付、纠错、偏好、决策这类关键节点，调 `memory_remember`；
   - 排障或工具用法闭环，调 `memory_record_practice`：至少 3 个真实步骤，没走通或出乎意料的步骤标 `outcome`，用户纠正的原话填 `user_correction`；v2 add 已抽取时回读 case，仅接受入缓冲时返回待抽取；
   - v2 add 确认后不自动 flush。交接、流程完成、话题转移或立即检索需要时，由 agent 判断必要性，再用 `memory_flush` 指定一个目标与理由；其他时候交给服务端处理。hook 原生 ID 传 `conversation_id`，写入回执的 EverOS ID 传 `session_id`，二者不能混用；尚未采集的当前最终回复不在 flush 范围内。细节见 [按需抽取](docs/flush-policy.zh-CN.md)。

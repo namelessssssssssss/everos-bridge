@@ -131,7 +131,7 @@ Set-Location "$env:USERPROFILE\.everos-bridge"
 ## 记忆与控制
 
 - **保存位置：**对话文本和显式记忆记录会发送到配置的 EverOS 服务，默认是 EverOS Cloud。Bridge 也会同步 Claude Code 的本地记忆文件。凭据和运行状态保存在仓库之外。
-- **暂停保存：**在 `~/.everos/config.env` 中加入不带引号的 `EVEROS_WRITE=0`，停止 Bridge 的写入，包括自动采集和显式保存。仍可搜索已有记忆。
+- **调节或暂停保存：**自动采集默认采用省额度模式（`EVEROS_WRITE_MODE=eco`：过滤非用户噪声会话、对长回复结构脱水，并用每日自动采集软上限 `EVEROS_DAILY_WRITE_BUDGET` 在超限时自动降级为仅显式写入）；可设为 `curated`（只保留 `memory_remember` / `memory_record_practice` / `memory_fix_profile` 等显式保存）或 `full`（全量原文）。在 `~/.everos/config.env` 中加入不带引号的 `EVEROS_WRITE=0`（或 `EVEROS_WRITE_MODE=off`），停止 Bridge 的全部写入，包括自动采集和显式保存；仍可搜索已有记忆。
 - **控制自动召回：**在同一文件中加入 `EVEROS_INJECT=0`，停止自动注入记忆，同时保留手动检索能力。
 - **保持信息准确：**让 agent 修正过时的画像信息，或记录已改变的决策。检索到的记忆描述的是过去的工作，应结合今天的代码和需求核实。
 

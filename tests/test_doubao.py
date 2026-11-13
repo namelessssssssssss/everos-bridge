@@ -5,6 +5,7 @@ Run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
 from __future__ import annotations
 
 import contextlib
+import io
 import json
 import os
 import sys
@@ -261,6 +262,46 @@ class DoubaoSessionTests(unittest.TestCase):
     def test_invalid_session_id_rejected(self):
         with self.assertRaises(ValueError):
             doubao.ingest_session("../etc", sessions_root=self.sessions)
+
+    def test_eco_compaction_heartbeat_filtering_and_curated_modes(self):
+        long_reply = "结论：完成省额度改造。\n```python\n" + ("x = 1\n" * 60) + "```\n验证通过。"
+        self.write_traj([
+            row("user", "<heartbeat>\nRoutine check\n</heartbeat>"),
+            row("assistant", "Heartbeat OK — must not be ingested"),
+            row("user", "<external_codex_apps_page>\n" + ("dump " * 200) + "</external_codex_apps_page>\n# Response annotations:\n请保留批注并压缩代码块"),
+            row("assistant", long_reply),
+        ])
+        preview = doubao.ingest_session(self.sid, sessions_root=self.sessions, dry_run=True)
+        self.assertEqual(preview["new_messages"], 2)
+        self.assertNotIn("Heartbeat OK", preview["preview"][1]["head"])
+
+        out = doubao.ingest_session(self.sid, sessions_root=self.sessions)
+        self.assertEqual(out["new_messages"], 2)
+        self.assertEqual(len(self.adds), 1)
+        sent = self.adds[0][1]
+        self.assertEqual(sent[0]["content"], "# Response annotations:\n请保留批注并压缩代码块")
+        self.assertIn("[代码已省略]", sent[1]["content"])
+        self.assertNotIn("x = 1", sent[1]["content"])
+
+    def test_assistant_only_or_curated_doubao_session_avoids_network_add(self):
+        self.write_traj([row("assistant", "subagent-only narration without any user message")])
+        skipped = doubao.ingest_session(self.sid, sessions_root=self.sessions)
+        self.assertEqual(skipped.get("skipped"), "no_user_message")
+        self.assertEqual(self.adds, [])
+        self.assertFalse((core.SESS_DIR / f"doubao_{self.sid}.json").exists())
+
+        self.write_traj([row("user", "real user request"), row("assistant", "real answer")])
+        with patch.dict(os.environ, {"EVEROS_WRITE_MODE": "curated"}):
+            curated = doubao.ingest_session(self.sid, sessions_root=self.sessions)
+        self.assertEqual(curated.get("skipped"), "curated")
+        self.assertEqual(self.adds, [])
+        self.assertGreater(self.ledger()["offset"], 0)
+
+        with patch.dict(os.environ, {"EVEROS_WRITE_MODE": "off", "EVEROS_WRITE": "1"}):
+            with patch("sys.stderr", io.StringIO()) as err:
+                code = doubao.main(["--session", self.sid, "--sessions-root", str(self.sessions)])
+            self.assertEqual(code, 1)
+            self.assertIn("EVEROS_WRITE_MODE=off", err.getvalue())
 
 
 if __name__ == "__main__":

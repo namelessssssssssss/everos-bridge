@@ -78,7 +78,7 @@ everos-mcp list                       # 应包含 memory_flush 等 memory_* 工�
 - `everos-mcp memory_flush @<args.json>`：使用写入回执中的 EverOS `session_id` 和必要性 `reason`。Doubao 采集也可对指定会话显式使用 `everos-doubao-ingest --current --flush`，但不要每轮默认开启；它不能采集尚未产生的最终回复。
 - 画像写错或过期：先 `memory_profile` 拿 item_id，再 `memory_fix_profile`，每条写 reason。
 - 参数含中文/引号时先把 JSON 写成文件再用 `@/abs/path.json`。
-- `EVEROS_WRITE=0` 时所有写工具与采集都不能入库；`-32602` 参数校验失败表示请求没发出，不算已写入。
+- `EVEROS_WRITE=0` 或 `EVEROS_WRITE_MODE=off` 时所有写工具与采集都不能入库；`EVEROS_WRITE_MODE=curated` 或触发 `EVEROS_DAILY_WRITE_BUDGET` 软上限时仅暂停自动背景采集，`memory_remember` / `memory_record_practice` / `memory_fix_profile` / `memory_flush` 仍照常写入；`-32602` 参数校验失败表示请求没发出，不算已写入。
 
 ## 对话原文入库（L4，每轮最终回复前主动执行）
 

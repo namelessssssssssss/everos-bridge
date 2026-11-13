@@ -117,9 +117,15 @@ Cloud 上的情况：
 
 ## 7. 计费与限制
 
-出处：官方文档、本仓库代码。
+出处：官方文档（`docs.evermind.ai`）、开源实现（`EverMind-AI/EverOS` `src/everos/memory/extract/boundary/detection.py` 与 `EverMind-AI/Plugins` `hooks/scripts/capture.js`）、本仓库实测（2026-11-11 至 11-13）。
 
-- Cloud 按 MemCell 计费，大约 10 条消息算 1 个；服务端在连续 `session_id` 内按语义边界自动切分 MemCell。避免每次 `memory_remember` 或每个本地 `.md` 文件新建仅含 2 条消息的独立 `session_id`（否则每 2 条消息在闲置切段时都会单独消耗 1 个 MemCell，且与自动采集同轮双写会重复计费）；唯独 `memory_record_practice` 需要独立轨迹 `session_id`，因为 `AgentCaseExtractor` 每个 MemCell 最多生成一条做法 case。
+- **每次 `/api/v2/memory/add` 的真实服务端开销**：
+  1. 在开源 `EverOS` 的 `BoundaryDetection.detect()` 中，只要缓冲合并后存在至少 1 条 `role="user"` 消息，**每一次 `add` 调用都会立即执行一次 LLM 边界检测生成**（`everos.memcell.boundary`，把会话已缓冲消息 + 新消息一起送入 `everalgo.boundary.adetect_boundaries()`，硬上限 `hard_token_limit=65536`、`hard_msg_limit=500`）。因此同一轮拆成多次 `Stop add`（例如子代理唤醒续写、同一轮 `memory_remember` 后紧跟 `Stop`）会成倍放大边界检测 token 与请求开销。
+  2. **无需等待 2 小时 `flush`，单次 `add` 也会当场切出 MemCell**：当边界检测 LLM 判定当前问答闭合（`tail_complete=True`）且开启 `close_complete_tail`（默认开启）时，`add` 会**当场切出完整 MemCell 并返回 `status="extracted"`**，随即触发 Episode、Atomic Fact 与 Profile 多道抽取 LLM。长篇结构化 Markdown 助手回复（大代码块、文件链接列表、长表格）不仅撑大每次边界检测上下文，还极易在每轮末尾直接触发 `extracted`。
+  3. **无 `role="user"` 的会话无法产出用户情景记忆**：`BoundaryDetection.detect()` 明确要求 `any(m.role == "user" for m in merged)` 才做非终态切分；纯系统触发、无人类 `user` 消息的子代理会话（如 Antigravity `SYSTEM_SDK` 子代理）只会空耗缓冲与收尾处理。
+  4. **官方插件实践（`EverMind-AI/Plugins`）**：官方 Claude Code / Codex 插件按完成的 `turn_id` 去重（防止中断续跑导致同一轮 `Stop` 重复入库），并主动剥离占原始会话约三分之二体积的宿主脚手架。
+- Cloud 按 MemCell / MCU 计费，大约 10 条消息算 1 个；服务端在连续 `session_id` 内按语义边界自动切分 MemCell。避免每次 `memory_remember` 或每个本地 `.md` 文件新建仅含 2 条消息的独立 `session_id`（否则每 2 条消息在闲置切段时都会单独消耗 1 个 MemCell，且与自动采集同轮双写会重复计费）；唯独 `memory_record_practice` 需要独立轨迹 `session_id`，因为 `AgentCaseExtractor` 每个 MemCell 最多生成一条做法 case。
+- **Bridge 的省额度写入分层（0.10.4+）**：默认 `EVEROS_WRITE_MODE=eco` 在所有宿主统一跳过无用户消息会话、`<heartbeat>` 定时巡检轮次与 `<external_codex_apps_*>` 外部页面转储，对背景对话原文做代码块/表格/本地链接脱水与首尾裁剪，合并唤醒续写 `Stop` 与同轮 `memory_remember` 重复尾巴，并用 `EVEROS_DAILY_WRITE_BUDGET`（默认每日 40 批自动 `add`）提供超限自动降级 `curated` 的软护栏，同时保持显式结构化写工具与全部读侧检索零损不变。
 - bridge 把一次 add 拆成不超过约 250 KB、400 条消息的批次；单条超过 2 万字的粘贴会被截断。
 - MCP 客户端的外层超时要大于实际等待。agentic 检索默认最多 180 秒；写做法时回读默认最多 30 秒，叠加在写入耗时之上。
 

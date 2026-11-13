@@ -423,6 +423,24 @@ class InstallerTests(unittest.TestCase):
                 self.assertEqual(self.calls(), [])
                 self.assertFalse((self.home / ".everos").exists())
 
+    def test_fresh_config_writes_eco_default_and_rejects_invalid_write_mode_or_budget(self):
+        self.cli("codex")
+        for key, bad in (("EVEROS_WRITE_MODE", "turbo"), ("EVEROS_DAILY_WRITE_BUDGET", "-5"),
+                         ("EVEROS_DAILY_WRITE_BUDGET", "bad")):
+            with self.subTest(key=key, bad=bad):
+                saved = dict(self.env)
+                try:
+                    self.env[key] = bad
+                    result = self.run_install(expect=1)
+                    self.assertIn(key, result.stderr)
+                    self.assertEqual(self.calls(), [])
+                    self.assertFalse((self.home / ".everos").exists())
+                finally:
+                    self.env = saved
+        self.run_install()
+        cfg_text = (self.home / ".everos/config.env").read_text()
+        self.assertIn("EVEROS_WRITE_MODE=eco\n", cfg_text)
+
     def test_unverified_mcp_hosts_do_not_receive_invented_timeout_fields(self):
         gemini = self.put(".gemini/settings.json", '{"mcpServers":{"other":{"timeout":9000}}}')
         cursor = self.put(".cursor/mcp.json", '{}')

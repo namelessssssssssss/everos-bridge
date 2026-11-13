@@ -43,6 +43,9 @@ class IsolatedCore(unittest.TestCase):
         self.stack.enter_context(patch.dict(os.environ))
         os.environ.pop("EVEROS_AGENTIC_TIMEOUT", None)
         os.environ.pop("EVEROS_CASE_WAIT", None)
+        for key in ("EVEROS_WRITE_MODE", "EVEROS_DAILY_WRITE_BUDGET",
+                    "EVEROS_ECO_ASSISTANT_CHARS", "EVEROS_ECO_USER_CHARS"):
+            os.environ.pop(key, None)
         self.stack.enter_context(patch.dict(os.environ, {
             "EVEROS_HOME": str(self.root), "EVEROS_USER_ID": "test_owner",
             "EVEROS_API_KEY": "test_key", "EVEROS_API_VERSION": "v2", "EVEROS_READ_V1": "0",

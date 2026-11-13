@@ -237,6 +237,8 @@ def main() -> int:
             parse = {"codex": core.messages_codex, "trae": core.messages_trae, "antigravity": core.messages_antigravity,
                      "kimi": core.messages_kimi, "kimi_desktop": core.messages_kimi}.get(host, core.messages_claude)
             msgs = parse(entries, host)
+            if core.write_policy()["compact"] and msgs:
+                msgs = core.compact_eco_messages(msgs)
             sid_hint = raw_path.stem
             if host == "antigravity" and sid_hint in ("transcript", "transcript_full") and len(raw_path.parents) >= 3:
                 sid_hint = raw_path.parents[2].name
@@ -283,7 +285,7 @@ def main() -> int:
             return 0
         if args[:1] == ["--mimo-write"]:
             # MiMoCode Plugin L4：stdin {"session_id","cwd","title","trajectory"}
-            if core.cfg().get("EVEROS_WRITE") == "0":
+            if core.write_mode() == "off":
                 return 0
             core.write_mimo_turns(json.loads(sys.stdin.read() or "{}"))
             return 0
@@ -431,7 +433,9 @@ def main() -> int:
             elif event == "UserPromptSubmit":
                 on_prompt(payload, kimi=kimi)
             return 0
-        if event in ("Stop", "SessionEnd", "PreCompact") and c.get("EVEROS_WRITE") != "0" and not core.is_subagent_payload(payload):
+        if (event in ("Stop", "SessionEnd", "PreCompact") and core.write_mode(c) != "off"
+                and not core.is_subagent_payload(payload)
+                and not (event == "Stop" and payload.get("fullyIdle") is False)):
             # 转交后台子进程，自己马上退出（SessionEnd 只有约 1.5 秒预算）
             worker_env = {**os.environ, "EVEROS_HOST": "antigravity"} if antigravity else {**os.environ}
             worker_input = json.dumps(payload, ensure_ascii=False) if antigravity else raw

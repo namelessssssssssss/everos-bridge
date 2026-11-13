@@ -7,7 +7,11 @@
   EVEROS_USER_ID        记忆空间（必填，没有默认值，避免写错空间）
   EVEROS_API_BASE       默认 https://api.evermind.ai（兼容旧名 EVEROS_BASE_URL）
   EVEROS_OWNER_ALIASES  botmux <sender> 邮箱前缀命中即视为 owner，逗号分隔
-  EVEROS_INJECT=0       关闭读侧注入；EVEROS_WRITE=0 关闭写侧
+  EVEROS_INJECT=0       关闭读侧注入；EVEROS_WRITE=0 关闭写侧（等价于 EVEROS_WRITE_MODE=off）
+  EVEROS_WRITE_MODE     写侧模式：eco（默认省额度）| full | curated | off
+  EVEROS_DAILY_WRITE_BUDGET 每日自动采集软预算（CST 自然日自动 add 批次数，默认 40；0 关闭上限），超限自动降级 curated
+  EVEROS_ECO_ASSISTANT_CHARS eco 模式单条助手回复保留字数上限（首尾保留，默认 1200）
+  EVEROS_ECO_USER_CHARS      eco 模式单条用户消息保留字数上限（默认 4000）
   EVEROS_API_VERSION    v2（默认）或 v1；v1 即将退役，只为回退保留
   EVEROS_READ_V1=1      过渡期：读取时同时查 v1 旧库并合并（官方迁完数据后关掉）
   EVEROS_AGENT_ID       v2 里助手消息的归属 agent，默认 <user_id>_agent；原 agent 名记在 sender_name
@@ -42,8 +46,22 @@ import quota
 from config_env import env_values
 
 CST = timezone(timedelta(hours=8))
-MAX_MSG_CHARS = 20000          # 只截断超长粘贴
+MAX_MSG_CHARS = 20000          # full 模式及结构化记录：只截断超长粘贴
+ECO_ASSISTANT_CHARS = 1200     # eco 模式：自动采集单条助手回复首尾保留上限
+ECO_USER_CHARS = 4000          # eco 模式：自动采集单条用户原话保留上限
+WAKEUP_FLUSH_MS = 15 * 60_000  # eco 模式：后台唤醒续写静置超过 15 分钟后由 sweep 落盘
+REMEMBER_DEDUPE_MS = 10 * 60_000  # eco 模式：同轮 memory_remember 后的自动采集去重窗口
 MAX_BODY_BYTES = 250_000       # 单次 add 请求体上限（留余量）
+WRITE_MODES = {
+    "full": {"writable": True, "auto_capture": True, "compact": False,
+             "coalesce_wakeup": False, "dedupe_remember": False, "daily_budget": True},
+    "eco": {"writable": True, "auto_capture": True, "compact": True,
+            "coalesce_wakeup": True, "dedupe_remember": True, "daily_budget": True},
+    "curated": {"writable": True, "auto_capture": False, "compact": False,
+                "coalesce_wakeup": False, "dedupe_remember": False, "daily_budget": False},
+    "off": {"writable": False, "auto_capture": False, "compact": False,
+            "coalesce_wakeup": False, "dedupe_remember": False, "daily_budget": False},
+}
 IDLE_FLUSH_H = 2
 SWEEP_EVERY_MIN = 30
 READ_TIMEOUT = 6               # 读侧同步注入的网络超时，宁可不注入也不拖慢会话
@@ -69,19 +87,34 @@ _INJECTED_MEMORY = re.compile(
 )
 # Kimi Work 桌面端给每条用户提问加的前导脚手架（不是用户原话）
 _DESKTOP_META = re.compile(r"^<meta\b[^>]*?/?>\s*", re.S)
+_EXTERNAL_CODEX_PAGE = re.compile(
+    r"^\s*(?:<external_codex_apps_[^>]+>.*?</external_codex_apps_[^>]+>\s*)+",
+    re.S,
+)
+_FENCED_CODE_RE = re.compile(r"(```[^\n]*\n.*?\n```|~~~[^\n]*\n.*?\n~~~)", re.S)
+_FILE_LINK_RE = re.compile(r"\[([^\]\n]+)\]\(file://[^)\s]+\)")
 _SKIP_PREFIX = ("<local-command-", "<task-notification>", "[SYSTEM NOTIFICATION",
+                "<heartbeat>", "<external_codex_apps_",
                 "Caveat: The messages below",
                 "This is an app-generated request for a suggested next user message.",
                 "# Overview\n\nGenerate 0 to 3 hyperpersonalized suggestions")
-# Codex 以 role=user 注入的脚手架（环境、AGENTS.md、插件推荐、IDE Companion 页面等），不是用户原话
+# Codex 以 role=user 注入的脚手架（环境、AGENTS.md、插件推荐、IDE Companion 页面、定时心跳等），不是用户原话
 _CODEX_SCAFFOLD = ("<environment_context>", "<user_instructions>", "<recommended_plugins>",
                    "<app-context>", "<codex_internal_context", "<companion", "<ide_",
                    "<current_open_file", "<open_files", "<attached_files",
                    "<skills_instructions>", "<plugins_instructions>", "<permissions",
                    "<collaboration_mode>", "<multi_agent_mode>", "<subagent_notification>",
-                   "<system-reminder>", "<everos_memory>", "# AGENTS.md",
-                   "# Context from my IDE setup:", "# Environment", "<INSTRUCTIONS>",
+                   "<system-reminder>", "<everos_memory>", "<heartbeat>", "<external_codex_apps_",
+                   "# AGENTS.md", "# Context from my IDE setup:", "# Environment", "<INSTRUCTIONS>",
                    "<user_shell_command>", "<turn_aborted>", "<skill>")
+
+
+def is_heartbeat_text(text: object) -> bool:
+    """识别宿主定时任务注入的 <heartbeat> 自动轮次（非真人提问）。"""
+    if not isinstance(text, str):
+        return False
+    cleaned = _REMINDER.sub("", strip_injected_memory(text)).lstrip()
+    return cleaned.startswith("<heartbeat>")
 
 
 def strip_injected_memory(text: str) -> str:
@@ -137,9 +170,11 @@ def cfg() -> dict:
     if path.is_file():
         out = env_values(path.read_text(encoding="utf-8"))
     for k in ("EVEROS_API_KEY", "EVEROS_USER_ID", "EVEROS_API_BASE", "EVEROS_BASE_URL",
-              "EVEROS_OWNER_ALIASES", "EVEROS_INJECT", "EVEROS_WRITE", "EVEROS_API_VERSION",
-              "EVEROS_READ_V1", "EVEROS_AGENT_ID", "EVEROS_MIN_SCORE", "EVEROS_RECALL_TIMEOUT",
-              "EVEROS_RECALL_CHARS", "EVEROS_AGENTIC_TIMEOUT", "EVEROS_CASE_WAIT"):
+              "EVEROS_OWNER_ALIASES", "EVEROS_INJECT", "EVEROS_WRITE", "EVEROS_WRITE_MODE",
+              "EVEROS_DAILY_WRITE_BUDGET", "EVEROS_ECO_ASSISTANT_CHARS", "EVEROS_ECO_USER_CHARS",
+              "EVEROS_API_VERSION", "EVEROS_READ_V1", "EVEROS_AGENT_ID", "EVEROS_MIN_SCORE",
+              "EVEROS_RECALL_TIMEOUT", "EVEROS_RECALL_CHARS", "EVEROS_AGENTIC_TIMEOUT",
+              "EVEROS_CASE_WAIT"):
         if os.environ.get(k):
             out[k] = os.environ[k]
     out.setdefault("EVEROS_API_BASE", out.get("EVEROS_BASE_URL", "https://api.evermind.ai"))
@@ -206,10 +241,165 @@ def ready() -> bool:
     return bool(c.get("EVEROS_USER_ID")) and (bool(c.get("EVEROS_API_KEY")) or network_secret_mode())
 
 
+def write_mode(config: dict | None = None, *, strict: bool = False) -> str:
+    """解析写侧模式：EVEROS_WRITE=0 优先等价于 off；默认 eco。"""
+    c = cfg() if config is None else config
+    if str(c.get("EVEROS_WRITE", "")).strip() == "0":
+        return "off"
+    raw = str(c.get("EVEROS_WRITE_MODE") or "").strip().lower()
+    if not raw:
+        return "eco"
+    if raw in WRITE_MODES:
+        return raw
+    if strict:
+        raise ValueError("EVEROS_WRITE_MODE 须为 full、eco、curated 或 off")
+    return "eco"
+
+
+def write_policy(config: dict | None = None) -> dict:
+    return WRITE_MODES[write_mode(config)]
+
+
+def auto_capture_enabled(config: dict | None = None) -> bool:
+    return bool(write_policy(config)["auto_capture"])
+
+
 def ensure_writable() -> None:
     """所有写入口共用开关，包括 MCP 与手工维护命令。"""
-    if cfg().get("EVEROS_WRITE") == "0":
+    c = cfg()
+    if str(c.get("EVEROS_WRITE", "")).strip() == "0":
         raise RuntimeError("EverOS 写入已关闭（EVEROS_WRITE=0）")
+    if write_mode(c) == "off":
+        raise RuntimeError("EverOS 写入已关闭（EVEROS_WRITE_MODE=off）")
+
+
+def _bounded_chars(key: str, default: int, minimum: int) -> int:
+    val = int(_num(key, default))
+    return max(minimum, min(val, MAX_MSG_CHARS))
+
+
+def eco_assistant_chars() -> int:
+    return _bounded_chars("EVEROS_ECO_ASSISTANT_CHARS", ECO_ASSISTANT_CHARS, 200)
+
+
+def eco_user_chars() -> int:
+    return _bounded_chars("EVEROS_ECO_USER_CHARS", ECO_USER_CHARS, 500)
+
+
+def _clip_head_tail(text: str, limit: int, label: str = "eco 省略中间细节") -> str:
+    text = str(text).strip()
+    if len(text) <= limit:
+        return text
+    head_len = max(120, int(limit * 0.65))
+    tail_len = max(80, limit - head_len)
+    if head_len + tail_len >= len(text):
+        return text
+    return (text[:head_len].rstrip()
+            + f"\n…[{label}，原文共 {len(text)} 字]…\n"
+            + text[-tail_len:].lstrip())
+
+
+def _compact_markdown_tables(text: str, max_rows: int = 4) -> str:
+    lines = text.splitlines()
+    out: list[str] = []
+    table_buf: list[str] = []
+
+    def flush_table():
+        nonlocal table_buf
+        if not table_buf:
+            return
+        is_md_table = (len(table_buf) >= 2 and "|" in table_buf[0]
+                       and re.search(r"^\s*\|?[\s:-]+\|", table_buf[1]))
+        if is_md_table and len(table_buf) > max_rows + 1:
+            out.extend(table_buf[:max_rows])
+            out.append(f"| … | [eco 省略表格其余 {len(table_buf) - max_rows} 行] |")
+        else:
+            out.extend(table_buf)
+        table_buf = []
+
+    for line in lines:
+        if line.lstrip().startswith("|"):
+            table_buf.append(line)
+        else:
+            flush_table()
+            out.append(line)
+    flush_table()
+    return "\n".join(out)
+
+
+def compact_eco_text(text: str, role: str, *, limit: int | None = None) -> str:
+    """eco 模式对话原文脱水：保留用户原话与助手首尾结论，折叠大代码块、长表格与本地 file:// 链接。"""
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    if role == "user":
+        cap = eco_user_chars() if limit is None else limit
+
+        def _shrink_user_code(match: re.Match) -> str:
+            block = match.group(0)
+            if len(block) < 800:
+                return block
+            return _clip_head_tail(block, 320, "eco 折叠粘贴代码块")
+
+        cleaned = _FENCED_CODE_RE.sub(_shrink_user_code, raw)
+        return _clip_head_tail(cleaned, cap)
+
+    cap = eco_assistant_chars() if limit is None else limit
+
+    def _shrink_assistant_code(match: re.Match) -> str:
+        block = match.group(0)
+        if len(block) < 120 and block.count("\n") <= 2:
+            return block
+        return "[代码已省略]"
+
+    cleaned = _FENCED_CODE_RE.sub(_shrink_assistant_code, raw)
+    cleaned = _FILE_LINK_RE.sub(r"\1", cleaned)
+    cleaned = _compact_markdown_tables(cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    return _clip_head_tail(cleaned, cap)
+
+
+def compact_eco_messages(msgs: list[dict]) -> list[dict]:
+    out = []
+    for m in msgs:
+        compacted = compact_eco_text(m.get("content", ""), m.get("role", "assistant"))
+        if compacted:
+            out.append({**m, "content": compacted})
+    return out
+
+
+def allow_auto_write(policy: dict | None = None) -> bool:
+    """检查自动背景采集是否允许执行（含 curated 模式与每日软预算自动降级）。"""
+    pol = write_policy() if policy is None else policy
+    if not pol["auto_capture"]:
+        return False
+    if not pol["daily_budget"] or not ready():
+        return True
+    budget = quota.DailyBudget(STATE, cfg())
+    allowed, newly_downgraded = budget.allow_auto()
+    if newly_downgraded:
+        log(json.dumps({"event": "write_budget_downgraded", "day": budget.today(),
+                        "budget": budget.limit, "fallback_mode": "curated"}, separators=(",", ":")))
+    return allowed
+
+
+def record_auto_write(batches: int, msgs: list[dict]) -> None:
+    if batches <= 0 or not ready():
+        return
+    try:
+        quota.DailyBudget(STATE, cfg()).record_auto(
+            batches, len(msgs), sum(len(str(m.get("content", ""))) for m in msgs))
+    except OSError:
+        pass
+
+
+def record_curated_write(writes: int = 1) -> None:
+    if writes <= 0 or not ready():
+        return
+    try:
+        quota.DailyBudget(STATE, cfg()).record_curated(writes)
+    except OSError:
+        pass
 
 
 class APIResponseError(RuntimeError):
@@ -841,9 +1031,7 @@ def _v2_messages(msgs: list[dict]) -> list[dict]:
     return out
 
 
-def post_messages(session_id: str, msgs: list[dict], agent: bool = False, ver: str | None = None) -> str:
-    ensure_writable()
-    ver = ver or version()
+def _split_batches(msgs: list[dict]) -> list[list[dict]]:
     batches, cur, size = [], [], 0
     for msg in msgs:
         n = len(json.dumps(msg, ensure_ascii=False).encode("utf-8"))
@@ -854,6 +1042,13 @@ def post_messages(session_id: str, msgs: list[dict], agent: bool = False, ver: s
         size += n
     if cur:
         batches.append(cur)
+    return batches
+
+
+def post_messages(session_id: str, msgs: list[dict], agent: bool = False, ver: str | None = None) -> str:
+    ensure_writable()
+    ver = ver or version()
+    batches = _split_batches(msgs)
     status = ""
     for batch in batches:
         try:
@@ -1009,9 +1204,14 @@ def remember(host: str, topic: str, content: str, user_said: str = "",
             everos_sid = str(st.get("everos_session_id") or "")
             if 1 <= len(everos_sid) <= 128:
                 add = post_messages(everos_sid, msgs)
-                st.update(pending=True, api=version(), last_write_ms=int(time.time() * 1000),
+                now_ms = int(time.time() * 1000)
+                st.update(pending=True, api=version(), last_write_ms=now_ms,
                           last_write_status=add, writes=st.get("writes", 0) + 1,
-                          messages=st.get("messages", 0) + len(msgs))
+                          messages=st.get("messages", 0) + len(msgs),
+                          last_sent_role="assistant", has_user=True,
+                          remember_turn={"at_ms": now_ms, "offset": int(st.get("offset", 0)),
+                                         "has_user_said": bool(said)})
+                record_curated_write()
                 if version() == "v1":
                     time.sleep(1)
                     res = flush(everos_sid)
@@ -1022,6 +1222,7 @@ def remember(host: str, topic: str, content: str, user_said: str = "",
                 return f"{everos_sid}: v2 {add}/deferred；session_id={everos_sid}；写入已确认，抽取及搜索可见性须另行核对"
     sid = f"{slug(host, 24) or 'agent'}_{datetime.now(CST):%Y%m%d}"
     add = post_messages(sid, msgs)
+    record_curated_write()
     if version() == "v1":
         time.sleep(1)
         return f"{sid}: v1 {add}/{flush(sid)}"
@@ -1160,6 +1361,7 @@ def record_practice(host: str, topic: str, task: str, steps: list[dict], conclus
         error = quota.WriteError("做法记录未完整写入；" + result, failures, len(vers), progressed)
         log_error("practice incomplete", error)
         raise error
+    record_curated_write()
     if v2_done is not None:
         result += "；" + practice_case_note(sid, msgs[0]["timestamp"], v2_done)
     elif "v2" in vers:
@@ -1183,6 +1385,7 @@ def fix_profile(operations: list[dict]) -> str:
     if type(data.get("applied")) is not int or data.get("applied") != len(selected) or (isinstance(results, list) and any(
             not isinstance(it, dict) or it.get("error") or it.get("status") != "applied" for it in results)):
         raise APIResponseError(f"画像编辑未完整应用：applied={data.get('applied')!r}/{len(selected)}")
+    record_curated_write()
     return json.dumps({"applied": data.get("applied"), "results": data.get("results")}, ensure_ascii=False)[:1500]
 
 
@@ -1361,6 +1564,7 @@ def messages_claude(entries: list[dict], host: str = "claude_code") -> list[dict
     ask_ids: set[str] = set()
     buf: list[str] = []
     buf_ts = 0
+    skip_heartbeat = False
 
     def flush_assistant():
         nonlocal buf, buf_ts
@@ -1375,6 +1579,8 @@ def messages_claude(entries: list[dict], host: str = "claude_code") -> list[dict
         t, m = o.get("type"), (o.get("message") or {})
         content = m.get("content")
         if t == "assistant" and isinstance(content, list):
+            if skip_heartbeat:
+                continue
             for c in content:
                 if not isinstance(c, dict):
                     continue
@@ -1389,6 +1595,14 @@ def messages_claude(entries: list[dict], host: str = "claude_code") -> list[dict
                         buf.append(f"（经 botmux 发到飞书）{reply}")
                         buf_ts = ts_ms(o.get("timestamp"))
         elif t == "user":
+            raw_text = content if isinstance(content, str) else (
+                "\n".join(x.get("text", "") for x in content if isinstance(x, dict) and x.get("type") == "text")
+                if isinstance(content, list) else ""
+            )
+            if is_heartbeat_text(raw_text):
+                flush_assistant()
+                skip_heartbeat = True
+                continue
             if isinstance(content, list):
                 for c in content:
                     if isinstance(c, dict) and c.get("type") == "tool_result" and c.get("tool_use_id") in ask_ids:
@@ -1396,11 +1610,13 @@ def messages_claude(entries: list[dict], host: str = "claude_code") -> list[dict
                         if isinstance(r, list):
                             r = "\n".join(x.get("text", "") for x in r if isinstance(x, dict))
                         flush_assistant()
+                        skip_heartbeat = False
                         msgs.append({"role": "user", "sender_id": owner(), "timestamp": ts_ms(o.get("timestamp")),
                                      "content": clip(f"（回答选择题）{r}")})
             text = _claude_user_text(content)
             if text:
                 flush_assistant()
+                skip_heartbeat = False
                 text, sender = split_botmux(text)
                 msgs.append({"role": "user", **sender, "timestamp": ts_ms(o.get("timestamp")), "content": clip(text)})
     flush_assistant()
@@ -1417,13 +1633,15 @@ def _codex_turn_id(entry: dict, current: str | None) -> str | None:
 
 def _codex_user_text(raw: str, user_prompt: str | None = None) -> str | None:
     """对齐官方 EverMind-AI/Plugins/codex：有 turn_id 提问记录时精确比对用户原话，无记录时按脚手架特征剔除。"""
-    text = strip_injected_memory(raw).strip()
+    text = _EXTERNAL_CODEX_PAGE.sub("", strip_injected_memory(raw)).strip()
     if not text:
         return None
     if "<user_message>" in text:
         return text
     if isinstance(user_prompt, str) and user_prompt.strip():
-        clean_prompt = strip_injected_memory(user_prompt).strip()
+        clean_prompt = _EXTERNAL_CODEX_PAGE.sub("", strip_injected_memory(user_prompt)).strip()
+        if not clean_prompt or clean_prompt.startswith(_SKIP_PREFIX):
+            return None
         key = clean_prompt[:200]
         if not key or key not in text:
             return None
@@ -1437,9 +1655,10 @@ def _codex_user_text(raw: str, user_prompt: str | None = None) -> str | None:
 
 def messages_codex(entries: list[dict], host: str = "codex",
                    turn_prompts: dict[str, str] | None = None) -> list[dict]:
-    """Codex rollout：response_item 里 role=user 的原话（剔除脚手架）与 role=assistant 的输出。"""
+    """Codex rollout：response_item 里 role=user 的原话（剔除脚手架与定时心跳）与 role=assistant 的输出。"""
     msgs: list[dict] = []
     current_turn: str | None = None
+    skip_heartbeat = False
     for o in entries:
         if o.get("type") == "turn_context":
             current_turn = _codex_turn_id(o, current_turn)
@@ -1456,12 +1675,18 @@ def messages_codex(entries: list[dict], host: str = "codex",
         if not text:
             continue
         if p["role"] == "user":
+            if is_heartbeat_text(text):
+                skip_heartbeat = True
+                continue
             recorded = (turn_prompts or {}).get(turn_id) if turn_id else None
             cleaned = _codex_user_text(text, recorded)
             if not cleaned:
                 continue
+            skip_heartbeat = False
             cleaned, sender = split_botmux(cleaned)
             msgs.append({"role": "user", **sender, "timestamp": ts_ms(o.get("timestamp")), "content": clip(cleaned)})
+        elif skip_heartbeat:
+            continue
         elif msgs and msgs[-1]["role"] == "assistant":
             msgs[-1]["content"] = clip(msgs[-1]["content"] + "\n\n" + text)
             msgs[-1]["timestamp"] = ts_ms(o.get("timestamp"))
@@ -1474,6 +1699,7 @@ def messages_codex(entries: list[dict], host: str = "codex",
 def messages_trae(entries: list[dict], host: str = "trae") -> list[dict]:
     """TraeX original dialogue, from modern mutations or legacy response items."""
     msgs = []
+    skip_heartbeat = False
     for entry in trae.message_entries(entries):
         item = entry["payload"]
         text = "\n".join(part.get("text", "") for part in item.get("content", [])
@@ -1481,6 +1707,9 @@ def messages_trae(entries: list[dict], host: str = "trae") -> list[dict]:
         if not text:
             continue
         if item["role"] == "user":
+            if is_heartbeat_text(text):
+                skip_heartbeat = True
+                continue
             text = strip_injected_memory(text).strip()
             if not text:
                 continue
@@ -1490,7 +1719,10 @@ def messages_trae(entries: list[dict], host: str = "trae") -> list[dict]:
                     "<system-reminder>", "<skills_instructions>", "<plugins_instructions>", "<collaboration_mode>",
                     "<multi_agent_mode>", "# Environment")):
                 continue
+            skip_heartbeat = False
             text, sender = split_botmux(text)
+        elif skip_heartbeat:
+            continue
         else:
             sender = {"sender_id": host}
         msgs.append({"role": item["role"], **sender, "timestamp": ts_ms(entry.get("timestamp")), "content": clip(text)})
@@ -1500,6 +1732,7 @@ def messages_trae(entries: list[dict], host: str = "trae") -> list[dict]:
 def messages_kimi(entries: list[dict], host: str = "kimi") -> list[dict]:
     """Kimi Code / Kimi Work 桌面端 wire.jsonl：用户原话在 context.append_message（origin=user），回复在 content.part（text）。"""
     msgs: list[dict] = []
+    skip_heartbeat = False
     for o in entries:
         t = o.get("type")
         if t == "context.append_message":
@@ -1509,11 +1742,17 @@ def messages_kimi(entries: list[dict], host: str = "kimi") -> list[dict]:
             text = "\n".join(c.get("text", "") for c in m.get("content") or [] if isinstance(c, dict)
                              and c.get("type") == "text")
             text = strip_injected_memory(_DESKTOP_META.sub("", text)).strip()  # 桌面端 <meta .../> 前导脚手架
+            if is_heartbeat_text(text):
+                skip_heartbeat = True
+                continue
             if text:
+                skip_heartbeat = False
                 text, sender = split_botmux(text)
                 msgs.append({"role": "user", **sender, "timestamp": int(o.get("time") or 0) or ts_ms(None),
                              "content": clip(text)})
         elif t == "context.append_loop_event":
+            if skip_heartbeat:
+                continue
             ev = o.get("event") or {}
             part = ev.get("part") or {}
             if ev.get("type") != "content.part" or part.get("type") != "text" or not str(part.get("text", "")).strip():
@@ -1535,6 +1774,7 @@ def messages_kimi(entries: list[dict], host: str = "kimi") -> list[dict]:
 def messages_mimo(rows: list[dict], host: str = "mimocode") -> list[dict]:
     """MiMoCode Plugin session.post 的 TrajectoryMessage 切片：用户/助手可见文本，剔除 synthetic 与 reasoning。"""
     msgs: list[dict] = []
+    skip_heartbeat = False
     for row in rows or []:
         if not isinstance(row, dict) or row.get("role") not in ("user", "assistant"):
             continue
@@ -1550,7 +1790,14 @@ def messages_mimo(rows: list[dict], host: str = "mimocode") -> list[dict]:
         content = "\n".join(texts).strip()
         if row.get("role") == "user":
             content = strip_injected_memory(content).strip()
+            if is_heartbeat_text(content):
+                skip_heartbeat = True
+                continue
+            if content:
+                skip_heartbeat = False
         elif row.get("role") == "assistant":
+            if skip_heartbeat:
+                continue
             content = str(row.get("finalText") or content).strip()
         if not content:
             continue
@@ -1597,6 +1844,7 @@ def messages_antigravity(entries: list[dict], host: str = "antigravity") -> list
     msgs: list[dict] = []
     buf: list[str] = []
     buf_ts = 0
+    skip_heartbeat = False
 
     def flush_assistant():
         nonlocal buf, buf_ts
@@ -1610,12 +1858,20 @@ def messages_antigravity(entries: list[dict], host: str = "antigravity") -> list
         src = o.get("source")
         stamp = ts_ms(o.get("created_at") or o.get("timestamp"))
         if t == "USER_INPUT" and src in (None, "USER_EXPLICIT"):
-            text = clean_antigravity_text(o.get("content"))
+            raw_content = o.get("content")
+            if isinstance(raw_content, str) and is_heartbeat_text(_ANTIGRAVITY_META.sub("", raw_content)):
+                flush_assistant()
+                skip_heartbeat = True
+                continue
+            text = clean_antigravity_text(raw_content)
             if text:
                 flush_assistant()
+                skip_heartbeat = False
                 text, sender = split_botmux(text)
                 msgs.append({"role": "user", **sender, "timestamp": stamp, "content": clip(text)})
         elif t == "PLANNER_RESPONSE" and src in (None, "MODEL"):
+            if skip_heartbeat:
+                continue
             text = str(o.get("content") or "").strip()
             if text:
                 buf.append(text)
@@ -1666,14 +1922,50 @@ def is_subagent_payload(payload: dict) -> bool:
     return bool(event == "SubagentStop" or payload.get("agent_transcript_path") or payload.get("parent_session_id"))
 
 
+def _parse_host_entries(entries: list[dict], host: str, sid: str) -> list[dict]:
+    if host == "codex":
+        return messages_codex(entries, host, turn_prompts=_turn_prompts(sid))
+    parse = {"trae": messages_trae, "antigravity": messages_antigravity,
+             "kimi": messages_kimi, "kimi_desktop": messages_kimi}.get(host, messages_claude)
+    return parse(entries, host)
+
+
+def _dedupe_remember_msgs(st: dict, offset: int, msgs: list[dict]) -> list[dict]:
+    """同轮已通过 memory_remember(conversation_id=...) 写入时，避免紧随其后的 Stop 重复上传整轮长回复。"""
+    rt = st.pop("remember_turn", None)
+    if not isinstance(rt, dict):
+        return msgs
+    now_ms = int(time.time() * 1000)
+    if rt.get("offset") != offset or now_ms - int(rt.get("at_ms", 0)) > REMEMBER_DEDUPE_MS:
+        return msgs
+    user_indices = [i for i, m in enumerate(msgs) if m.get("role") == "user"]
+    if len(user_indices) != 1:
+        return msgs
+    first_user = user_indices[0]
+    leading = msgs[:first_user]
+    if rt.get("has_user_said"):
+        return leading
+    shortened = [msgs[first_user]]
+    for m in msgs[first_user + 1:]:
+        if m.get("role") == "assistant":
+            brief = compact_eco_text(m.get("content", ""), "assistant", limit=240)
+            note = "…[本轮结论已由 memory_remember 结构化入库]"
+            shortened.append({**m, "content": f"{brief}\n{note}" if brief else note})
+        else:
+            shortened.append(m)
+    return leading + shortened
+
+
 def write_turns(payload: dict) -> None:
     ensure_writable()
     if is_subagent_payload(payload):
         return
+    event = str(payload.get("hook_event_name") or os.environ.get("EVEROS_HOOK_EVENT") or "")
+    if event == "Stop" and payload.get("fullyIdle") is False:
+        return
     sid = str(payload.get("session_id") or payload.get("conversationId") or "")
     raw_tpath = str(payload.get("transcript_path") or payload.get("transcriptPath") or "")
     tpath = Path(raw_tpath)
-    event = str(payload.get("hook_event_name") or os.environ.get("EVEROS_HOOK_EVENT") or "")
     host_hint = os.environ.get("EVEROS_HOST", "")
     cwd = str(payload.get("cwd") or ((payload.get("workspacePaths") or [""])[0]
               if isinstance(payload.get("workspacePaths"), list) and payload.get("workspacePaths") else ""))
@@ -1699,38 +1991,70 @@ def write_turns(payload: dict) -> None:
     with open(sp.with_suffix(".lock"), "w") as lk:
         fcntl.flock(lk, fcntl.LOCK_EX)  # 同一会话的 Stop / SessionEnd 串行
         st = load_state(sp)
-        if st.get("transcript_path") and Path(str(st.get("transcript_path"))) != tpath:
-            st["offset"] = 0
-            st["transcript_path"] = str(tpath)
-        offset = int(st.get("offset", 0))
+        path_changed = bool(st.get("transcript_path") and Path(str(st.get("transcript_path"))) != tpath)
+        offset = 0 if path_changed else int(st.get("offset", 0))
         entries, new_offset = read_new_entries(tpath, offset)
-        if not st.get("everos_session_id"):
+        head = None
+        if st.get("everos_session_id"):
+            host = st.get("host") or "claude_code"
+        else:
             head, _ = read_new_entries(tpath, 0) if offset else (entries, 0)
             host = ("trae" if host_hint == "trae" else
                     "antigravity" if host_hint == "antigravity" else detect_host(head, str(tpath)))
+        msgs = _parse_host_entries(entries, host, sid)
+        has_user_now = any(m.get("role") == "user" for m in msgs)
+        session_has_user = bool(st.get("has_user") or st.get("messages", 0) > 0 or has_user_now)
+        if not session_has_user and not st.get("pending") and not st.get("deferred_flush"):
+            return
+        if path_changed:
+            st["offset"] = 0
+            st["transcript_path"] = str(tpath)
+        if not st.get("everos_session_id"):
+            if head is None:
+                head, _ = read_new_entries(tpath, 0) if offset else (entries, 0)
             st.update(claude_session_id=sid, host=host, cwd=cwd, transcript_path=str(tpath),
                       everos_session_id=session_name(head, host, cwd,
                                                      sid.removeprefix("session_"), str(payload.get("session_title") or
                                                      payload.get("thread_name") or payload.get("session_name") or "")))
-        host = st.get("host") or "claude_code"
         prepare_session_version(st, sp)
-        if host == "codex":
-            msgs = messages_codex(entries, host, turn_prompts=_turn_prompts(sid))
-        else:
-            parse = {"trae": messages_trae, "antigravity": messages_antigravity,
-                     "kimi": messages_kimi, "kimi_desktop": messages_kimi}.get(host, messages_claude)
-            msgs = parse(entries, host)
+        if session_has_user:
+            st["has_user"] = True
         # Persist validated source identity before the first network write, but
         # never acknowledge bytes when parsing or writing fails.
         if not sp.exists():
             save_state(sp, st)
-        if msgs:
-            res = post_messages(st["everos_session_id"], msgs)
-            st.update(pending=True, api=version(), last_write_ms=int(time.time() * 1000), last_write_status=res,
-                      writes=st.get("writes", 0) + 1, messages=st.get("messages", 0) + len(msgs))
-            log(f"{event} add {st['everos_session_id']} +{len(msgs)} -> {res}")
-        st["offset"] = new_offset
-        save_state(sp, st)
+        policy = write_policy()
+        if not policy["auto_capture"]:
+            st["offset"] = new_offset
+            st.pop("deferred_wakeup", None)
+            st.pop("deferred_at_ms", None)
+            st.pop("remember_turn", None)
+            save_state(sp, st)
+        elif (policy["coalesce_wakeup"] and event == "Stop" and msgs
+              and not has_user_now and st.get("last_sent_role") == "assistant"):
+            # Reactive wakeup（子 agent / 后台任务完成唤醒）只追加了助手续写：暂不推进 offset，留到下一轮用户提问或会话空闲合并成 1 次 add
+            st.update(deferred_wakeup=True, deferred_at_ms=int(time.time() * 1000))
+            save_state(sp, st)
+        else:
+            if policy["dedupe_remember"] and msgs:
+                msgs = _dedupe_remember_msgs(st, offset, msgs)
+            else:
+                st.pop("remember_turn", None)
+            if policy["compact"] and msgs:
+                msgs = compact_eco_messages(msgs)
+            if msgs:
+                if allow_auto_write(policy):
+                    batches = len(_split_batches(msgs))
+                    res = post_messages(st["everos_session_id"], msgs)
+                    record_auto_write(batches, msgs)
+                    st.update(pending=True, api=version(), last_write_ms=int(time.time() * 1000), last_write_status=res,
+                              writes=st.get("writes", 0) + 1, messages=st.get("messages", 0) + len(msgs),
+                              last_sent_role=msgs[-1]["role"])
+                    log(f"{event} add {st['everos_session_id']} +{len(msgs)} -> {res}")
+            st["offset"] = new_offset
+            st.pop("deferred_wakeup", None)
+            st.pop("deferred_at_ms", None)
+            save_state(sp, st)
         if event in ("SessionEnd", "PreCompact") and st.get("pending") and st.get("api") == "v1":
             try:
                 res = flush(st["everos_session_id"], ver=st.get("api"))
@@ -1757,15 +2081,28 @@ def write_mimo_turns(payload: dict) -> None:
     with open(sp.with_suffix(".lock"), "w") as lk:
         fcntl.flock(lk, fcntl.LOCK_EX)
         st = load_state(sp)
+        has_user_now = any(m.get("role") == "user" for m in msgs)
+        session_has_user = bool(st.get("has_user") or st.get("messages", 0) > 0 or has_user_now)
+        if msgs and not session_has_user and not st.get("pending") and not st.get("deferred_flush"):
+            return
         if not st.get("everos_session_id"):
             st.update(claude_session_id=sid, host=host, cwd=cwd,
                       everos_session_id=session_name([], host, cwd, sid.removeprefix("session_"), title))
         prepare_session_version(st, sp)
-        if msgs:
-            res = post_messages(st["everos_session_id"], msgs)
-            st.update(pending=True, api=version(), last_write_ms=int(time.time() * 1000), last_write_status=res,
-                      writes=st.get("writes", 0) + 1, messages=st.get("messages", 0) + len(msgs))
-            log(f"mimocode add {st['everos_session_id']} +{len(msgs)} -> {res}")
+        if session_has_user:
+            st["has_user"] = True
+        policy = write_policy()
+        if msgs and policy["auto_capture"]:
+            if policy["compact"]:
+                msgs = compact_eco_messages(msgs)
+            if msgs and allow_auto_write(policy):
+                batches = len(_split_batches(msgs))
+                res = post_messages(st["everos_session_id"], msgs)
+                record_auto_write(batches, msgs)
+                st.update(pending=True, api=version(), last_write_ms=int(time.time() * 1000), last_write_status=res,
+                          writes=st.get("writes", 0) + 1, messages=st.get("messages", 0) + len(msgs),
+                          last_sent_role=msgs[-1]["role"])
+                log(f"mimocode add {st['everos_session_id']} +{len(msgs)} -> {res}")
         save_state(sp, st)
         if st.get("pending") and st.get("api") == "v1":
             try:
@@ -1795,6 +2132,9 @@ def _frontmatter(text: str) -> tuple[dict, str]:
 def sync_local_memory(limit: int | None = None) -> None:
     """Claude Code 本地记忆（~/.claude/projects/*/memory/*.md）新增或改动后同步进 EverOS。"""
     ensure_writable()
+    policy = write_policy()
+    if not policy["auto_capture"]:
+        return
     STATE.mkdir(parents=True, exist_ok=True)
     with open(STATE / "localmem.lock", "w") as lk:
         try:
@@ -1813,6 +2153,8 @@ def sync_local_memory(limit: int | None = None) -> None:
                 continue
             if limit is not None and done >= limit:
                 break
+            if not allow_auto_write(policy):
+                break
             meta, body = _frontmatter(f.read_text(encoding="utf-8"))
             project = re.sub(r"^-Users-[^-]+-(GolandProjects-)?", "", f.parent.parent.name).replace("-", "_")
             note_name = meta.get("name") or f.stem
@@ -1822,12 +2164,16 @@ def sync_local_memory(limit: int | None = None) -> None:
             last_ts = t
             born = datetime.fromtimestamp(getattr(f.stat(), "st_birthtime", mtime), CST)
             dates = f"首次记录 {born:%Y-%m-%d}，最后更新 {datetime.fromtimestamp(mtime, CST):%Y-%m-%d}"
+            content_body = (compact_eco_text(body, "assistant", limit=max(2400, eco_assistant_chars()))
+                            if policy["compact"] else clip(body))
             msgs = [{"role": "user", "sender_id": owner(), "timestamp": t - 1,
                      "content": f"（本地 Claude 记忆 · {meta.get('type', '?')} · {project} · {note_name} · {dates}）"
                                 f"{meta.get('description', note_name)}"},
-                    {"role": "assistant", "sender_id": "claude_code", "timestamp": t, "content": clip(body)}]
+                    {"role": "assistant", "sender_id": "claude_code", "timestamp": t, "content": content_body}]
             try:
+                batches = len(_split_batches(msgs))
                 add = post_messages(sid, msgs)
+                record_auto_write(batches, msgs)
                 res = "deferred"
                 if version() == "v1":
                     time.sleep(1)
@@ -1855,13 +2201,14 @@ def sync_local_memory(limit: int | None = None) -> None:
 
 
 def sweep(force: bool = False) -> None:
-    """补 legacy v1 flush 并同步本地记忆；v2（包括 force）由服务端或显式工具抽取。"""
+    """补延迟合并的 wakeup 续写、补 legacy v1 flush 并同步本地记忆；v2（包括 force）由服务端或显式工具抽取。"""
     ensure_writable()
     now = time.time()
     STATE.mkdir(parents=True, exist_ok=True)
     if not force and SWEEP_MARK.exists() and now - SWEEP_MARK.stat().st_mtime < SWEEP_EVERY_MIN * 60:
         return
     SWEEP_MARK.touch()
+    policy = write_policy()
     for p in sorted(SESS_DIR.glob("*.json")):
         with open(p.with_suffix(".lock"), "w") as lk:
             try:
@@ -1871,6 +2218,34 @@ def sweep(force: bool = False) -> None:
             st = load_state(p)
             if st.get("identity") not in (None, _write_identity()):
                 continue
+            if (st.get("deferred_wakeup") and st.get("transcript_path")
+                    and (force or now * 1000 - int(st.get("deferred_at_ms", 0)) >= WAKEUP_FLUSH_MS)):
+                tpath = Path(str(st.get("transcript_path")))
+                if tpath.is_file():
+                    try:
+                        offset = int(st.get("offset", 0))
+                        entries, new_offset = read_new_entries(tpath, offset)
+                        host = st.get("host") or "claude_code"
+                        sid = str(st.get("claude_session_id") or p.stem)
+                        msgs = _parse_host_entries(entries, host, sid)
+                        if policy["auto_capture"] and msgs:
+                            if policy["compact"]:
+                                msgs = compact_eco_messages(msgs)
+                            if msgs and allow_auto_write(policy):
+                                batches = len(_split_batches(msgs))
+                                res = post_messages(st["everos_session_id"], msgs)
+                                record_auto_write(batches, msgs)
+                                st.update(pending=True, api=version(), last_write_ms=int(now * 1000),
+                                          last_write_status=res, writes=st.get("writes", 0) + 1,
+                                          messages=st.get("messages", 0) + len(msgs),
+                                          last_sent_role=msgs[-1]["role"])
+                                log(f"sweep wakeup add {st['everos_session_id']} +{len(msgs)} -> {res}")
+                        st["offset"] = new_offset
+                        st.pop("deferred_wakeup", None)
+                        st.pop("deferred_at_ms", None)
+                        save_state(p, st)
+                    except Exception as exc:
+                        log_error(f"sweep wakeup add failed {st.get('everos_session_id')}", exc)
             idle_h = (now * 1000 - st.get("last_write_ms", 0)) / 3_600_000
             if st.get("pending") and st.get("api", "v1") == "v1" and (force or idle_h >= IDLE_FLUSH_H):
                 try:
@@ -1887,14 +2262,36 @@ def doctor_result() -> tuple[str, bool]:
     """返回可读诊断及健康状态，供安装器用退出码判断真实结果。"""
     c = cfg()
     healthy = ready()
+    config_errors = []
+    try:
+        mode = write_mode(c, strict=True)
+    except ValueError as exc:
+        healthy = False
+        mode = write_mode(c)
+        config_errors.append(str(exc))
+    try:
+        daily_cap = quota.parse_daily_budget(c, strict=True)
+    except ValueError as exc:
+        healthy = False
+        daily_cap = quota.parse_daily_budget(c)
+        config_errors.append(str(exc))
+    budget_note = ""
+    if mode in ("eco", "full") and daily_cap > 0 and ready():
+        bstat = quota.DailyBudget(STATE, c).status()
+        budget_note = f"（今日自动采集 {bstat['auto_adds']}/{bstat['budget']} 批{'，已降级 curated' if bstat['downgraded'] else ''}）"
+    elif mode in ("eco", "full"):
+        budget_note = "（每日自动预算未限制）" if daily_cap == 0 else f"（每日自动预算 {daily_cap} 批）"
+    write_label = "关" if mode == "off" else f"开（mode={mode}）{budget_note}"
     lines = [f"EVEROS_HOME   {HOME}（config.env {'存在' if (HOME / 'config.env').is_file() else '无'}）",
              f"API           {version()}{'，过渡期同时读 v1' if version() == 'v2' and read_v1() else ''}；base {c['EVEROS_API_BASE']}",
              f"user_id       {c.get('EVEROS_USER_ID') or '缺失：设置 EVEROS_USER_ID'}",
              "API key       " + ("已配置" if c.get("EVEROS_API_KEY") else
                                   "未配置，云端走网络密钥" if network_secret_mode() else
                                   "缺失：设置 EVEROS_API_KEY 或写入 config.env"),
-             f"读侧注入      {'关' if c.get('EVEROS_INJECT') == '0' else '开'}；写侧 {'关' if c.get('EVEROS_WRITE') == '0' else '开'}；"
+             f"读侧注入      {'关' if c.get('EVEROS_INJECT') == '0' else '开'}；写侧 {write_label}；"
              f"min_score {_num('EVEROS_MIN_SCORE', 0.3)}；每轮预算 {_num('EVEROS_RECALL_TIMEOUT', 18):.0f}s / {int(_num('EVEROS_RECALL_CHARS', 2000))} 字"]
+    for err in config_errors:
+        lines.append(f"配置错误      {err}")
     checks = []
     if version() == "v2" and c.get("EVEROS_USER_ID"):
         checks += [("v2 用户记忆", "/api/v2/memory/get", {"memory_type": "episode", "user_id": owner(), "page_size": 1}),
