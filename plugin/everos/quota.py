@@ -10,6 +10,7 @@ import os
 import time
 import urllib.error
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 try:
@@ -17,7 +18,9 @@ try:
 except ImportError:  # Generated Windows runtime supplies the same lock interface.
     import windows_lock as fcntl
 
+CST = timezone(timedelta(hours=8))
 COOLDOWN = 900
+DEFAULT_DAILY_BUDGET = 40
 RESOURCES = ("mcu", "retrieval")
 READ_PATHS = {"/api/v2/memory/get", "/api/v2/memory/search",
               "/api/v1/memories/get", "/api/v1/memories/search"}
@@ -207,3 +210,132 @@ class Gate:
             state["retry_at"] = 0
             self.save(state)
             return True
+
+
+def parse_daily_budget(config: dict, *, strict: bool = False) -> int:
+    """Parse EVEROS_DAILY_WRITE_BUDGET (0 disables soft cap; default 40 auto add batches/day)."""
+    raw = config.get("EVEROS_DAILY_WRITE_BUDGET")
+    if raw is None or str(raw).strip() == "":
+        return DEFAULT_DAILY_BUDGET
+    if isinstance(raw, bool):
+        if strict:
+            raise ValueError("EVEROS_DAILY_WRITE_BUDGET 须为非负整数")
+        return DEFAULT_DAILY_BUDGET
+    text = str(raw).strip()
+    if not text.isdigit():
+        if strict:
+            raise ValueError("EVEROS_DAILY_WRITE_BUDGET 须为非负整数")
+        return DEFAULT_DAILY_BUDGET
+    return int(text)
+
+
+class DailyBudget:
+    """Credential+user-scoped soft daily cap for automatic background writes.
+
+    Reaching the cap downgrades background dialogue capture to curated-only for
+    the rest of the CST day; explicit remember / practice / fix_profile / flush
+    writes are never blocked by this soft budget.
+    """
+
+    def __init__(self, state: Path, config: dict):
+        self.limit = parse_daily_budget(config, strict=False)
+        identity = (config.get("EVEROS_API_BASE", "").rstrip("/") + "\0"
+                    + (config.get("EVEROS_API_KEY") or "proxy:" + config.get("EVEROS_USER_ID", ""))
+                    + "\0" + config.get("EVEROS_USER_ID", ""))
+        digest = hashlib.sha256(identity.encode()).hexdigest()
+        self.path = state / "quotas" / f"{digest}-daily.json"
+
+    @staticmethod
+    def today() -> str:
+        return datetime.now(CST).strftime("%Y-%m-%d")
+
+    @contextlib.contextmanager
+    def locked(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        fd = os.open(str(self.path.with_suffix(".lock")), os.O_CREAT | os.O_RDWR, 0o600)
+        with os.fdopen(fd, "a+b") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            yield
+
+    def _fresh(self, day: str) -> dict:
+        return {"resource": "daily_auto_write", "day": day, "auto_adds": 0,
+                "auto_messages": 0, "auto_chars": 0, "curated_writes": 0, "downgraded": False}
+
+    def _load(self, day: str) -> dict:
+        try:
+            raw = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return self._fresh(day)
+        if not isinstance(raw, dict) or raw.get("resource") != "daily_auto_write" or raw.get("day") != day:
+            return self._fresh(day)
+        out = self._fresh(day)
+        for key in ("auto_adds", "auto_messages", "auto_chars", "curated_writes"):
+            val = raw.get(key)
+            if type(val) is int and val >= 0:
+                out[key] = val
+        out["downgraded"] = bool(raw.get("downgraded"))
+        return out
+
+    def _save(self, data: dict) -> None:
+        tmp = self.path.with_name(self.path.name + "." + uuid.uuid4().hex + ".tmp")
+        try:
+            fd = os.open(str(tmp), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(data, handle, ensure_ascii=False)
+            os.replace(tmp, self.path)
+        finally:
+            try:
+                tmp.unlink()
+            except FileNotFoundError:
+                pass
+
+    def allow_auto(self) -> tuple[bool, bool]:
+        """Return (allowed, newly_downgraded)."""
+        if self.limit <= 0:
+            return True, False
+        day = self.today()
+        with self.locked():
+            data = self._load(day)
+            if data["auto_adds"] < self.limit:
+                return True, False
+            newly = not data["downgraded"]
+            if newly:
+                data["downgraded"] = True
+                self._save(data)
+            return False, newly
+
+    def record_auto(self, adds: int, messages: int, chars: int) -> dict:
+        day = self.today()
+        with self.locked():
+            data = self._load(day)
+            data["auto_adds"] += max(0, int(adds))
+            data["auto_messages"] += max(0, int(messages))
+            data["auto_chars"] += max(0, int(chars))
+            self._save(data)
+            return data
+
+    def record_curated(self, writes: int = 1) -> None:
+        day = self.today()
+        with self.locked():
+            data = self._load(day)
+            data["curated_writes"] += max(0, int(writes))
+            self._save(data)
+
+    def status(self) -> dict:
+        day = self.today()
+        if not self.path.is_file():
+            data = self._fresh(day)
+        else:
+            with self.locked():
+                data = self._load(day)
+        exhausted = self.limit > 0 and data["auto_adds"] >= self.limit
+        return {
+            "day": day,
+            "budget": self.limit,
+            "enabled": self.limit > 0,
+            "auto_adds": data["auto_adds"],
+            "auto_messages": data["auto_messages"],
+            "auto_chars": data["auto_chars"],
+            "curated_writes": data["curated_writes"],
+            "downgraded": exhausted or bool(data["downgraded"]),
+        }

@@ -47,9 +47,12 @@ EVEROS_API_VERSION=v2
 | `EVEROS_AGENTIC_TIMEOUT` | `180` | agentic 检索的总预算，单位为秒 |
 | `EVEROS_CASE_WAIT` | `30` | 做法 case 回读的最长等待秒数；从 0.10.0 起，只有 v2 add 返回 `extracted` 才轮询；`0` 关闭回读 |
 | `EVEROS_INJECT` | 开启 | 设置为 `0`，关闭自动注入 |
-| `EVEROS_WRITE` | 开启 | 设置为 `0`，关闭 Bridge 的全部写入 |
+| `EVEROS_WRITE_MODE` | `eco` | 写侧模式（0.10.4+）：`eco`（省额度背景脱水采集）、`full`（全量原文采集）、`curated`（仅显式结构化写工具）、`off`（关闭全部写入） |
+| `EVEROS_DAILY_WRITE_BUDGET` | `40` | 每日自动背景 `add` 批次软上限（0.10.4+，东八区自然日）；达到上限后当日自动降级为 `curated`，不影响显式写工具；`0` 不限制 |
+| `EVEROS_ECO_ASSISTANT_CHARS` / `EVEROS_ECO_USER_CHARS` | `1200` / `4000` | `eco` 模式下自动背景采集的单条助手回复 / 用户消息首尾保留字数上限（0.10.4+） |
+| `EVEROS_WRITE` | 开启 | 设置为 `0`，关闭 Bridge 的全部写入（优先等价于 `EVEROS_WRITE_MODE=off`） |
 
-加入不带引号的 `EVEROS_WRITE=0`，可关闭采集、MCP 写工具、画像编辑、flush 和本地记忆同步。`EVEROS_INJECT=0` 不会关闭手动检索。
+加入不带引号的 `EVEROS_WRITE=0`（或 `EVEROS_WRITE_MODE=off`），可关闭采集、MCP 写工具、画像编辑、flush 和本地记忆同步；设为 `EVEROS_WRITE_MODE=curated` 则只停用自动背景采集并保留显式记忆写工具。`EVEROS_INJECT=0` 不会关闭手动检索。
 
 ## 终端检索
 
@@ -203,7 +206,7 @@ everos quota retry --resource mcu
 everos quota retry --resource retrieval
 ```
 
-`status` 读取本机熔断状态，不查询云端余额。补充额度后，`retry` 允许下一次相关请求探测是否恢复。命令本身不发送网络请求，也不表示额度已经恢复。不手动 retry 时，默认暂停 15 分钟后允许一次探测。
+`status` 读取本机熔断状态以及当前 `write_mode` 和每日自动采集软预算用量（`daily_budget`），不查询云端余额。补充额度后，`retry` 允许下一次相关请求探测是否恢复。命令本身不发送网络请求，也不表示额度已经恢复。不手动 retry 时，默认暂停 15 分钟后允许一次探测。
 
 MCU 与检索配额相互独立，因此 MCU 拒绝不会关闭读取。普通速率限制响应与明确的硬配额错误分别处理。
 

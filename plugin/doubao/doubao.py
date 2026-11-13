@@ -50,8 +50,9 @@ def parse_ts(value: str) -> int:
 
 
 def clean_user(text: str) -> str:
-    """Strip injected memory and system-reminder blocks; the harness repeats them on every turn."""
-    return core._REMINDER.sub("", core.strip_injected_memory(text)).strip()
+    """Strip injected memory, external app dumps, and system-reminder blocks."""
+    cleaned = core._EXTERNAL_CODEX_PAGE.sub("", core.strip_injected_memory(text))
+    return core._REMINDER.sub("", cleaned).strip()
 
 
 def text_of(content) -> str:
@@ -76,23 +77,31 @@ def _is_final(row: dict) -> bool:
 
 def _indexed_messages(rows: list[dict], user_ts: list[int | None], fallback_ms: int):
     out, pending = [], []
-    u_idx, last_user = -1, None
+    u_idx, last_user, skip_heartbeat = -1, None, False
     for i, row in enumerate(rows):
         role = row.get("role")
         if role == "user":
             u_idx += 1
             text = clean_user(text_of(row.get("content")))
-            if not text or text == last_user:
+            if not text:
                 continue
             ts = user_ts[u_idx] if u_idx < len(user_ts) else None
             for ai, answer in pending:
                 out.append((ai, {"role": "assistant", "sender_id": HOST,
                                  "timestamp": ts - 1 if ts else fallback_ms, "content": core.clip(answer)}))
             pending = []
+            if core.is_heartbeat_text(text):
+                skip_heartbeat = True
+                continue
+            skip_heartbeat = False
+            if text == last_user:
+                continue
             last_user = text
             out.append((i, {"role": "user", "sender_id": core.owner(),
                             "timestamp": ts or fallback_ms, "content": core.clip(text)}))
         elif _is_final(row):
+            if skip_heartbeat:
+                continue
             last_user = None
             pending.append((i, text_of(row.get("content")).strip()))
     for ai, answer in pending:
@@ -280,8 +289,11 @@ def ingest_session(sid: str, *, sessions_root: Path | None = None, dry_run: bool
         head_hash = st.get("head_hash")
         if head_hash and head_hash != data["head_hash"]:
             raise RuntimeError("trajectory 已被改写或截断；为避免重复入库已停止，请人工核对")
+        policy = core.write_policy()
         indexed = _indexed_messages(rows, data["user_ts"], fallback)
         msgs = core._monotonic([m for i, m in indexed if offsets[i] >= offset])
+        if policy["compact"] and msgs:
+            msgs = core.compact_eco_messages(msgs)
         result = {"session": sid, "everos_session_id":
                   st.get("everos_session_id") or session_name(sid, rows, data["user_ts"]),
                   "new_messages": len(msgs), "roles": [m["role"] for m in msgs], "dry_run": dry_run,
@@ -291,6 +303,12 @@ def ingest_session(sid: str, *, sessions_root: Path | None = None, dry_run: bool
                                   "head": m["content"][:80]} for m in msgs]
             return result
         core.ensure_writable()
+        session_has_user = bool(st.get("has_user") or st.get("messages", 0) > 0
+                                or any(m.get("role") == "user" for _, m in indexed))
+        if not session_has_user and not st.get("pending") and not st.get("deferred_flush"):
+            result["offset_after"] = offset
+            result["skipped"] = "no_user_message"
+            return result
         if not head_hash:
             st.update(claude_session_id=sid, host=HOST, cwd=str(Path.home() / "Doubao" / "chats" / sid),
                       transcript_path=str(data["trajectory"]), everos_session_id=result["everos_session_id"],
@@ -303,16 +321,24 @@ def ingest_session(sid: str, *, sessions_root: Path | None = None, dry_run: bool
             st["legacy_offset_unit"] = source_unit
         new_offset = length
         core.prepare_session_version(st, sp)
+        if session_has_user:
+            st["has_user"] = True
         if msgs:
-            res = core.post_messages(st["everos_session_id"], msgs)
-            if res not in {"accumulated", "extracted", "buffered", "no_extraction"}:
-                raise core.APIResponseError("Doubao add 未确认成功")
-            st.update(pending=True, api=core.version(), last_write_ms=int(time.time() * 1000),
-                      last_write_status=res, writes=st.get("writes", 0) + 1,
-                      messages=st.get("messages", 0) + len(msgs))
-            core.log(f"doubao_work add {st['everos_session_id']} +{len(msgs)} -> {res}")
-            result["add"] = res
-            new_offset = length  # messages may include finals read before this byte boundary; advance to read end
+            if policy["auto_capture"] and core.allow_auto_write(policy):
+                batches = len(core._split_batches(msgs))
+                res = core.post_messages(st["everos_session_id"], msgs)
+                if res not in {"accumulated", "extracted", "buffered", "no_extraction"}:
+                    raise core.APIResponseError("Doubao add 未确认成功")
+                core.record_auto_write(batches, msgs)
+                st.update(pending=True, api=core.version(), last_write_ms=int(time.time() * 1000),
+                          last_write_status=res, writes=st.get("writes", 0) + 1,
+                          messages=st.get("messages", 0) + len(msgs),
+                          last_sent_role=msgs[-1]["role"])
+                core.log(f"doubao_work add {st['everos_session_id']} +{len(msgs)} -> {res}")
+                result["add"] = res
+                new_offset = length  # messages may include finals read before this byte boundary; advance to read end
+            else:
+                result["skipped"] = "curated"
         st.update(offset=new_offset, offset_unit="bytes-v1")
         st.pop("legacy_offset_unit", None)
         core.save_state(sp, st)
@@ -396,8 +422,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.all and args.legacy_offset_unit:
         parser.error("--legacy-offset-unit 只能用于 --current 或 --session，不能批量指定")
-    if core.cfg().get("EVEROS_WRITE") == "0" and not args.dry_run:
-        print(json.dumps({"error": "EverOS 写入已关闭（EVEROS_WRITE=0）"}, ensure_ascii=False), file=sys.stderr)
+    if core.write_mode() == "off" and not args.dry_run:
+        reason = ("EVEROS_WRITE=0" if str(core.cfg().get("EVEROS_WRITE", "")).strip() == "0"
+                  else "EVEROS_WRITE_MODE=off")
+        print(json.dumps({"error": f"EverOS 写入已关闭（{reason}）"}, ensure_ascii=False), file=sys.stderr)
         return 1
     try:
         if args.all:

@@ -56,6 +56,10 @@
 
 ### 3.1 自动（hook）
 
+- 写侧模式与零损降噪（0.10.4+）：
+  - `EVEROS_WRITE_MODE` 控制写侧档位：`eco`（默认省额度模式）、`full`（全量原文采集）、`curated`（仅显式调用 `memory_remember` / `memory_record_practice` / `memory_fix_profile` / `memory_flush`，背景自动采集只推进本地偏移而不发网络请求）、`off`（关闭全部写入；`EVEROS_WRITE=0` 优先等价于 `off`）。读侧注入与检索完全不受影响。
+  - 零损噪声过滤（`eco` 与 `full` 均生效）：尚无任何真实用户消息（`role=user`）的会话（如 Antigravity `SYSTEM_SDK` 纯系统子代理会话）跳过建账与 `add`；定时自动化的 `<heartbeat>` 轮次（含其用户触发词与紧随其后的助手回复，即便混在 `target_thread_id` 历史线程中）整体跳过；`<external_codex_apps_*>` 外部页面大块转储自动剥离并保留 `# Response annotations:` 用户批注；`Stop` 事件携带 `fullyIdle=false` 时不抢跑采集。
+  - `eco` 默认采集策略：`memory_remember`、`memory_record_practice`、`memory_fix_profile` 保持 100% 原始精度不脱水；自动背景采集（各宿主 `Stop`/`SessionEnd`/`PreCompact`、MiMo、Doubao ingest、本地 Claude 记忆同步）做结构脱水（折叠多行代码块、将 `[label](file:///...)` 还原为文本、压缩超 4 行的长表格、助手回复首尾保留默认 `EVEROS_ECO_ASSISTANT_CHARS=1200` 字、用户原话保留默认 `EVEROS_ECO_USER_CHARS=4000` 字）；子代理/后台任务唤醒导致的纯助手续写 `Stop` 暂缓推进偏移，留到下一轮用户提问、`SessionEnd`/`PreCompact` 或空闲 15 分钟 `sweep` 合并成 1 次 `add`；同一轮刚调用 `memory_remember(..., conversation_id=...)` 后的紧邻 `Stop` 自动消除重复回复（已含 `user_said` 时整轮跳过重复上传，未含 `user_said` 时保留用户原话并缩短助手尾巴）。
 - v2 写入带 `async_mode=false`，保留已确认 add 才推进游标的语义；记忆工具、自动采集、MiMo、本地记忆同步和 sweep 均不自动 flush v2。
 - add 只有返回已识别的成功状态才推进会话读取偏移；HTTP 成功但业务失败、未知状态或异常时保留偏移，下一次 hook 可重试。flush 只有 `extracted` / `no_extraction` 才清除 pending。
 - 消息归属：用户原话的 `sender_id` 是 owner；助手和工具消息统一用 `EVEROS_AGENT_ID`（默认 `<user_id>_agent`），原 agent 名记在 `sender_name`。
@@ -85,7 +89,8 @@
 - 服务端明确返回 `quota_exceeded` 和已识别的 `quota_type` 时，保留白名单诊断字段（额度类型、有限数值余额），向 hook、MCP 和 CLI 说明硬配额拒绝；不把服务端自由文本、请求正文、身份或凭据写入诊断日志。
 - MCU 与检索调用额度分别熔断。状态按后端和凭据的不可逆摘要保存在本机 `state/quotas/`，同一数据根的各宿主、hook 与 MCP 进程共享；MCU 耗尽不会关闭检索。普通速率429和无法识别的错误保持原有处理方式。
 - 首次确认硬配额后暂停对应请求15分钟；并发恢复时仅允许一个带租约的探测请求，正常流量不串行化。失败保留暂停，成功才清除该次探测的熔断，迟到结果不得清除更新的拒绝。
-- `everos quota status` 只读查看本机熔断；充值/续期后可执行 `everos quota retry --resource mcu`（或 `retrieval`），允许下一次相关请求单次验证，不直接发网络请求，不表示云端额度已恢复。
+- 每日自动采集软预算（`EVEROS_DAILY_WRITE_BUDGET`，默认 `40` 批/日，`0` 关闭）：按后端、凭据与 `user_id` 的不可逆摘要在 `state/quotas/<digest>-daily.json`（权限 `0600`，不含明文凭据或身份，按东八区自然日切换）统计当日自动背景 `add` 批次数。达到上限后当日剩余时间自动将背景采集降级为 `curated`（写一条结构化 `write_budget_downgraded` 日志；本地记忆同步保留未同步文件的游标待次日继续），但绝不阻断 `memory_remember`、`memory_record_practice`、`memory_fix_profile` 或 `memory_flush`。`everos quota status` 与 `hook.py --doctor` 只读展示当前 `write_mode` 及当日预算用量。
+- `everos quota status` 只读查看本机熔断与每日写侧预算；充值/续期后可执行 `everos quota retry --resource mcu`（或 `retrieval`），允许下一次相关请求单次验证，不直接发网络请求，不表示云端额度已恢复。
 - 自动采集在源数据校验通过后、首次网络写入前保存会话定位信息；add失败不推进偏移，flush失败保留pending。保留的原文和游标可用于有界补写；普通或强制`sweep`只补旧 v1 flush 与本地记忆同步，不自动 flush v2，也不会重放所有未发送的原文。手工工具仍明确返回失败，不能把失败当作已经保存。
 - 缓存熔断造成的重复hook/MCP及内部flush错误不刷相同日志；MCP仍返回明确失败。做法聚合异常保留各版本失败来源，仅在所有尝试均为缓存拒绝且没有确认任何add时抑制日志，混合失败和部分成功继续可见。
 - 画像及所有检索方式在没有成功来源时明确传播硬配额错误；primary失败、fallback才遇到硬配额时保留fallback的配额原因和cached标记。成功的空来源或部分成功结果保持原有语义。读取遥测区分`cached`本地熔断和真实HTTP响应，硬配额拒绝不走短时重试或重复回退。
@@ -167,7 +172,10 @@ MCP子进程可能过滤父进程环境，安装器在各客户端支持的env/e
 | `EVEROS_AGENTIC_TIMEOUT` | 自动/手动 agentic 检索总预算（秒，含回退），默认 180；MCP `timeout` / CLI `--timeout` 可按次覆盖 |
 | `EVEROS_CASE_WAIT` | v2 add 已抽取时回读做法 case 的最长等待（秒），从 v2 写完开始计，默认 30，上限 150，`0` 关闭回读；非法值按默认处理 |
 | `EVEROS_OWNER_ALIASES` | botmux 邮箱前缀别名 |
-| `EVEROS_INJECT=0` / `EVEROS_WRITE=0` | 关闭读侧自动注入 / 所有写侧入库（包括 MCP、flush、画像编辑、本地记忆同步） |
+| `EVEROS_WRITE_MODE` | 写侧模式：`eco`（默认省额度）、`full`（全量原文）、`curated`（仅显式结构化写工具）、`off`（关闭全部写入）；非法值在安装器与 `--doctor` 明确报错 |
+| `EVEROS_DAILY_WRITE_BUDGET` | 每日自动背景 `add` 软上限（按东八区自然日计批次数），默认 `40`，`0` 不限制；超限仅将当日自动背景采集降级为 `curated`，不影响显式写工具 |
+| `EVEROS_ECO_ASSISTANT_CHARS` / `EVEROS_ECO_USER_CHARS` | `eco` 模式下自动采集单条助手回复 / 用户消息的首尾保留字数上限，默认 `1200` / `4000` |
+| `EVEROS_INJECT=0` / `EVEROS_WRITE=0` | 关闭读侧自动注入 / 所有写侧入库（`EVEROS_WRITE=0` 优先等价于 `EVEROS_WRITE_MODE=off`，包括 MCP、flush、画像编辑、本地记忆同步） |
 | `EVEROS_HOST` | hook 命令里显式指定宿主（如 `kimi_desktop`），桌面端 payload 没有 `client_type`，靠它区分 |
 | `EVEROS_KIMI_DESKTOP_HOME` | Kimi Work 桌面端内嵌 home，默认 `~/Library/Application Support/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home` |
 

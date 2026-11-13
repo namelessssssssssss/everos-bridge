@@ -10,7 +10,7 @@ description: 用户跨 agent、跨设备共用的 EverOS 长期记忆。会话�
 ## 用哪条通道
 
 1. **有 MCP 工具 `memory_*` 时优先用**：`memory_rules`、`memory_profile`、`memory_search`、`memory_open`、`memory_context`、`memory_recent`、`memory_remember`、`memory_record_practice`、`memory_flush`、`memory_fix_profile`。
-2. **装了 hook 的宿主**（Claude Code、Codex、Kimi Code）：画像、每条提问检索、对话原文入库都自动完成；仍应按需主动补查与补写结构化记录。复用本轮已覆盖同一问题的注入；新线索、历史信息缺口或上下文丢失仍需补查。
+2. **装了 hook 的宿主**（Claude Code、Codex、TraeX、Google Antigravity、Kimi Code、MiMoCode）：画像、每条提问检索、对话自动入库（默认 `EVEROS_WRITE_MODE=eco` 省额度模式，可切 `full`/`curated`/`off`）自动完成；仍应按需主动补查与补写结构化记录。复用本轮已覆盖同一问题的注入；新线索、历史信息缺口或上下文丢失仍需补查。
 3. **两者都没有时**（例如云端会话）：用下面的 curl 模板直接调 v2 接口。
 
 ## 读
@@ -58,7 +58,7 @@ description: 用户跨 agent、跨设备共用的 EverOS 长期记忆。会话�
   - content 写结论、做了什么、证据（文件:行、MR、commit、链接）；
   - user_said 放用户原话，不改写；
   - 同一话题沿用同一个 topic（会自动在助手消息标注 `[topic]`）；
-  - 有 hook 给出的宿主原生会话 ID 时传 `conversation_id`，优先并入当前对话账本的同一 EverOS `session_id`，避免同一轮既写对话又按 topic 另开 2 条消息的小缓冲；尚无采集账本或仅 MCP 宿主自动归入 `{host}_{YYYYMMDD}` 当日连续缓冲，由服务端语义边界切分。
+  - 有 hook 给出的宿主原生会话 ID 时传 `conversation_id`，优先并入当前对话账本的同一 EverOS `session_id`，避免同一轮既写对话又按 topic 另开 2 条消息的小缓冲（`eco` 模式下紧随其后的同轮 `Stop` 还会自动去重已入库的结论尾巴）；尚无采集账本或仅 MCP 宿主自动归入 `{host}_{YYYYMMDD}` 当日连续缓冲，由服务端语义边界切分。
 - 排障或工具用法闭环时，用 `memory_record_practice` 写一条轨迹：需求 → 每步动作与结果 → 结论（保持按 topic 独立轨迹会话，因 v2 每个 MemCell 最多提炼一条 case）。
   - 至少 3 个真实步骤；只有一两步的结论改用 `memory_remember`，不补写没发生的步骤。
   - 没走通的尝试单独记一步并标 `outcome=failed`，出乎意料的结果标 `outcome=unexpected`；`result` 第一句写这一步的发现；用户中途纠正的原话填 `user_correction`。

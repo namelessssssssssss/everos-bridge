@@ -131,7 +131,7 @@ Check that the retrieved memory includes both the decision and the reason. If it
 ## Your memory and controls
 
 - **Storage:** conversation text and explicit memory records are sent to your configured EverOS service, which defaults to EverOS Cloud. Bridge also synchronizes Claude Code's local memory files. Credentials and operational state stay outside the repository.
-- **Pause saving:** add the unquoted line `EVEROS_WRITE=0` to `~/.everos/config.env` to stop Bridge writes, including automatic capture and explicit saves. You can still search existing memories.
+- **Tune or pause saving:** automatic capture defaults to quota-saving mode (`EVEROS_WRITE_MODE=eco`, which filters non-user noise sessions, dehydrates verbose replies, and applies a daily soft budget `EVEROS_DAILY_WRITE_BUDGET` that downgrades background capture to explicit-only when reached); set `curated` to keep only explicit saves (`memory_remember`, `memory_record_practice`, `memory_fix_profile`) or `full` for uncompacted transcripts. Add the unquoted line `EVEROS_WRITE=0` (or `EVEROS_WRITE_MODE=off`) to `~/.everos/config.env` to stop all Bridge writes, including automatic capture and explicit saves; you can still search existing memories.
 - **Control automatic recall:** add `EVEROS_INJECT=0` to the same file to stop automatic memory injection while keeping manual search available.
 - **Keep context current:** ask your agent to correct outdated profile information or record a changed decision. Retrieved memories describe past work; verify them against today's code and requirements.
 

@@ -47,9 +47,12 @@ Replace the placeholders locally. Use unquoted values in `config.env` for compat
 | `EVEROS_AGENTIC_TIMEOUT` | `180` | Total agentic retrieval budget, in seconds |
 | `EVEROS_CASE_WAIT` | `30` | Maximum practice-case readback wait, in seconds; from 0.10.0, polling runs only if the v2 add reports `extracted`; `0` disables it |
 | `EVEROS_INJECT` | Enabled | Set to `0` to disable automatic injection |
-| `EVEROS_WRITE` | Enabled | Set to `0` to disable all Bridge writes |
+| `EVEROS_WRITE_MODE` | `eco` | Write mode (0.10.4+): `eco` (quota-saving compacted capture), `full` (full transcript capture), `curated` (explicit structured write tools only), or `off` (disable all writes) |
+| `EVEROS_DAILY_WRITE_BUDGET` | `40` | Daily soft cap on automatic background `add` batches (0.10.4+, CST day rollover); reaching the cap downgrades background capture to `curated` for the rest of the day without blocking explicit write tools; `0` disables the cap |
+| `EVEROS_ECO_ASSISTANT_CHARS` / `EVEROS_ECO_USER_CHARS` | `1200` / `4000` | Head+tail character caps for automatic assistant / user messages in `eco` mode (0.10.4+) |
+| `EVEROS_WRITE` | Enabled | Set to `0` to disable all Bridge writes (takes precedence as `EVEROS_WRITE_MODE=off`) |
 
-Add the unquoted line `EVEROS_WRITE=0` to disable capture, MCP write tools, profile edits, flush, and local-memory synchronization. `EVEROS_INJECT=0` does not disable manual retrieval.
+Add the unquoted line `EVEROS_WRITE=0` (or `EVEROS_WRITE_MODE=off`) to disable capture, MCP write tools, profile edits, flush, and local-memory synchronization; set `EVEROS_WRITE_MODE=curated` to disable only automatic background capture while keeping explicit memory write tools active. `EVEROS_INJECT=0` does not disable manual retrieval.
 
 ## Terminal search
 
@@ -203,7 +206,7 @@ everos quota retry --resource mcu
 everos quota retry --resource retrieval
 ```
 
-`status` reads the local circuit breaker; it is not a cloud balance query. After replenishing quota, `retry` allows the next related request to probe recovery. The command itself makes no network request and does not claim quota has recovered. Without manual retry, one probe is allowed after the default 15-minute pause.
+`status` reads the local circuit breaker along with the active `write_mode` and daily automatic-capture soft budget (`daily_budget`); it is not a cloud balance query. After replenishing quota, `retry` allows the next related request to probe recovery. The command itself makes no network request and does not claim quota has recovered. Without manual retry, one probe is allowed after the default 15-minute pause.
 
 MCU and retrieval quotas are separate, so an MCU refusal does not disable reads. Ordinary rate-limit responses are handled separately from explicit hard quota errors.
 

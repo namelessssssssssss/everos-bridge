@@ -90,8 +90,16 @@ def main(argv: list[str] | None = None) -> int:
                 changed = quota.Gate(core.STATE, core.cfg(), args.resource).retry()
                 print("已允许下一次请求验证额度恢复。" if changed else "当前没有对应的本机配额熔断。")
             else:
-                print(json.dumps([quota.Gate(core.STATE, core.cfg(), resource).status()
-                                  for resource in quota.RESOURCES], ensure_ascii=False, indent=2))
+                cfg = core.cfg()
+                statuses = [quota.Gate(core.STATE, cfg, resource).status()
+                            for resource in quota.RESOURCES]
+                if statuses:
+                    statuses[0] = {
+                        **statuses[0],
+                        "write_mode": core.write_mode(cfg),
+                        "daily_budget": quota.DailyBudget(core.STATE, cfg).status(),
+                    }
+                print(json.dumps(statuses, ensure_ascii=False, indent=2))
             return 0
         if args.command == "open":
             import recall
