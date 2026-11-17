@@ -104,7 +104,7 @@ These are the defaults after setup.
   - Use `memory_record_practice` for completed troubleshooting or tool-use work: at least three real steps; mark failed or unexpected attempts with `outcome`, and preserve the user's correction in `user_correction`. Read back the case when the v2 add has extracted; when messages are only accepted into the buffer, report pending extraction.
   - Do not automatically flush after an acknowledged v2 add. At a handoff, workflow completion, topic change, or immediate retrieval need, let the agent decide whether extraction is necessary, then use `memory_flush` with one target and a reason. Otherwise leave processing to the service. Pass a hook's native ID as `conversation_id` and an EverOS write-receipt ID as `session_id`; do not interchange them. A final response that has not been captured is outside the flush scope. See [on-demand extraction](docs/flush-policy.md).
   - Use `memory_fix_profile` when profile information is wrong or outdated.
-- **Delivery check:** list what was written to memory. If nothing was written, end with `记忆写入：无` (“Memory writes: none”).
+- **Delivery check:** end with a single-line memory summary — if written, state target and topic in one brief line (omit routine `session_id` / `deferred` receipt plumbing unless an error occurred); if nothing was written, end with `记忆写入：无` (“Memory writes: none”).
 
 ## One-line setup prompt
 
