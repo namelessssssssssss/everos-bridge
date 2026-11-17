@@ -67,7 +67,7 @@ description: 用户跨 agent、跨设备共用的 EverOS 长期记忆。会话�
 - `memory_flush(reason, session_id?, conversation_id?, api_version?, kind?)`：两个 ID 必须二选一；`api_version` 可选 v1/v2，原生会话默认按采集账本，直接 ID 默认按配置。v1 做法指定 `kind=practices`；原生会话只支持 episodes。失败保留待确认状态，成功也不保证搜索索引立即可见。
 - 用户纠正了画像里的偏好或背景，或者画像里的进度过期了：先 `memory_profile` 拿到 item_id，再 `memory_fix_profile`，并写明 reason。
 - episode 只追加不删除；owner 明确要求才删。
-- 交付自检：写了就在回复里列出写入内容；没写就在结尾输出「记忆写入：无」。
+- 交付自检：结尾单行简报记忆写入——写了用一行概括目标与主题（如「记忆写入：本地 + EverOS（前端联调检查点）」；正常写入省略 `session_id`、`deferred` 等底层回执细节，异常时注明失败项）；没写输出「记忆写入：无」。
 
 ## curl 模板（v2，没有 MCP 工具时用）
 
